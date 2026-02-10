@@ -1,0 +1,1 @@
+{"version":3,"file":"auth.d.ts","sourceRoot":"","sources":["../../../src/services/NexquareService/auth.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,+BAA+B,CAAC;AACpE,OAAO,KAAK,EAAE,mBAAmB,EAAE,MAAM,uBAAuB,CAAC;AAEjE;;;GAGG;AACH,wBAAsB,YAAY,CAChC,IAAI,EAAE,mBAAmB,EACzB,MAAM,EAAE,cAAc,GACrB,OAAO,CAAC,OAAO,CAAC,CAUlB"}
