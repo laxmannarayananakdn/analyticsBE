@@ -5,31 +5,31 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { getConnection, closeConnection } from './config/database';
+import { getConnection, closeConnection } from './config/database.js';
 
 // Import routes
-import healthRoutes from './routes/health';
-import schoolsRoutes from './routes/schools';
-import studentsRoutes from './routes/students';
-import termGradesRoutes from './routes/termGrades';
-import analyticsRoutes from './routes/analytics';
-import manageBacRoutes from './routes/managebac';
-import manageBacConfigRoutes from './routes/managebacConfig';
-import efRoutes from './routes/ef';
-import nexquareRoutes from './routes/nexquare';
-import nexquareConfigRoutes from './routes/nexquareConfig';
-import rpConfigRoutes from './routes/rpConfig';
-import supersetRoutes from './routes/superset';
+import healthRoutes from './routes/health.js';
+import schoolsRoutes from './routes/schools.js';
+import studentsRoutes from './routes/students.js';
+import termGradesRoutes from './routes/termGrades.js';
+import analyticsRoutes from './routes/analytics.js';
+import manageBacRoutes from './routes/managebac.js';
+import manageBacConfigRoutes from './routes/managebacConfig.js';
+import efRoutes from './routes/ef.js';
+import nexquareRoutes from './routes/nexquare.js';
+import nexquareConfigRoutes from './routes/nexquareConfig.js';
+import rpConfigRoutes from './routes/rpConfig.js';
+import supersetRoutes from './routes/superset.js';
 // Auth and access control routes
-import authRoutes from './routes/auth';
-import userRoutes from './routes/users';
-import departmentRoutes from './routes/departments';
-import nodeRoutes from './routes/nodes';
-import nodeSchoolRoutes from './routes/nodeSchools';
-import schoolNodeRoutes from './routes/schoolNode';
-import userAccessRoutes from './routes/userAccess';
-import userMeRoutes from './routes/userMe';
-import adminSchoolsRoutes from './routes/adminSchools';
+import authRoutes from './routes/auth.js';
+import userRoutes from './routes/users.js';
+import departmentRoutes from './routes/departments.js';
+import nodeRoutes from './routes/nodes.js';
+import nodeSchoolRoutes from './routes/nodeSchools.js';
+import schoolNodeRoutes from './routes/schoolNode.js';
+import userAccessRoutes from './routes/userAccess.js';
+import userMeRoutes from './routes/userMe.js';
+import adminSchoolsRoutes from './routes/adminSchools.js';
 
 dotenv.config();
 
