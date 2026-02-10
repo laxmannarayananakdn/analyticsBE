@@ -68,8 +68,8 @@ app.use('/api/rp-config', rpConfigRoutes);
 app.use('/api/superset', supersetRoutes);
 // Auth and access control routes
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userMeRoutes); // Must be before userRoutes so /me doesn't match /:email
 app.use('/api/users', userRoutes);
-app.use('/api/users', userMeRoutes); // User query endpoints (/users/me/*)
 app.use('/api/departments', departmentRoutes);
 app.use('/api/nodes', nodeRoutes);
 app.use('/api/nodes', nodeSchoolRoutes); // School assignment routes (/nodes/:id/schools)

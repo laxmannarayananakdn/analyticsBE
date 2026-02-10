@@ -8,12 +8,36 @@ import {
   getUserAccess,
   getUserDepartments,
 } from '../services/AccessService.js';
+import { getUserByEmail } from '../services/UserService.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(authenticate);
+
+/**
+ * GET /users/me
+ * Get current user profile (email, displayName)
+ */
+router.get('/me', async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const user = await getUserByEmail(req.user.email);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({
+      email: user.Email,
+      displayName: user.Display_Name ?? null,
+    });
+  } catch (error: any) {
+    console.error('Get current user error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
 
 /**
  * GET /users/me/schools
