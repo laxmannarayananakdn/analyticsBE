@@ -3,7 +3,7 @@
  */
 
 import express from 'express';
-import { authenticateUser, changePassword } from '../services/AuthService.js';
+import { authenticateUser, changePassword, setPassword } from '../services/AuthService.js';
 import type { ChangePasswordRequest } from '../types/auth.js';
 import { loginRateLimiter } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
@@ -71,6 +71,27 @@ router.post('/logout', authenticate, async (req, res) => {
     res.json({ message: 'Logged out successfully' });
   } catch (error: any) {
     console.error('Logout error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /auth/set-password
+ * Set new password when user has temporary password (first login). No auth required.
+ */
+router.post('/set-password', loginRateLimiter, async (req, res) => {
+  try {
+    const { email, currentPassword, newPassword } = req.body;
+    if (!email || !currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Email, current password, and new password are required' });
+    }
+    const result = await setPassword(email, currentPassword, newPassword);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ message: 'Password set successfully. You can now log in.' });
+  } catch (error: any) {
+    console.error('Set password error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
