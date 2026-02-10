@@ -32,6 +32,11 @@ jobs:
           npm run build
           npm run test --if-present
 
+      - name: Verify build output
+        run: |
+          test -f dist/config/database.js || (echo "Missing dist/config/database.js - build may be incomplete" && exit 1)
+          ls -la dist/ && ls -la dist/config/ || true
+
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
@@ -50,6 +55,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: node-app
+
+      - name: Ensure dist/ is included in deployment
+        run: |
+          sed -i '/^dist\/$/d' .gitignore 2>/dev/null || true
+          test -f dist/config/database.js || (echo "ERROR: dist/config/database.js missing in artifact" && exit 1)
+          ls -la dist/config/ || true
 
       - name: Login to Azure
         uses: azure/login@v2
