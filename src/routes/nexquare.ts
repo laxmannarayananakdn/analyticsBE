@@ -25,6 +25,12 @@ router.post('/authenticate', loadNexquareConfig, async (req: Request, res: Respo
     const isValid = await nexquareService.authenticate(req.nexquareConfig);
     
     if (isValid) {
+      // Fetch schools so we can return the first school's ID for the sync UI to pre-fill
+      try {
+        await nexquareService.getSchools(req.nexquareConfig);
+      } catch (_) {
+        // Ignore; schoolId will be null and user can run Get Schools or enter manually
+      }
       res.json({ 
         success: true, 
         message: 'Authentication successful',

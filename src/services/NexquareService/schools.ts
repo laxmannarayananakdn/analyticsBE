@@ -78,6 +78,11 @@ export async function getSchools(
       console.warn(`⚠️  Failed to save ${errorCount} school(s)`);
     }
 
+    // Set current school to first returned school so sync UI can pre-fill School ID
+    if (schools.length > 0 && schools[0].sourcedId) {
+      (this as any).setCurrentSchoolId(schools[0].sourcedId);
+    }
+
     return schools;
   } catch (error) {
     console.error('Failed to fetch schools:', error);
