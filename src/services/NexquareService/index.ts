@@ -50,6 +50,7 @@ export class NexquareService extends BaseNexquareService {
   // Attendance
   getDailyPlans = getDailyPlans.bind(this);
   getDailyAttendance = getDailyAttendance.bind(this);
+  getLessonAttendance = getDailyAttendance.bind(this); // Alias for route compatibility
 
   // Assessments
   getStudentAssessments = getStudentAssessments.bind(this);

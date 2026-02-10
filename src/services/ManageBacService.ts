@@ -5,7 +5,7 @@
 
 import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../config/managebac';
 import { retryOperation, validateApiResponse, handleApiError } from '../utils/apiUtils';
-import { databaseService, SubjectGroupRecord, SubjectRecord, YearGroupRecord, TermGradeRubric } from './DatabaseService';
+import { databaseService, SubjectGroupRecord, SubjectRecord, YearGroupRecord, TermGradeRubric, type AcademicYear as DBAcademicYear, type TermGrade as DBTermGrade } from './DatabaseService';
 import { executeQuery } from '../config/database';
 import type {
   SchoolDetails,
@@ -120,7 +120,13 @@ export class ManageBacService {
     } catch (error: any) {
       console.error('❌ Authentication failed:', error);
       const errorMessage = error?.message || 'Unknown error';
-      const errorDetails = {
+      const errorDetails: {
+        message: string;
+        baseUrl: string;
+        endpoint: string;
+        hasApiKey: boolean;
+        httpError?: string;
+      } = {
         message: errorMessage,
         baseUrl: baseUrl || MANAGEBAC_CONFIG.DEFAULT_BASE_URL,
         endpoint: MANAGEBAC_ENDPOINTS.SCHOOL,
@@ -129,7 +135,7 @@ export class ManageBacService {
       
       // Try to extract more details from the error
       if (errorMessage.includes('HTTP')) {
-        errorDetails['httpError'] = errorMessage;
+        errorDetails.httpError = errorMessage;
       }
       
       return { 
@@ -145,22 +151,23 @@ export class ManageBacService {
    */
   async getSchoolDetails(apiKey: string, baseUrl?: string): Promise<SchoolDetails> {
     try {
-      const response = await this.makeRequest<SchoolDetails>(MANAGEBAC_ENDPOINTS.SCHOOL, apiKey, {}, baseUrl);
-      const schoolData = response.data.school || response.data;
+      const response = await this.makeRequest<{ school?: SchoolDetails } & SchoolDetails>(MANAGEBAC_ENDPOINTS.SCHOOL, apiKey, {}, baseUrl);
+      const schoolData = response.data.school ?? response.data;
       
-      this.currentSchoolId = parseInt(schoolData.id.toString()) || schoolData.id;
+      const schoolId = typeof schoolData.id === 'number' ? schoolData.id : parseInt(String(schoolData.id), 10);
+      this.currentSchoolId = schoolId || null;
       console.log('✅ School ID set:', this.currentSchoolId);
       
       // Save to database
       console.log('💾 Saving school details to database...');
       const schoolForDb = {
-        id: this.currentSchoolId,
+        id: schoolId,
         name: schoolData.name,
         subdomain: schoolData.subdomain || schoolData.name.toLowerCase().replace(/\s+/g, '-'),
         country: schoolData.country || 'Unknown',
         language: schoolData.language || 'en',
         session_in_may: schoolData.session_in_may || false,
-        kbl_id: schoolData.kbl_id || null,
+        kbl_id: schoolData.kbl_id ?? undefined,
       };
       
       const { error } = await databaseService.upsertSchool(schoolForDb);
@@ -177,7 +184,7 @@ export class ManageBacService {
             code: program.code
           }));
 
-          const { error: programsError } = await databaseService.upsertPrograms(programs, this.currentSchoolId);
+          const { error: programsError } = await databaseService.upsertPrograms(programs, schoolId);
           if (programsError) {
             console.error('❌ Failed to save programs to database:', programsError);
           } else {
@@ -229,14 +236,8 @@ export class ManageBacService {
 
           console.log(`📚 Processing ${rawYears.length} academic years for program: ${programKey}`);
 
-          const normalizedYears: Array<{
-            id: number;
-            school_id: number;
-            program_code: string;
-            name: string;
-            starts_on: string;
-            ends_on: string;
-          }> = [];
+          const normalizedYears: DBAcademicYear[] = [];
+          const schoolId = this.currentSchoolId!;
 
           const termMap = new Map<number, any[]>();
 
@@ -246,11 +247,11 @@ export class ManageBacService {
 
             normalizedYears.push({
               id: yearId,
-              school_id: this.currentSchoolId,
+              school_id: schoolId,
               program_code: programKey,
               name: rawYear.name,
-              starts_on: startsOn,
-              ends_on: endsOn
+              starts_on: new Date(startsOn),
+              ends_on: new Date(endsOn)
             });
 
             if (rawYear.academic_terms && rawYear.academic_terms.length > 0) {
@@ -274,7 +275,7 @@ export class ManageBacService {
 
           const { error: yearsError } = await databaseService.upsertAcademicYears(
             normalizedYears,
-            this.currentSchoolId,
+            schoolId,
             programKey
           );
 
@@ -952,11 +953,11 @@ export class ManageBacService {
         urlParams.append('term_id', termId);
       }
       
-      if (urlParams.toString()) {
-        endpoint = `${endpoint}?${urlParams.toString()}`;
-      }
+      const requestEndpoint = urlParams.toString()
+        ? `${endpoint}?${urlParams.toString()}`
+        : endpoint;
       
-      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
+      const response = await this.makeRequest<any>(requestEndpoint as string, apiKey, {}, baseUrl);
       return response.data;
     } catch (error) {
       console.error('Failed to fetch memberships:', error);
@@ -986,47 +987,57 @@ export class ManageBacService {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         
-        return await res.json();
+        return await res.json() as unknown;
       }, 3);
       
       // Debug: Log raw response structure
-      console.log('🔍 Raw API response keys:', Object.keys(response));
-      console.log('🔍 Raw response has students?', !!response.students);
-      console.log('🔍 Raw response has data?', !!response.data);
+      const responseObj = response as Record<string, unknown>;
+      console.log('🔍 Raw API response keys:', Object.keys(responseObj));
+      console.log('🔍 Raw response has students?', !!responseObj.students);
+      console.log('🔍 Raw response has data?', !!responseObj.data);
       
       const validated = validateApiResponse<TermGradeResponse>(response);
       
       // Debug: Log validated response structure
+      const validatedData = validated.data as unknown as Record<string, unknown>;
       console.log('🔍 Validated response structure:');
       console.log('  - validated.data type:', typeof validated.data);
-      console.log('  - validated.data keys:', validated.data ? Object.keys(validated.data) : 'null');
-      console.log('  - Has students?', !!(validated.data as any)?.students);
+      console.log('  - validated.data keys:', validated.data ? Object.keys(validatedData) : 'null');
+      console.log('  - Has students?', !!validatedData?.students);
       
       // Handle both response structures: { students: [...] } or { data: { students: [...] } }
-      const studentsData = (validated.data as any)?.students || (response as any)?.students || [];
+      const studentsData = validatedData?.students ?? responseObj?.students ?? [];
+      const studentsArray = Array.isArray(studentsData) ? studentsData : [];
       
-      if (studentsData.length > 0) {
-        const firstStudent = studentsData[0];
-        console.log('  - First student ID:', firstStudent.id);
-        console.log('  - First student has term_grade?', !!firstStudent.term_grade);
-        console.log('  - First student has rubrics?', !!firstStudent.term_grade?.rubrics);
-        console.log('  - Rubrics count:', firstStudent.term_grade?.rubrics?.length || 0);
-        if (firstStudent.term_grade?.rubrics && firstStudent.term_grade.rubrics.length > 0) {
-          console.log('  - Sample rubric:', JSON.stringify(firstStudent.term_grade.rubrics[0], null, 2));
+      if (studentsArray.length > 0) {
+        const firstStudent = studentsArray[0] as Record<string, unknown>;
+        const termGrade = firstStudent?.term_grade as Record<string, unknown> | undefined;
+        console.log('  - First student ID:', firstStudent?.id);
+        console.log('  - First student has term_grade?', !!termGrade);
+        console.log('  - First student has rubrics?', !!(termGrade?.rubrics as unknown[] | undefined)?.length);
+        const rubrics = termGrade?.rubrics as unknown[] | undefined;
+        console.log('  - Rubrics count:', rubrics?.length || 0);
+        if (rubrics && rubrics.length > 0) {
+          console.log('  - Sample rubric:', JSON.stringify(rubrics[0], null, 2));
         }
       }
       
       // Convert and save term grades to database
-      // Use studentsData which handles both response structures
-      if (studentsData && studentsData.length > 0) {
-        const termGrades: TermGrade[] = studentsData.map((student: any) => ({
-          student_id: student.id,
-          class_id: classId,
-          term_id: termId,
-          grade: student.term_grade?.grade,
-          average_percent: student.term_grade?.average?.percent,
-          comments: student.term_grade?.comments,
-        }));
+      // Use studentsArray which handles both response structures
+      if (studentsArray.length > 0) {
+        const termGrades: DBTermGrade[] = studentsArray.map((student: unknown) => {
+          const s = student as Record<string, unknown>;
+          const tg = s?.term_grade as Record<string, unknown> | undefined;
+          const avg = tg?.average as Record<string, unknown> | undefined;
+          return {
+            student_id: s.id as number,
+            class_id: classId,
+            term_id: termId,
+            grade: tg?.grade as string | undefined,
+            average_percent: avg?.percent as number | undefined,
+            comments: tg?.comments as string | undefined,
+          };
+        });
         
         if (termGrades.length > 0) {
           console.log('💾 Saving term grades to database...');
@@ -1064,30 +1075,31 @@ export class ManageBacService {
               
               // Extract rubrics from each student's term_grade
               let studentsWithRubrics = 0;
-              studentsData.forEach((student: any) => {
-                // Ensure studentId is a number for consistent lookups
-                const studentId = typeof student.id === 'string' ? parseInt(student.id, 10) : student.id;
+              studentsArray.forEach((student: unknown) => {
+                const s = student as Record<string, unknown> & { id: unknown; name?: string; term_grade?: { rubrics?: unknown[] } };
+                const studentId = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
                 const termGradeId = studentToTermGradeId.get(studentId);
                 console.log(`🔍 Looking up student ${studentId} (type: ${typeof studentId}), found term_grade_id: ${termGradeId}`);
                 console.log(`   Map has key? ${studentToTermGradeId.has(studentId)}, Map size: ${studentToTermGradeId.size}`);
-                if (termGradeId && student.term_grade?.rubrics) {
+                if (termGradeId && (s?.term_grade as Record<string, unknown>)?.rubrics) {
                   studentsWithRubrics++;
-                  const studentRubrics = student.term_grade.rubrics || [];
-                  console.log(`📝 Student ${student.id} (${student.name}) has ${studentRubrics.length} rubrics`);
-                  studentRubrics.forEach((rubric: any) => {
-                    if (rubric.id && rubric.title) {
+                  const studentRubrics = ((s.term_grade as Record<string, unknown>).rubrics as unknown[]) || [];
+                  console.log(`📝 Student ${s.id} (${s.name}) has ${studentRubrics.length} rubrics`);
+                  studentRubrics.forEach((rubric: unknown) => {
+                    const r = rubric as Record<string, unknown>;
+                    if (r?.id && r?.title) {
                       rubrics.push({
                         term_grade_id: termGradeId,
-                        rubric_id: rubric.id,
-                        title: rubric.title,
-                        grade: rubric.grade || null,
+                        rubric_id: r.id as number,
+                        title: String(r.title),
+                        grade: (r.grade as string | null) ?? null,
                       });
                     }
                   });
                 } else if (!termGradeId) {
-                  console.warn(`⚠️ No term_grade_id found for student ${student.id}`);
-                } else if (!student.term_grade?.rubrics) {
-                  console.log(`ℹ️ Student ${student.id} has no rubrics in term_grade`);
+                  console.warn(`⚠️ No term_grade_id found for student ${s.id}`);
+                } else if (!(s.term_grade as Record<string, unknown>)?.rubrics) {
+                  console.log(`ℹ️ Student ${s.id} has no rubrics in term_grade`);
                 }
               });
               
@@ -1112,7 +1124,7 @@ export class ManageBacService {
       }
       
       // Return the response in the expected format
-      return validated.data || { students: studentsData, meta: (response as any).meta };
+      return validated.data || { students: studentsData, meta: responseObj?.meta };
     } catch (error) {
       console.error('Failed to fetch term grades:', error);
       throw error;

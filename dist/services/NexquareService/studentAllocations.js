@@ -369,6 +369,10 @@ export async function getStudentAllocations(config, schoolId) {
         if (skippedCount > 0) {
             console.warn(`⚠️  Skipped ${skippedCount} allocation(s) due to errors`);
         }
+        // Note: Student fallout data is no longer populated in RP.student_fallout table.
+        // The fallout status and gender information are available directly from
+        // NEX.student_allocations and NEX.groups tables, which include historical data
+        // that NEX.students (current students only) does not have.
         return allAllocations;
     }
     catch (error) {

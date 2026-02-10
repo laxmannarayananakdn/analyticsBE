@@ -38,7 +38,7 @@ export async function getClasses(
       queryParams.append('limit', limit.toString());
 
       const url = `${endpoint}?${queryParams.toString()}`;
-      const response = await (this as any).makeRequest<ClassesResponse>(url, config);
+      const response = await this.makeRequest<ClassesResponse>(url, config);
 
       const classes = response.classes || [];
       if (classes.length === 0) {

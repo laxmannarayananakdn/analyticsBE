@@ -239,7 +239,7 @@ export class DatabaseService {
           return { data: null, error: insertResult.error };
         }
 
-        return { data: insertResult.data[0] || null, error: null };
+        return { data: (insertResult.data && insertResult.data[0]) || null, error: null };
       }
 
       // If update was successful, fetch the updated record
@@ -250,7 +250,7 @@ export class DatabaseService {
         return { data: null, error: selectResult.error };
       }
 
-      return { data: selectResult.data[0] || null, error: null };
+      return { data: (selectResult.data && selectResult.data[0]) || null, error: null };
     } catch (error: any) {
       console.error('❌ Failed to upsert school:', error);
       return { data: null, error: error.message || 'Failed to upsert school' };
@@ -910,7 +910,7 @@ export class DatabaseService {
         return { data: null, error: result.error };
       }
 
-      return { data: result.data[0] || null, error: null };
+      return { data: (result.data && result.data[0]) || null, error: null };
     } catch (error: any) {
       return { data: null, error: error.message || 'Failed to upsert year group student relationship' };
     }
@@ -1319,7 +1319,7 @@ export class DatabaseService {
       return { data: null, error: result.error };
     }
 
-    return { data: result.data[0] || null, error: null };
+    return { data: (result.data && result.data[0]) || null, error: null };
   }
 
   /**

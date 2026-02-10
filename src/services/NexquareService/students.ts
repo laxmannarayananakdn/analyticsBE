@@ -44,7 +44,7 @@ export async function getStudents(
       }
 
       const url = `${endpoint}?${queryParams.toString()}`;
-      const response = await (this as any).makeRequest<UsersResponse>(url, config);
+      const response = await this.makeRequest<UsersResponse>(url, config);
 
       const users = response.users || [];
       if (users.length === 0) {

@@ -140,12 +140,22 @@ export interface ClassMembershipRecord {
     updated_at?: Date;
 }
 export interface TermGrade {
+    id?: number;
     student_id: number;
     class_id: number;
     term_id: number;
     grade?: string;
     average_percent?: number;
     comments?: string;
+    created_at?: Date;
+    updated_at?: Date;
+}
+export interface TermGradeRubric {
+    id?: number;
+    term_grade_id: number;
+    rubric_id: number;
+    title: string;
+    grade?: string | null;
     created_at?: Date;
     updated_at?: Date;
 }
@@ -297,6 +307,13 @@ export declare class DatabaseService {
      */
     upsertTermGrades(termGrades: TermGrade[]): Promise<{
         data: TermGrade[] | null;
+        error: string | null;
+    }>;
+    /**
+     * Upsert term grade rubrics
+     */
+    upsertTermGradeRubrics(rubrics: TermGradeRubric[]): Promise<{
+        data: TermGradeRubric[] | null;
         error: string | null;
     }>;
     /**
@@ -974,6 +991,23 @@ export declare class DatabaseService {
         class_id?: number | null;
     }>): Promise<{
         inserted: number;
+        error: string | null;
+    }>;
+    /**
+     * @deprecated This function is no longer used. Student fallout data is not populated
+     * in RP.student_fallout table because:
+     * 1. The fallout status and gender information are available directly from
+     *    NEX.student_allocations and NEX.groups tables
+     * 2. NEX.students table only contains current students, not historical/exited students
+     * 3. The student_allocations table maintains complete historical data including
+     *    students who have exited the system
+     *
+     * Upsert student fallout data after student allocations are inserted
+     * This is a set-based operation that updates RP.student_fallout for all students
+     * based on whether they are in the 'fallout' group in student_allocations
+     */
+    upsertStudentFallout(): Promise<{
+        updated: number;
         error: string | null;
     }>;
 }

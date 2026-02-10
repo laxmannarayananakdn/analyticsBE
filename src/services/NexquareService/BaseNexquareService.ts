@@ -89,7 +89,7 @@ export class BaseNexquareService {
   /**
    * Generic method for making HTTP requests to the Nexquare API
    */
-  protected async makeRequest<T>(
+  public async makeRequest<T>(
     endpoint: string,
     config: NexquareConfig,
     options: RequestInit = {},

@@ -42,16 +42,17 @@ export async function getDailyAttendance(config, schoolId, startDate, endDate, c
                 queryParams.append('sourcedID', studentSourcedId);
             }
             const url = `${endpoint}?${queryParams.toString()}`;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const response = await this.makeRequest(url, config);
             // Debug: Log response structure for first call (first chunk, first offset)
             if (offset === 0) {
-                console.log('🔍 Daily attendance response keys:', Object.keys(response).join(', '));
-                if (response.attendance && Array.isArray(response.attendance) && response.attendance.length > 0) {
-                    console.log('🔍 First attendance record keys:', Object.keys(response.attendance[0]).join(', '));
+                console.log('🔍 Daily attendance response keys:', Object.keys(response || {}).join(', '));
+                if (response?.attendance && Array.isArray(response.attendance) && response.attendance.length > 0) {
+                    console.log('🔍 First attendance record keys:', Object.keys(response.attendance[0] || {}).join(', '));
                     console.log('🔍 First attendance sample:', JSON.stringify(response.attendance[0]).substring(0, 300));
                 }
                 else if (Array.isArray(response) && response.length > 0) {
-                    console.log('🔍 First attendance record keys:', Object.keys(response[0]).join(', '));
+                    console.log('🔍 First attendance record keys:', Object.keys(response[0] || {}).join(', '));
                     console.log('🔍 First attendance sample:', JSON.stringify(response[0]).substring(0, 300));
                 }
             }
@@ -59,19 +60,19 @@ export async function getDailyAttendance(config, schoolId, startDate, endDate, c
             let records = [];
             // Nexquare API structure: response.data.attendanceList = array of students
             // Each student has: { studentId, attendanceList: [array of attendance records] }
-            if (response.data && response.data.attendanceList && Array.isArray(response.data.attendanceList)) {
+            if (response?.data?.attendanceList && Array.isArray(response.data.attendanceList)) {
                 // Flatten: one record per attendance entry per student
                 for (const student of response.data.attendanceList) {
                     const studentId = student.studentId || student.student_id;
                     // Each student has an attendanceList array
                     if (student.attendanceList && Array.isArray(student.attendanceList)) {
                         for (const attendanceRecord of student.attendanceList) {
+                            const rec = attendanceRecord;
                             records.push({
-                                ...attendanceRecord,
-                                studentId: studentId, // Add studentId to each record
-                                // Map attendanceDate to date for consistency
-                                date: attendanceRecord.attendanceDate || attendanceRecord.date || attendanceRecord.attendance_date,
-                                attendanceDate: attendanceRecord.attendanceDate || attendanceRecord.date || attendanceRecord.attendance_date
+                                ...rec,
+                                studentId: studentId,
+                                date: rec.attendanceDate || rec.date || rec.attendance_date,
+                                attendanceDate: rec.attendanceDate || rec.date || rec.attendance_date
                             });
                         }
                     }
@@ -80,28 +81,29 @@ export async function getDailyAttendance(config, schoolId, startDate, endDate, c
             else if (Array.isArray(response)) {
                 records = response;
             }
-            else if (response.attendance && Array.isArray(response.attendance)) {
+            else if (response?.attendance && Array.isArray(response.attendance)) {
                 records = response.attendance;
             }
-            else if (response.data && Array.isArray(response.data)) {
+            else if (response?.data && Array.isArray(response.data)) {
                 records = response.data;
             }
-            else if (response.dailyAttendance && Array.isArray(response.dailyAttendance)) {
+            else if (response?.dailyAttendance && Array.isArray(response.dailyAttendance)) {
                 records = response.dailyAttendance;
             }
-            else if (response.students && Array.isArray(response.students)) {
+            else if (response?.students && Array.isArray(response.students)) {
                 // Response might have students array with nested attendance
                 // Flatten: one record per student per date
                 for (const student of response.students) {
-                    if (student.attendance && typeof student.attendance === 'object') {
+                    const st = student;
+                    if (st.attendance && typeof st.attendance === 'object') {
                         // Attendance is an object with dates as keys
-                        for (const [date, attendanceData] of Object.entries(student.attendance)) {
+                        for (const [date, attendanceData] of Object.entries(st.attendance)) {
                             const dataObj = typeof attendanceData === 'object' && attendanceData !== null
                                 ? attendanceData
                                 : {};
                             records.push({
                                 ...dataObj,
-                                studentSourcedId: student.sourcedId || student.id,
+                                studentSourcedId: st.sourcedId ?? st.id,
                                 date: date
                             });
                         }
@@ -109,8 +111,8 @@ export async function getDailyAttendance(config, schoolId, startDate, endDate, c
                     else {
                         // Single attendance record for student
                         records.push({
-                            ...student,
-                            studentSourcedId: student.sourcedId || student.id
+                            ...st,
+                            studentSourcedId: st.sourcedId ?? st.id
                         });
                     }
                 }

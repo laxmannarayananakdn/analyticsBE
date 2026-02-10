@@ -4,6 +4,7 @@
  */
 import { Router } from 'express';
 import { manageBacService } from '../services/ManageBacService';
+import { databaseService } from '../services/DatabaseService';
 import { loadManageBacConfig } from '../middleware/configLoader';
 const router = Router();
 /**
@@ -345,7 +346,7 @@ router.get('/year-groups/:id/students', loadManageBacConfig, async (req, res) =>
 });
 /**
  * GET /api/managebac/memberships
- * Get memberships
+ * Get memberships and save them to the database
  */
 router.get('/memberships', loadManageBacConfig, async (req, res) => {
     try {
@@ -369,8 +370,141 @@ router.get('/memberships', loadManageBacConfig, async (req, res) => {
         const gradeNumber = req.query.grade_number ? parseInt(req.query.grade_number) : undefined;
         // Default to grade_number = 13 if not specified
         const finalGradeNumber = gradeNumber !== undefined ? gradeNumber : 13;
+        // Fetch memberships from API
         const data = await manageBacService.getMemberships(apiKey, userIds, academicYearId, termId, baseUrl, finalGradeNumber);
-        res.json(data);
+        // Extract memberships array from response
+        let memberships = [];
+        if (data?.memberships) {
+            memberships = Array.isArray(data.memberships) ? data.memberships : [];
+        }
+        else if (data?.data?.memberships) {
+            memberships = Array.isArray(data.data.memberships) ? data.data.memberships : [];
+        }
+        else if (Array.isArray(data)) {
+            memberships = data;
+        }
+        if (memberships.length === 0) {
+            console.log('No memberships found in response');
+            return res.json({
+                ...data,
+                saved: false,
+                message: 'No memberships to save'
+            });
+        }
+        console.log(`💾 Processing ${memberships.length} memberships for database save...`);
+        // Ensure school ID is set
+        if (!manageBacService['currentSchoolId']) {
+            console.log('⚠️ School ID not set, fetching school details first...');
+            await manageBacService.getSchoolDetails(apiKey, baseUrl);
+        }
+        const schoolId = manageBacService['currentSchoolId'];
+        if (!schoolId) {
+            console.error('❌ Cannot save memberships: School ID is not available');
+            return res.json({
+                ...data,
+                saved: false,
+                error: 'School ID is not available'
+            });
+        }
+        // Track classes we've already fetched and saved
+        const fetchedClassIds = new Set();
+        const membershipsForDb = [];
+        let totalClassesSaved = 0;
+        // Process each membership
+        for (const membership of memberships) {
+            const classId = typeof membership.class_id === 'string'
+                ? parseInt(membership.class_id, 10)
+                : membership.class_id;
+            if (!classId) {
+                console.warn(`⚠️ Membership missing class_id, skipping`);
+                continue;
+            }
+            // Fetch and save class if we haven't already
+            if (!fetchedClassIds.has(classId)) {
+                console.log(`📖 Fetching class ${classId}...`);
+                try {
+                    const classData = await manageBacService.getClassById(apiKey, classId);
+                    if (!classData) {
+                        console.warn(`⚠️ Class ${classId} not found, skipping membership`);
+                        continue;
+                    }
+                    // Map ManageBac Class to database ClassRecord
+                    const classForDb = {
+                        id: typeof classData.id === 'string' ? parseInt(classData.id, 10) : classData.id,
+                        school_id: schoolId,
+                        subject_id: classData.subject_id || null,
+                        name: classData.name || '',
+                        description: classData.description || null,
+                        uniq_id: classData.uniq_id || null,
+                        class_section: classData.class_section || null,
+                        language: classData.language || 'en',
+                        program_code: classData.program_code || '',
+                        grade_number: classData.grade_number || null,
+                        start_term_id: classData.start_term_id || null,
+                        end_term_id: classData.end_term_id || null,
+                        archived: classData.archived || false,
+                        lock_memberships: classData.lock_memberships || null
+                    };
+                    // Save class immediately
+                    const { error: classError } = await databaseService.upsertClasses([classForDb], schoolId);
+                    if (classError) {
+                        console.warn(`⚠️ Failed to save class ${classId}: ${classError}`);
+                        continue;
+                    }
+                    fetchedClassIds.add(classId);
+                    totalClassesSaved++;
+                    console.log(`✅ Saved class: ${classData.name}`);
+                }
+                catch (error) {
+                    console.warn(`⚠️ Failed to fetch class ${classId}: ${error.message}`);
+                    continue;
+                }
+            }
+            // Add membership to batch
+            const userId = typeof membership.user_id === 'string'
+                ? parseInt(membership.user_id, 10)
+                : membership.user_id;
+            if (!userId) {
+                console.warn(`⚠️ Membership missing user_id, skipping`);
+                continue;
+            }
+            membershipsForDb.push({
+                class_id: classId,
+                user_id: userId,
+                role: membership.role || 'Student',
+                level: membership.level !== undefined ? membership.level : null,
+                show_on_reports: membership.show_on_reports !== undefined ? membership.show_on_reports : true,
+                first_joined_at: membership.created_at ? new Date(membership.created_at) : null
+            });
+        }
+        // Save all memberships to database
+        let totalMembershipsSaved = 0;
+        if (membershipsForDb.length > 0) {
+            console.log(`💾 Saving ${membershipsForDb.length} memberships to database...`);
+            const { error: membershipsError } = await databaseService.upsertClassMemberships(membershipsForDb);
+            if (membershipsError) {
+                console.error(`❌ Failed to save memberships: ${membershipsError}`);
+                return res.json({
+                    ...data,
+                    saved: false,
+                    error: membershipsError,
+                    classesSaved: totalClassesSaved,
+                    membershipsProcessed: membershipsForDb.length
+                });
+            }
+            else {
+                totalMembershipsSaved = membershipsForDb.length;
+                console.log(`✅ Successfully saved ${totalMembershipsSaved} memberships to database`);
+            }
+        }
+        // Return response with save status
+        res.json({
+            ...data,
+            saved: true,
+            classesSaved: totalClassesSaved,
+            membershipsSaved: totalMembershipsSaved,
+            message: `Successfully saved ${totalMembershipsSaved} memberships and ${totalClassesSaved} classes`
+        });
     }
     catch (error) {
         console.error('Error fetching memberships:', error);

@@ -958,7 +958,7 @@ export async function syncStudentAssessmentsToRP(
     // Use a direct connection request with explicit 10-minute timeout for this long-running operation
     const connection = await getConnection();
     const request = connection.request();
-    request.timeout = 600000; // 10 minutes
+    (request as { timeout?: number }).timeout = 600000; // 10 minutes
     
     // Add parameters
     request.input('school_id', sql.NVarChar(100), schoolSourcedId);
@@ -1032,7 +1032,7 @@ export async function updateReportedSubjectForSchool(
 
     const connection = await getConnection();
     const request = connection.request();
-    request.timeout = 600000; // 10 minutes
+    (request as { timeout?: number }).timeout = 600000; // 10 minutes
     
     request.input('school_id', sql.NVarChar(100), schoolSourcedId);
     

@@ -16,13 +16,18 @@ import { getStudentAllocations } from './studentAllocations';
 import { getStaffAllocations } from './staffAllocations';
 import { getDailyPlans } from './dailyPlans';
 import { getDailyAttendance } from './dailyAttendance';
-import { getStudentAssessments, saveAssessmentBatch } from './studentAssessments';
+import { getStudentAssessments, saveAssessmentBatch, syncStudentAssessmentsToRP, updateReportedSubjectForSchool } from './studentAssessments';
 import { bulkGetStudentIds, bulkGetGroupIds } from './helpers';
 /**
  * NexquareService class
  * Composes all API methods into a single service class
  */
 export class NexquareService extends BaseNexquareService {
+    constructor() {
+        super();
+        // Marker to verify this is the refactored service being used
+        console.log('✅ Using REFACTORED NexquareService (modular structure)');
+    }
     // Authentication and School Management
     authenticate = authenticate.bind(this);
     getSchools = getSchools.bind(this);
@@ -39,13 +44,17 @@ export class NexquareService extends BaseNexquareService {
     // Attendance
     getDailyPlans = getDailyPlans.bind(this);
     getDailyAttendance = getDailyAttendance.bind(this);
+    getLessonAttendance = getDailyAttendance.bind(this); // Alias for route compatibility
     // Assessments
     getStudentAssessments = getStudentAssessments.bind(this);
     saveAssessmentBatch = saveAssessmentBatch.bind(this);
+    syncStudentAssessmentsToRP = syncStudentAssessmentsToRP.bind(this);
+    updateReportedSubjectForSchool = updateReportedSubjectForSchool.bind(this);
     // Helper methods
     bulkGetStudentIds = bulkGetStudentIds.bind(this);
     bulkGetGroupIds = bulkGetGroupIds.bind(this);
 }
 // Export singleton instance (maintains backward compatibility)
+// NOTE: This instance will log "✅ Using REFACTORED NexquareService (modular structure)" when imported
 export const nexquareService = new NexquareService();
 //# sourceMappingURL=index.js.map

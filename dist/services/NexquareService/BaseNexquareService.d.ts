@@ -16,7 +16,7 @@ export declare class BaseNexquareService {
     /**
      * Generic method for making HTTP requests to the Nexquare API
      */
-    protected makeRequest<T>(endpoint: string, config: NexquareConfig, options?: RequestInit, retryOnAuthError?: boolean): Promise<T>;
+    makeRequest<T>(endpoint: string, config: NexquareConfig, options?: RequestInit, retryOnAuthError?: boolean): Promise<T>;
     /**
      * Make HTTP request that returns file response (CSV or Excel)
      * Returns both the buffer and content type

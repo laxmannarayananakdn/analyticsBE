@@ -16,7 +16,18 @@ import manageBacConfigRoutes from './routes/managebacConfig';
 import efRoutes from './routes/ef';
 import nexquareRoutes from './routes/nexquare';
 import nexquareConfigRoutes from './routes/nexquareConfig';
+import rpConfigRoutes from './routes/rpConfig';
 import supersetRoutes from './routes/superset';
+// Auth and access control routes
+import authRoutes from './routes/auth';
+import userRoutes from './routes/users';
+import departmentRoutes from './routes/departments';
+import nodeRoutes from './routes/nodes';
+import nodeSchoolRoutes from './routes/nodeSchools';
+import schoolNodeRoutes from './routes/schoolNode';
+import userAccessRoutes from './routes/userAccess';
+import userMeRoutes from './routes/userMe';
+import adminSchoolsRoutes from './routes/adminSchools';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -44,7 +55,18 @@ app.use('/api/managebac-config', manageBacConfigRoutes);
 app.use('/api/ef', efRoutes);
 app.use('/api/nexquare', nexquareRoutes);
 app.use('/api/nexquare-config', nexquareConfigRoutes);
+app.use('/api/rp-config', rpConfigRoutes);
 app.use('/api/superset', supersetRoutes);
+// Auth and access control routes
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/users', userMeRoutes); // User query endpoints (/users/me/*)
+app.use('/api/departments', departmentRoutes);
+app.use('/api/nodes', nodeRoutes);
+app.use('/api/nodes', nodeSchoolRoutes); // School assignment routes (/nodes/:id/schools)
+app.use('/api/schools', schoolNodeRoutes); // Get node for school (/schools/:id/:source/node)
+app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for assignment
+app.use('/api/users', userAccessRoutes); // User access management routes
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({
@@ -61,7 +83,12 @@ app.get('/', (req, res) => {
             ef: '/api/ef',
             nexquare: '/api/nexquare',
             nexquareConfig: '/api/nexquare-config',
-            superset: '/api/superset'
+            rpConfig: '/api/rp-config',
+            superset: '/api/superset',
+            auth: '/api/auth',
+            users: '/api/users',
+            departments: '/api/departments',
+            nodes: '/api/nodes'
         }
     });
 });

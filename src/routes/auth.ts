@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { authenticateUser, changePassword } from '../services/AuthService';
+import type { ChangePasswordRequest } from '../types/auth';
 import { loginRateLimiter } from '../middleware/rateLimiter';
 import { authenticate } from '../middleware/auth';
 
@@ -92,13 +93,10 @@ router.post('/change-password', authenticate, async (req, res) => {
     
     // If user has temporary password, currentPassword is not required
     // Otherwise, currentPassword is required
-    const changeRequest: { currentPassword?: string; newPassword: string } = {
+    const changeRequest: ChangePasswordRequest = {
       newPassword,
+      ...(currentPassword ? { currentPassword } : {}),
     };
-    
-    if (currentPassword) {
-      changeRequest.currentPassword = currentPassword;
-    }
     
     const result = await changePassword(req.user.email, changeRequest);
     

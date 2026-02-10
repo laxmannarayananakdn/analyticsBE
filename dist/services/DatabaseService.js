@@ -62,7 +62,7 @@ export class DatabaseService {
                 if (insertResult.error) {
                     return { data: null, error: insertResult.error };
                 }
-                return { data: insertResult.data[0] || null, error: null };
+                return { data: (insertResult.data && insertResult.data[0]) || null, error: null };
             }
             // If update was successful, fetch the updated record
             const selectQuery = 'SELECT * FROM MB.schools WHERE id = @id';
@@ -70,7 +70,7 @@ export class DatabaseService {
             if (selectResult.error) {
                 return { data: null, error: selectResult.error };
             }
-            return { data: selectResult.data[0] || null, error: null };
+            return { data: (selectResult.data && selectResult.data[0]) || null, error: null };
         }
         catch (error) {
             console.error('❌ Failed to upsert school:', error);
@@ -640,7 +640,7 @@ export class DatabaseService {
             if (result.error) {
                 return { data: null, error: result.error };
             }
-            return { data: result.data[0] || null, error: null };
+            return { data: (result.data && result.data[0]) || null, error: null };
         }
         catch (error) {
             return { data: null, error: error.message || 'Failed to upsert year group student relationship' };
@@ -1005,7 +1005,7 @@ export class DatabaseService {
         if (result.error) {
             return { data: null, error: result.error };
         }
-        return { data: result.data[0] || null, error: null };
+        return { data: (result.data && result.data[0]) || null, error: null };
     }
     /**
      * Upsert students
@@ -1210,7 +1210,25 @@ export class DatabaseService {
         const results = [];
         const errors = [];
         for (const termGrade of validTermGrades) {
-            const query = `
+            // First, try to get existing term_grade_id
+            const checkQuery = `
+        SELECT id, student_id, class_id, term_id, grade, average_percent, comments, created_at, updated_at
+        FROM MB.term_grades 
+        WHERE student_id = @student_id 
+          AND class_id = @class_id 
+          AND term_id = @term_id;
+      `;
+            const checkResult = await executeQuery(checkQuery, {
+                student_id: termGrade.student_id,
+                class_id: termGrade.class_id,
+                term_id: termGrade.term_id
+            });
+            let termGradeId;
+            if (checkResult.data && checkResult.data[0]) {
+                termGradeId = checkResult.data[0].id;
+            }
+            // Now do the MERGE
+            const mergeQuery = `
         MERGE MB.term_grades AS target
         USING (SELECT @student_id AS student_id, @class_id AS class_id,
                      @term_id AS term_id, @grade AS grade,
@@ -1229,13 +1247,8 @@ export class DatabaseService {
           VALUES (source.student_id, source.class_id, source.term_id, source.grade,
                   source.average_percent, source.comments,
                   SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
-        
-        SELECT * FROM MB.term_grades 
-        WHERE student_id = @student_id 
-          AND class_id = @class_id 
-          AND term_id = @term_id;
       `;
-            const result = await executeQuery(query, {
+            await executeQuery(mergeQuery, {
                 student_id: termGrade.student_id,
                 class_id: termGrade.class_id,
                 term_id: termGrade.term_id,
@@ -1243,10 +1256,69 @@ export class DatabaseService {
                 average_percent: termGrade.average_percent || null,
                 comments: termGrade.comments || null
             });
-            if (result.error) {
-                errors.push(`TermGrade ${termGrade.student_id}-${termGrade.class_id}-${termGrade.term_id}: ${result.error}`);
+            // Get the final result with id
+            const finalResult = await executeQuery(checkQuery, {
+                student_id: termGrade.student_id,
+                class_id: termGrade.class_id,
+                term_id: termGrade.term_id
+            });
+            if (finalResult.error) {
+                errors.push(`TermGrade ${termGrade.student_id}-${termGrade.class_id}-${termGrade.term_id}: ${finalResult.error}`);
             }
-            else if (result.data[0]) {
+            else if (finalResult.data && finalResult.data[0]) {
+                const savedTermGrade = finalResult.data[0];
+                // Ensure id is present
+                if (!savedTermGrade.id) {
+                    console.warn(`⚠️ Term grade missing id after save: student ${savedTermGrade.student_id}, class ${savedTermGrade.class_id}, term ${savedTermGrade.term_id}`);
+                }
+                results.push(savedTermGrade);
+            }
+        }
+        if (errors.length > 0 && results.length === 0) {
+            return { data: null, error: errors.join('; ') };
+        }
+        return { data: results, error: errors.length > 0 ? errors.join('; ') : null };
+    }
+    /**
+     * Upsert term grade rubrics
+     */
+    async upsertTermGradeRubrics(rubrics) {
+        if (!rubrics || rubrics.length === 0) {
+            return { data: [], error: null };
+        }
+        const results = [];
+        const errors = [];
+        for (const rubric of rubrics) {
+            const query = `
+        MERGE MB.term_grade_rubrics AS target
+        USING (SELECT @term_grade_id AS term_grade_id, @rubric_id AS rubric_id,
+                     @title AS title, @grade AS grade) AS source
+        ON target.term_grade_id = source.term_grade_id 
+           AND target.rubric_id = source.rubric_id
+        WHEN MATCHED THEN
+          UPDATE SET
+            title = source.title,
+            grade = source.grade,
+            updated_at = SYSDATETIMEOFFSET()
+        WHEN NOT MATCHED THEN
+          INSERT (term_grade_id, rubric_id, title, grade, created_at, updated_at)
+          VALUES (source.term_grade_id, source.rubric_id, source.title, source.grade,
+                  SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+        
+        SELECT * FROM MB.term_grade_rubrics 
+        WHERE term_grade_id = @term_grade_id 
+          AND rubric_id = @rubric_id;
+      `;
+            const result = await executeQuery(query, {
+                term_grade_id: rubric.term_grade_id,
+                rubric_id: rubric.rubric_id,
+                title: rubric.title,
+                grade: rubric.grade || null
+            });
+            if (result.error) {
+                errors.push(`TermGradeRubric ${rubric.term_grade_id}-${rubric.rubric_id}: ${result.error}`);
+            }
+            else if (result.data?.[0]) {
                 results.push(result.data[0]);
             }
         }
@@ -3468,6 +3540,164 @@ export class DatabaseService {
             }
             console.error('   ❌ Failed to bulk insert staff allocations:', error);
             return { inserted: 0, error: error.message || 'Bulk insert failed' };
+        }
+    }
+    /**
+     * @deprecated This function is no longer used. Student fallout data is not populated
+     * in RP.student_fallout table because:
+     * 1. The fallout status and gender information are available directly from
+     *    NEX.student_allocations and NEX.groups tables
+     * 2. NEX.students table only contains current students, not historical/exited students
+     * 3. The student_allocations table maintains complete historical data including
+     *    students who have exited the system
+     *
+     * Upsert student fallout data after student allocations are inserted
+     * This is a set-based operation that updates RP.student_fallout for all students
+     * based on whether they are in the 'fallout' group in student_allocations
+     */
+    async upsertStudentFallout() {
+        try {
+            console.log('🔄 Upserting student fallout data...');
+            const query = `
+        MERGE RP.student_fallout AS target
+        USING (
+          SELECT 
+            s.id,
+            CAST(s.school_id AS NVARCHAR(100)) AS school_id,
+            s.sourced_id,
+            s.identifier,
+            s.full_name,
+            s.first_name,
+            s.last_name,
+            s.email,
+            s.username,
+            s.user_type,
+            s.status,
+            s.date_last_modified,
+            s.academic_year,
+            s.metadata,
+            s.created_at,
+            s.updated_at,
+            s.current_grade,
+            s.current_class,
+            s.current_class_id,
+            s.grades,
+            s.phone,
+            s.mobile_number,
+            s.sms,
+            s.gender,
+            s.student_dob,
+            s.religion,
+            s.admission_date,
+            s.join_date,
+            s.parent_name,
+            s.guardian_one_full_name,
+            s.guardian_two_full_name,
+            s.guardian_one_mobile,
+            s.guardian_two_mobile,
+            s.primary_contact,
+            s.student_reg_id,
+            s.family_code,
+            s.student_national_id,
+            s.student_status,
+            s.class_grade,
+            s.class_section,
+            s.homeroom_teacher_sourced_id,
+            -- Set fallout_indicator to 'fallout' if student is in fallout group, NULL otherwise
+            CASE 
+              WHEN sa.student_sourced_id IS NOT NULL THEN 'fallout'
+              ELSE NULL 
+            END AS fallout_indicator
+          FROM NEX.students s
+          LEFT JOIN (
+            -- Get distinct students in fallout group
+            SELECT DISTINCT student_sourced_id
+            FROM NEX.student_allocations
+            WHERE group_name = 'fallout'
+          ) sa ON s.sourced_id = sa.student_sourced_id
+        ) AS source
+        ON target.sourced_id = source.sourced_id
+        WHEN MATCHED THEN
+          UPDATE SET
+            id = source.id,
+            school_id = source.school_id,
+            identifier = source.identifier,
+            full_name = source.full_name,
+            first_name = source.first_name,
+            last_name = source.last_name,
+            email = source.email,
+            username = source.username,
+            user_type = source.user_type,
+            status = source.status,
+            date_last_modified = source.date_last_modified,
+            academic_year = source.academic_year,
+            metadata = source.metadata,
+            created_at = source.created_at,
+            updated_at = source.updated_at,
+            current_grade = source.current_grade,
+            current_class = source.current_class,
+            current_class_id = source.current_class_id,
+            grades = source.grades,
+            phone = source.phone,
+            mobile_number = source.mobile_number,
+            sms = source.sms,
+            gender = source.gender,
+            student_dob = source.student_dob,
+            religion = source.religion,
+            admission_date = source.admission_date,
+            join_date = source.join_date,
+            parent_name = source.parent_name,
+            guardian_one_full_name = source.guardian_one_full_name,
+            guardian_two_full_name = source.guardian_two_full_name,
+            guardian_one_mobile = source.guardian_one_mobile,
+            guardian_two_mobile = source.guardian_two_mobile,
+            primary_contact = source.primary_contact,
+            student_reg_id = source.student_reg_id,
+            family_code = source.family_code,
+            student_national_id = source.student_national_id,
+            student_status = source.student_status,
+            class_grade = source.class_grade,
+            class_section = source.class_section,
+            homeroom_teacher_sourced_id = source.homeroom_teacher_sourced_id,
+            fallout_indicator = source.fallout_indicator
+        WHEN NOT MATCHED THEN
+          INSERT (
+            id, school_id, sourced_id, identifier, full_name, first_name, last_name,
+            email, username, user_type, status, date_last_modified, academic_year,
+            metadata, created_at, updated_at, current_grade, current_class, current_class_id,
+            grades, phone, mobile_number, sms, gender, student_dob, religion,
+            admission_date, join_date, parent_name, guardian_one_full_name, guardian_two_full_name,
+            guardian_one_mobile, guardian_two_mobile, primary_contact, student_reg_id,
+            family_code, student_national_id, student_status, class_grade, class_section,
+            homeroom_teacher_sourced_id, fallout_indicator
+          )
+          VALUES (
+            source.id, source.school_id, source.sourced_id, source.identifier, source.full_name,
+            source.first_name, source.last_name, source.email, source.username, source.user_type,
+            source.status, source.date_last_modified, source.academic_year, source.metadata,
+            source.created_at, source.updated_at, source.current_grade, source.current_class,
+            source.current_class_id, source.grades, source.phone, source.mobile_number, source.sms,
+            source.gender, source.student_dob, source.religion, source.admission_date, source.join_date,
+            source.parent_name, source.guardian_one_full_name, source.guardian_two_full_name,
+            source.guardian_one_mobile, source.guardian_two_mobile, source.primary_contact,
+            source.student_reg_id, source.family_code, source.student_national_id, source.student_status,
+            source.class_grade, source.class_section, source.homeroom_teacher_sourced_id, source.fallout_indicator
+          );
+        
+        SELECT @@ROWCOUNT as rows_affected;
+      `;
+            const result = await executeQuery(query);
+            if (result.error) {
+                console.error('❌ Failed to upsert student fallout:', result.error);
+                return { updated: 0, error: result.error };
+            }
+            const rowsAffected = result.data?.[0]?.rows_affected || 0;
+            console.log(`✅ Upserted ${rowsAffected} student record(s) in RP.student_fallout`);
+            return { updated: rowsAffected, error: null };
+        }
+        catch (error) {
+            console.error('❌ Failed to upsert student fallout:', error);
+            return { updated: 0, error: error.message || 'Upsert failed' };
         }
     }
 }

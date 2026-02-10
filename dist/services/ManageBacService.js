@@ -94,7 +94,7 @@ export class ManageBacService {
             };
             // Try to extract more details from the error
             if (errorMessage.includes('HTTP')) {
-                errorDetails['httpError'] = errorMessage;
+                errorDetails.httpError = errorMessage;
             }
             return {
                 success: false,
@@ -109,19 +109,20 @@ export class ManageBacService {
     async getSchoolDetails(apiKey, baseUrl) {
         try {
             const response = await this.makeRequest(MANAGEBAC_ENDPOINTS.SCHOOL, apiKey, {}, baseUrl);
-            const schoolData = response.data.school || response.data;
-            this.currentSchoolId = parseInt(schoolData.id.toString()) || schoolData.id;
+            const schoolData = response.data.school ?? response.data;
+            const schoolId = typeof schoolData.id === 'number' ? schoolData.id : parseInt(String(schoolData.id), 10);
+            this.currentSchoolId = schoolId || null;
             console.log('✅ School ID set:', this.currentSchoolId);
             // Save to database
             console.log('💾 Saving school details to database...');
             const schoolForDb = {
-                id: this.currentSchoolId,
+                id: schoolId,
                 name: schoolData.name,
                 subdomain: schoolData.subdomain || schoolData.name.toLowerCase().replace(/\s+/g, '-'),
                 country: schoolData.country || 'Unknown',
                 language: schoolData.language || 'en',
                 session_in_may: schoolData.session_in_may || false,
-                kbl_id: schoolData.kbl_id || null,
+                kbl_id: schoolData.kbl_id ?? undefined,
             };
             const { error } = await databaseService.upsertSchool(schoolForDb);
             if (error) {
@@ -136,7 +137,7 @@ export class ManageBacService {
                         name: program.name,
                         code: program.code
                     }));
-                    const { error: programsError } = await databaseService.upsertPrograms(programs, this.currentSchoolId);
+                    const { error: programsError } = await databaseService.upsertPrograms(programs, schoolId);
                     if (programsError) {
                         console.error('❌ Failed to save programs to database:', programsError);
                     }
@@ -183,17 +184,18 @@ export class ManageBacService {
                     }
                     console.log(`📚 Processing ${rawYears.length} academic years for program: ${programKey}`);
                     const normalizedYears = [];
+                    const schoolId = this.currentSchoolId;
                     const termMap = new Map();
                     for (const rawYear of rawYears) {
                         const yearId = typeof rawYear.id === 'string' ? parseInt(rawYear.id, 10) : rawYear.id;
                         const { startsOn, endsOn } = this.getAcademicYearDates(rawYear);
                         normalizedYears.push({
                             id: yearId,
-                            school_id: this.currentSchoolId,
+                            school_id: schoolId,
                             program_code: programKey,
                             name: rawYear.name,
-                            starts_on: startsOn,
-                            ends_on: endsOn
+                            starts_on: new Date(startsOn),
+                            ends_on: new Date(endsOn)
                         });
                         if (rawYear.academic_terms && rawYear.academic_terms.length > 0) {
                             const normalizedTerms = rawYear.academic_terms.map(term => {
@@ -212,7 +214,7 @@ export class ManageBacService {
                             termMap.set(yearId, normalizedTerms);
                         }
                     }
-                    const { error: yearsError } = await databaseService.upsertAcademicYears(normalizedYears, this.currentSchoolId, programKey);
+                    const { error: yearsError } = await databaseService.upsertAcademicYears(normalizedYears, schoolId, programKey);
                     if (yearsError) {
                         console.error(`❌ Failed to save academic years for program ${programKey}:`, yearsError);
                     }
@@ -802,10 +804,10 @@ export class ManageBacService {
             if (termId) {
                 urlParams.append('term_id', termId);
             }
-            if (urlParams.toString()) {
-                endpoint = `${endpoint}?${urlParams.toString()}`;
-            }
-            const response = await this.makeRequest(endpoint, apiKey, {}, baseUrl);
+            const requestEndpoint = urlParams.toString()
+                ? `${endpoint}?${urlParams.toString()}`
+                : endpoint;
+            const response = await this.makeRequest(requestEndpoint, apiKey, {}, baseUrl);
             return response.data;
         }
         catch (error) {
@@ -834,29 +836,134 @@ export class ManageBacService {
                 }
                 return await res.json();
             }, 3);
+            // Debug: Log raw response structure
+            const responseObj = response;
+            console.log('🔍 Raw API response keys:', Object.keys(responseObj));
+            console.log('🔍 Raw response has students?', !!responseObj.students);
+            console.log('🔍 Raw response has data?', !!responseObj.data);
             const validated = validateApiResponse(response);
+            // Debug: Log validated response structure
+            const validatedData = validated.data;
+            console.log('🔍 Validated response structure:');
+            console.log('  - validated.data type:', typeof validated.data);
+            console.log('  - validated.data keys:', validated.data ? Object.keys(validatedData) : 'null');
+            console.log('  - Has students?', !!validatedData?.students);
+            // Handle both response structures: { students: [...] } or { data: { students: [...] } }
+            const studentsData = validatedData?.students ?? responseObj?.students ?? [];
+            const studentsArray = Array.isArray(studentsData) ? studentsData : [];
+            if (studentsArray.length > 0) {
+                const firstStudent = studentsArray[0];
+                const termGrade = firstStudent?.term_grade;
+                console.log('  - First student ID:', firstStudent?.id);
+                console.log('  - First student has term_grade?', !!termGrade);
+                console.log('  - First student has rubrics?', !!termGrade?.rubrics?.length);
+                const rubrics = termGrade?.rubrics;
+                console.log('  - Rubrics count:', rubrics?.length || 0);
+                if (rubrics && rubrics.length > 0) {
+                    console.log('  - Sample rubric:', JSON.stringify(rubrics[0], null, 2));
+                }
+            }
             // Convert and save term grades to database
-            if (validated.data && validated.data.students) {
-                const termGrades = validated.data.students.map((student) => ({
-                    student_id: student.id,
-                    class_id: classId,
-                    term_id: termId,
-                    grade: student.term_grade?.grade,
-                    average_percent: student.term_grade?.average?.percent,
-                    comments: student.term_grade?.comments,
-                }));
+            // Use studentsArray which handles both response structures
+            if (studentsArray.length > 0) {
+                const termGrades = studentsArray.map((student) => {
+                    const s = student;
+                    const tg = s?.term_grade;
+                    const avg = tg?.average;
+                    return {
+                        student_id: s.id,
+                        class_id: classId,
+                        term_id: termId,
+                        grade: tg?.grade,
+                        average_percent: avg?.percent,
+                        comments: tg?.comments,
+                    };
+                });
                 if (termGrades.length > 0) {
                     console.log('💾 Saving term grades to database...');
-                    const { error } = await databaseService.upsertTermGrades(termGrades);
+                    const { data: savedTermGrades, error } = await databaseService.upsertTermGrades(termGrades);
                     if (error) {
                         console.error('❌ Failed to save term grades to database:', error);
                     }
                     else {
                         console.log('✅ Term grades saved to database');
+                        // Save rubrics if term grades were saved successfully
+                        if (savedTermGrades && savedTermGrades.length > 0) {
+                            console.log(`📊 Processing rubrics for ${savedTermGrades.length} term grades...`);
+                            console.log(`📋 Sample saved term grade:`, JSON.stringify(savedTermGrades[0], null, 2));
+                            console.log(`📋 All saved term grade IDs:`, savedTermGrades.map(tg => ({ student_id: tg.student_id, id: tg.id })));
+                            const rubrics = [];
+                            // Create a map of student_id to term_grade_id for quick lookup
+                            // Ensure student_id is a number for consistent lookups
+                            const studentToTermGradeId = new Map();
+                            savedTermGrades.forEach(tg => {
+                                // Ensure student_id is a number
+                                const studentId = typeof tg.student_id === 'string' ? parseInt(tg.student_id, 10) : tg.student_id;
+                                if (tg.id) {
+                                    studentToTermGradeId.set(studentId, tg.id);
+                                    console.log(`  ✓ Mapped student ${studentId} (type: ${typeof studentId}) -> term_grade_id ${tg.id}`);
+                                }
+                                else {
+                                    console.warn(`⚠️ Term grade missing id for student ${studentId}, class ${tg.class_id}, term ${tg.term_id}`);
+                                    console.warn(`   Full term grade object:`, JSON.stringify(tg, null, 2));
+                                }
+                            });
+                            console.log(`🔗 Mapped ${studentToTermGradeId.size} student IDs to term grade IDs`);
+                            console.log(`🔍 Map contents:`, Array.from(studentToTermGradeId.entries()));
+                            // Extract rubrics from each student's term_grade
+                            let studentsWithRubrics = 0;
+                            studentsArray.forEach((student) => {
+                                const s = student;
+                                const studentId = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
+                                const termGradeId = studentToTermGradeId.get(studentId);
+                                console.log(`🔍 Looking up student ${studentId} (type: ${typeof studentId}), found term_grade_id: ${termGradeId}`);
+                                console.log(`   Map has key? ${studentToTermGradeId.has(studentId)}, Map size: ${studentToTermGradeId.size}`);
+                                if (termGradeId && s?.term_grade?.rubrics) {
+                                    studentsWithRubrics++;
+                                    const studentRubrics = s.term_grade.rubrics || [];
+                                    console.log(`📝 Student ${s.id} (${s.name}) has ${studentRubrics.length} rubrics`);
+                                    studentRubrics.forEach((rubric) => {
+                                        const r = rubric;
+                                        if (r?.id && r?.title) {
+                                            rubrics.push({
+                                                term_grade_id: termGradeId,
+                                                rubric_id: r.id,
+                                                title: String(r.title),
+                                                grade: r.grade ?? null,
+                                            });
+                                        }
+                                    });
+                                }
+                                else if (!termGradeId) {
+                                    console.warn(`⚠️ No term_grade_id found for student ${s.id}`);
+                                }
+                                else if (!s.term_grade?.rubrics) {
+                                    console.log(`ℹ️ Student ${s.id} has no rubrics in term_grade`);
+                                }
+                            });
+                            console.log(`📊 Found rubrics for ${studentsWithRubrics} students, total ${rubrics.length} rubrics`);
+                            if (rubrics.length > 0) {
+                                console.log(`💾 Saving ${rubrics.length} term grade rubrics to database...`);
+                                const { error: rubricsError } = await databaseService.upsertTermGradeRubrics(rubrics);
+                                if (rubricsError) {
+                                    console.error('❌ Failed to save term grade rubrics to database:', rubricsError);
+                                }
+                                else {
+                                    console.log('✅ Term grade rubrics saved to database');
+                                }
+                            }
+                            else {
+                                console.log('ℹ️ No rubrics to save');
+                            }
+                        }
+                        else {
+                            console.warn('⚠️ No saved term grades returned from database');
+                        }
                     }
                 }
             }
-            return validated.data;
+            // Return the response in the expected format
+            return validated.data || { students: studentsData, meta: responseObj?.meta };
         }
         catch (error) {
             console.error('Failed to fetch term grades:', error);

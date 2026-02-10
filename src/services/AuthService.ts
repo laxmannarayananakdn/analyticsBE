@@ -86,9 +86,12 @@ export function generateToken(user: User): string {
     authType: user.Auth_Type,
   };
   
-  return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN,
-  });
+  const secret = JWT_SECRET || 'fallback-secret';
+  return jwt.sign(
+    payload,
+    secret,
+    { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
+  );
 }
 
 /**
@@ -215,6 +218,9 @@ export async function changePassword(
   
   // Verify current password (if not temporary password)
   if (!user.Is_Temporary_Password && user.Password_Hash) {
+    if (currentPassword === undefined || currentPassword === '') {
+      return { success: false, error: 'Current password is required' };
+    }
     const isValid = await comparePassword(currentPassword, user.Password_Hash);
     if (!isValid) {
       return { success: false, error: 'Current password is incorrect' };

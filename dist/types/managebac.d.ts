@@ -156,17 +156,23 @@ export interface TermGrade {
     created_at?: string;
     updated_at?: string;
 }
+export interface TermGradeRubric {
+    id: number;
+    title: string;
+    grade?: string | null;
+}
 export interface TermGradeResponse {
     students: Array<{
         id: number;
         name: string;
         term_grade: {
-            grade?: string;
+            grade?: string | null;
             average?: {
                 percent?: number;
                 grade?: string;
             };
-            comments?: string;
+            comments?: string | null;
+            rubrics?: TermGradeRubric[];
         };
     }>;
     meta?: {

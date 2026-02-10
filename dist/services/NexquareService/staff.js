@@ -32,7 +32,7 @@ export async function getStaff(config, schoolId, filter) {
             const url = `${endpoint}?${queryParams.toString()}`;
             const response = await this.makeRequest(url, config);
             // Handle both 'users' and 'teachers' response keys (OneRoster may use either)
-            const users = response.users || response.teachers || [];
+            const users = (response.users ?? response.teachers ?? []);
             if (users.length === 0) {
                 hasMore = false;
                 break;

@@ -30,7 +30,7 @@ export async function getSchools(
     }
 
     const url = `${endpoint}?${queryParams.toString()}`;
-    const response = await (this as any).makeRequest<SchoolsResponse>(url, config);
+    const response = await this.makeRequest<SchoolsResponse>(url, config);
 
     if (!response.orgs || !Array.isArray(response.orgs)) {
       throw new Error('Invalid response format: missing orgs array');

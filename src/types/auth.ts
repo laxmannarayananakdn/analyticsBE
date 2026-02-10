@@ -9,6 +9,7 @@ export interface User {
   Auth_Type: 'AppRegistration' | 'Password';
   Is_Temporary_Password: boolean;
   Is_Active: boolean;
+  Password_Hash?: string | null;
   Created_Date: Date;
   Modified_Date: Date;
   Created_By: string | null;
@@ -29,8 +30,9 @@ export interface Department {
 export interface Node {
   Node_ID: string;
   Node_Description: string;
-  Is_Head_Office: boolean;
+  Is_Head_Office: boolean | number;
   Parent_Node_ID: string | null;
+  Is_School_Node?: boolean | number;
   Created_Date: Date;
   Modified_Date: Date;
   Created_By: string | null;
@@ -81,7 +83,7 @@ export interface LoginRequest {
 }
 
 export interface ChangePasswordRequest {
-  currentPassword: string;
+  currentPassword?: string; // Optional when resetting temporary password
   newPassword: string;
 }
 
@@ -145,6 +147,12 @@ export interface UpdateAccessRequest {
   departmentIds: string[];
 }
 
-export interface NodeTree extends Node {
+/** API response shape for node (camelCase) */
+export interface NodeTree {
+  nodeId: string;
+  nodeDescription: string;
+  isHeadOffice: boolean;
+  isSchoolNode?: boolean;
+  parentNodeId: string | null;
   children?: NodeTree[];
 }

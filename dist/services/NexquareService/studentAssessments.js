@@ -7,6 +7,7 @@ import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
 import { executeQuery, getConnection, sql } from '../../config/database';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 /**
  * Get student assessment/grade book data
  * Fetches CSV file from API, parses it, and saves to database
@@ -26,97 +27,477 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
             console.warn(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Assessments will be saved with school_id = NULL.`);
         }
         console.log(`📊 Fetching student assessments for school ${targetSchoolId}, academic year ${defaultAcademicYear}...`);
-        console.log(`   Fetching all data (not passing offset/limit - API will return all records)`);
+        console.log(`   Using chunked fetching: ${limit} records per request`);
         const endpoint = NEXQUARE_ENDPOINTS.STUDENT_ASSESSMENTS;
         let allRecords = [];
         let totalInserted = 0;
-        // Fetch all data in one request (don't pass offset/limit - API defaults to all data)
-        console.log(`\n📥 Fetching all assessment data...`);
-        // Build query parameters - DO NOT include offset or limit
-        const queryParams = new URLSearchParams();
-        queryParams.append('schoolIds', targetSchoolId);
-        queryParams.append('academicYear', defaultAcademicYear);
-        queryParams.append('fileName', defaultFileName);
-        // Note: Not passing offset/limit - API will default to offset=0 and limit=1,048,570
-        const url = `${endpoint}?${queryParams.toString()}`;
-        // Fetch file response (CSV or Excel)
-        let buffer;
-        let contentType;
-        try {
-            const fileResponse = await this.makeFileRequest(url, config);
-            buffer = fileResponse.buffer;
-            contentType = fileResponse.contentType;
-        }
-        catch (error) {
-            console.error('❌ Failed to fetch assessment data:', error);
-            throw error;
-        }
-        if (!buffer || buffer.length === 0) {
-            console.log(`✅ No data returned from API.`);
+        // Fetch data in chunks to avoid memory issues with large files
+        console.log(`\n📥 Fetching assessment data in chunks...`);
+        const chunkSize = limit; // Use the limit parameter (default 10000)
+        let currentOffset = offset; // Start from the offset parameter (default 0)
+        let hasMoreData = true;
+        let chunkNumber = 1;
+        let totalFetched = 0;
+        while (hasMoreData) {
+            console.log(`\n   📦 Fetching chunk ${chunkNumber} (offset: ${currentOffset}, limit: ${chunkSize})...`);
+            // Build query parameters with offset and limit
+            const queryParams = new URLSearchParams();
+            queryParams.append('schoolIds', targetSchoolId);
+            queryParams.append('academicYear', defaultAcademicYear);
+            queryParams.append('fileName', defaultFileName);
+            queryParams.append('limit', chunkSize.toString());
+            queryParams.append('offset', currentOffset.toString());
+            const url = `${endpoint}?${queryParams.toString()}`;
+            // Fetch file response (CSV or Excel)
+            let buffer;
+            let contentType;
+            try {
+                const fileResponse = await this.makeFileRequest(url, config);
+                buffer = fileResponse.buffer;
+                contentType = fileResponse.contentType;
+            }
+            catch (error) {
+                console.error(`❌ Failed to fetch chunk ${chunkNumber}:`, error);
+                throw error;
+            }
+            if (!buffer || buffer.length === 0) {
+                console.log(`   ✅ No more data returned (chunk ${chunkNumber} is empty)`);
+                hasMoreData = false;
+                break;
+            }
+            // Log file size for debugging
+            const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
+            console.log(`   📦 Chunk ${chunkNumber} size: ${fileSizeMB} MB (${buffer.length.toLocaleString()} bytes)`);
+            // Detect file type from content-type or file signature
+            const isExcel = contentType.includes('spreadsheet') ||
+                contentType.includes('excel') ||
+                contentType.includes('application/vnd.openxmlformats') ||
+                buffer.toString('utf8', 0, 4) === 'PK\x03\x04';
+            let chunkRecords = [];
+            if (isExcel) {
+                // Parse Excel file for this chunk
+                console.log(`   📝 Parsing Excel chunk ${chunkNumber}...`);
+                let workbook = null;
+                let parseAttempt = 1;
+                const maxAttempts = 3;
+                // Try different parsing strategies for large files
+                while (!workbook && parseAttempt <= maxAttempts) {
+                    try {
+                        console.log(`   🔄 Parsing attempt ${parseAttempt}/${maxAttempts}...`);
+                        if (parseAttempt === 1) {
+                            // First attempt: Optimized options for large files
+                            workbook = XLSX.read(buffer, {
+                                type: 'buffer',
+                                cellDates: false,
+                                cellNF: false,
+                                cellText: false
+                            });
+                        }
+                        else if (parseAttempt === 2) {
+                            // Second attempt: Minimal options (most memory efficient)
+                            workbook = XLSX.read(buffer, {
+                                type: 'buffer',
+                                cellDates: false,
+                                cellNF: false,
+                                cellText: false,
+                                sheetStubs: false
+                            });
+                        }
+                        else {
+                            // Third attempt: Default options (might work if optimized options fail)
+                            console.log(`   ⚠️  Trying default parsing options (may use more memory)...`);
+                            workbook = XLSX.read(buffer, {
+                                type: 'buffer'
+                            });
+                        }
+                        // Verify workbook was parsed correctly
+                        if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+                            throw new Error('Workbook parsing failed: No sheets found or workbook structure is invalid');
+                        }
+                        // For very large files, XLSX might use lazy loading
+                        // Try to access the sheet directly to trigger loading
+                        if (workbook.SheetNames && workbook.SheetNames.length > 0) {
+                            const sheetName = workbook.SheetNames[0];
+                            console.log(`   🔍 Attempting to access sheet "${sheetName}" to trigger loading...`);
+                            // Try to access the sheet - this might trigger lazy loading
+                            let worksheet = workbook.Sheets?.[sheetName];
+                            // If not found, try accessing it differently to force load
+                            if (!worksheet) {
+                                // Force access by trying to get all sheets
+                                const sheetKeys = Object.keys(workbook.Sheets || {});
+                                if (sheetKeys.length === 0) {
+                                    // Sheets object is empty - this is the known issue with large files
+                                    // Try to work around by accessing the Directory structure
+                                    console.log(`   ⚠️  Sheets object is empty - XLSX may not load large files into memory`);
+                                    console.log(`   💡 This is a known limitation. File may need to be processed differently.`);
+                                    // For now, throw error to try next attempt or use alternative
+                                    if (parseAttempt < maxAttempts) {
+                                        throw new Error('Sheets object empty - will try alternative approach');
+                                    }
+                                    else {
+                                        // XLSX failed - will try exceljs as fallback
+                                        throw new Error('Sheets object empty - will try exceljs fallback');
+                                    }
+                                }
+                            }
+                            else {
+                                console.log(`   ✅ Sheet accessed successfully`);
+                            }
+                        }
+                        // Final check
+                        if (!workbook.Sheets || Object.keys(workbook.Sheets).length === 0) {
+                            if (parseAttempt < maxAttempts) {
+                                throw new Error('Sheets object empty - trying next approach');
+                            }
+                            else {
+                                // XLSX failed - will try exceljs as fallback
+                                throw new Error('Sheets object empty - will try exceljs fallback');
+                            }
+                        }
+                        console.log(`   ✅ Parsing attempt ${parseAttempt} succeeded`);
+                        break; // Success, exit the loop
+                    }
+                    catch (parseError) {
+                        // If it's the "Sheets object empty" error and we have more attempts, continue
+                        if (parseError.message.includes('Sheets object empty') && parseAttempt < maxAttempts) {
+                            console.warn(`   ⚠️  Parsing attempt ${parseAttempt} - Sheets empty, will try workaround on next attempt`);
+                            workbook = null;
+                            parseAttempt++;
+                            continue;
+                        }
+                        console.warn(`   ⚠️  Parsing attempt ${parseAttempt} failed: ${parseError.message}`);
+                        workbook = null;
+                        parseAttempt++;
+                        if (parseAttempt > maxAttempts) {
+                            // XLSX failed completely - try exceljs as fallback
+                            console.log(`\n   🔄 XLSX parsing failed. Trying exceljs as fallback...`);
+                            break; // Exit loop to try exceljs
+                        }
+                    }
+                }
+                // If XLSX failed, try exceljs as fallback with chunked processing
+                if (!workbook || !workbook.Sheets || Object.keys(workbook.Sheets).length === 0) {
+                    console.log(`\n   🔄 Attempting to parse with exceljs (supports large files better)...`);
+                    try {
+                        const exceljsWorkbook = new ExcelJS.Workbook();
+                        // exceljs accepts Buffer - ensure we have a proper Node.js Buffer
+                        // Convert to Uint8Array first, then to Buffer to avoid type issues
+                        const uint8Array = new Uint8Array(buffer);
+                        const exceljsBuffer = Buffer.from(uint8Array);
+                        // Load workbook - exceljs will handle large files better than XLSX
+                        await exceljsWorkbook.xlsx.load(exceljsBuffer);
+                        console.log(`   ✅ exceljs loaded workbook successfully`);
+                        console.log(`   📄 Found ${exceljsWorkbook.worksheets.length} worksheet(s)`);
+                        if (exceljsWorkbook.worksheets.length === 0) {
+                            throw new Error('No worksheets found in Excel file');
+                        }
+                        // Use the first worksheet
+                        const worksheet = exceljsWorkbook.worksheets[0];
+                        console.log(`   📊 Using worksheet: "${worksheet.name}"`);
+                        console.log(`   📈 Worksheet dimensions: ${worksheet.rowCount} rows, ${worksheet.columnCount} columns`);
+                        // Convert to JSON format matching XLSX output
+                        const headers = [];
+                        const rows = [];
+                        // Helper function to safely convert cell value to string (truncate if too long)
+                        const safeToString = (value, maxLength = 10000) => {
+                            if (value === null || value === undefined) {
+                                return null;
+                            }
+                            try {
+                                let str;
+                                if (typeof value === 'object' && 'text' in value) {
+                                    // Rich text
+                                    str = String(value.text || '');
+                                }
+                                else if (value instanceof Date) {
+                                    // Format date as YYYY-MM-DD
+                                    str = value.toISOString().split('T')[0];
+                                }
+                                else {
+                                    str = String(value);
+                                }
+                                // Truncate if too long to avoid "Invalid string length" error
+                                if (str.length > maxLength) {
+                                    console.warn(`   ⚠️  Truncating cell value (length: ${str.length})`);
+                                    return str.substring(0, maxLength);
+                                }
+                                return str;
+                            }
+                            catch (error) {
+                                console.warn(`   ⚠️  Error converting cell value: ${error.message}`);
+                                return null;
+                            }
+                        };
+                        // Get headers from first row
+                        const headerRow = worksheet.getRow(1);
+                        headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                            const headerValue = safeToString(cell.value, 500) || '';
+                            headers[colNumber - 1] = headerValue.trim();
+                        });
+                        console.log(`   📋 Found ${headers.length} columns: ${headers.slice(0, 5).join(', ')}${headers.length > 5 ? '...' : ''}`);
+                        // Process rows in batches to avoid memory issues
+                        const batchSize = 1000;
+                        let rowCount = 0;
+                        let currentBatch = [];
+                        worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+                            if (rowNumber === 1)
+                                return; // Skip header row
+                            try {
+                                const rowData = {};
+                                row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                                    const headerName = headers[colNumber - 1];
+                                    if (headerName) {
+                                        // Use safe conversion with truncation
+                                        rowData[headerName] = safeToString(cell.value, 10000);
+                                    }
+                                });
+                                currentBatch.push(rowData);
+                                rowCount++;
+                                // Process batch when it reaches batch size
+                                if (currentBatch.length >= batchSize) {
+                                    rows.push(...currentBatch);
+                                    currentBatch = [];
+                                    console.log(`   📊 Processed ${rowCount} rows...`);
+                                }
+                            }
+                            catch (rowError) {
+                                console.warn(`   ⚠️  Error processing row ${rowNumber}: ${rowError.message}`);
+                                // Continue with next row
+                            }
+                        });
+                        // Add remaining rows
+                        if (currentBatch.length > 0) {
+                            rows.push(...currentBatch);
+                        }
+                        console.log(`   ✅ exceljs parsed ${rows.length} record(s) from Excel chunk ${chunkNumber}`);
+                        chunkRecords = rows;
+                    }
+                    catch (exceljsError) {
+                        console.error(`   ❌ exceljs parsing also failed: ${exceljsError.message}`);
+                        console.error(`   Error stack: ${exceljsError.stack?.substring(0, 500)}`);
+                        // Provide helpful error message
+                        if (exceljsError.message.includes('Invalid string length')) {
+                            throw new Error(`Excel file is too large to parse. The file contains cell values that exceed JavaScript's string length limit. ` +
+                                `Solutions: 1) Request CSV format from API (add format=CSV parameter), ` +
+                                `2) Request data in smaller chunks (use offset/limit parameters), ` +
+                                `3) Contact API provider to split the data into smaller files. ` +
+                                `Original error: ${exceljsError.message}`);
+                        }
+                        throw new Error(`Both XLSX and exceljs failed to parse Excel file. XLSX error: Sheets object empty. exceljs error: ${exceljsError.message}`);
+                    }
+                }
+                // If XLSX succeeded (workbook and Sheets are populated), process with XLSX
+                if (workbook && workbook.Sheets && Object.keys(workbook.Sheets).length > 0) {
+                    try {
+                        // Get the first sheet
+                        const sheetName = workbook.SheetNames[0];
+                        if (!sheetName) {
+                            throw new Error('No sheets found in Excel file');
+                        }
+                        console.log(`   📄 Found ${workbook.SheetNames.length} sheet(s), using: "${sheetName}"`);
+                        console.log(`   🔍 Available sheet names: ${workbook.SheetNames.join(', ')}`);
+                        console.log(`   🔍 Available Sheets keys: ${Object.keys(workbook.Sheets).join(', ')}`);
+                        // Get worksheet - try exact match first, then try case-insensitive match
+                        let worksheet = workbook.Sheets[sheetName];
+                        if (!worksheet) {
+                            // Try case-insensitive match
+                            const sheetKey = Object.keys(workbook.Sheets).find(key => key.toLowerCase() === sheetName.toLowerCase());
+                            if (sheetKey) {
+                                console.log(`   ⚠️  Sheet name case mismatch. Using: "${sheetKey}" instead of "${sheetName}"`);
+                                worksheet = workbook.Sheets[sheetKey];
+                            }
+                        }
+                        // If still not found, try using the first available sheet
+                        if (!worksheet && Object.keys(workbook.Sheets).length > 0) {
+                            const firstSheetKey = Object.keys(workbook.Sheets)[0];
+                            console.log(`   ⚠️  Sheet "${sheetName}" not found. Using first available sheet: "${firstSheetKey}"`);
+                            worksheet = workbook.Sheets[firstSheetKey];
+                        }
+                        if (!worksheet) {
+                            throw new Error(`Worksheet "${sheetName}" not found in workbook. Available sheets: ${Object.keys(workbook.Sheets).join(', ')}`);
+                        }
+                        // Check if worksheet has data
+                        const worksheetRef = worksheet['!ref'];
+                        if (!worksheetRef) {
+                            console.warn(`   ⚠️  Worksheet has no range defined (!ref is missing). This might indicate an empty or corrupted sheet.`);
+                            console.warn(`   🔍 Worksheet keys: ${Object.keys(worksheet).slice(0, 20).join(', ')}...`);
+                            // Try to parse anyway - sometimes sheets have data without !ref
+                        }
+                        const range = worksheetRef ? XLSX.utils.decode_range(worksheetRef) : { e: { r: 0, c: 0 } };
+                        const totalRows = range.e.r + 1;
+                        const totalCols = range.e.c + 1;
+                        if (worksheetRef) {
+                            console.log(`   📊 Worksheet range: ${worksheetRef} (${totalRows} rows, ${totalCols} columns)`);
+                        }
+                        else {
+                            console.log(`   📊 Worksheet range: Not defined (will attempt to parse anyway)`);
+                        }
+                        if (totalRows === 0 && !worksheetRef) {
+                            console.warn(`   ⚠️  Worksheet appears to be empty or has no defined range`);
+                            // Don't return empty - try parsing anyway as some files have data without !ref
+                        }
+                        // Convert to JSON with header row
+                        // Use blankrows: false to skip empty rows (more efficient)
+                        // If !ref is missing, sheet_to_json will still try to parse available cells
+                        try {
+                            chunkRecords = XLSX.utils.sheet_to_json(worksheet, {
+                                defval: null, // Use null for empty cells
+                                raw: false, // Convert values to strings
+                                dateNF: 'yyyy-mm-dd', // Date format
+                                blankrows: false // Skip empty rows for better performance
+                            });
+                            console.log(`   ✅ Parsed ${chunkRecords.length} record(s) from Excel chunk ${chunkNumber}`);
+                        }
+                        catch (jsonError) {
+                            // If sheet_to_json fails, try with header: 1 to get raw array format
+                            console.warn(`   ⚠️  sheet_to_json failed, trying alternative parsing method: ${jsonError.message}`);
+                            try {
+                                const rawRows = XLSX.utils.sheet_to_json(worksheet, {
+                                    header: 1,
+                                    defval: null,
+                                    raw: false,
+                                    blankrows: false
+                                });
+                                if (rawRows.length > 0) {
+                                    // Convert array format to object format using first row as headers
+                                    const headers = rawRows[0];
+                                    chunkRecords = rawRows.slice(1).map(row => {
+                                        const obj = {};
+                                        headers.forEach((header, index) => {
+                                            obj[header] = row[index] ?? null;
+                                        });
+                                        return obj;
+                                    });
+                                    console.log(`   ✅ Parsed ${chunkRecords.length} record(s) from Excel chunk ${chunkNumber} (using alternative method)`);
+                                }
+                                else {
+                                    console.warn(`   ⚠️  No data rows found in worksheet`);
+                                    chunkRecords = [];
+                                }
+                            }
+                            catch (altError) {
+                                console.error(`   ❌ Alternative parsing method also failed: ${altError.message}`);
+                                throw new Error(`Failed to parse Excel worksheet: ${jsonError.message}. Alternative method also failed: ${altError.message}`);
+                            }
+                        }
+                    }
+                    catch (parseError) {
+                        console.error('   ❌ Failed to parse Excel:', parseError);
+                        console.error('   Error details:', {
+                            message: parseError.message,
+                            stack: parseError.stack?.substring(0, 500),
+                            name: parseError.name
+                        });
+                        // Check if it's a memory-related error
+                        if (parseError.message?.includes('memory') ||
+                            parseError.message?.includes('allocation') ||
+                            parseError.message?.includes('heap') ||
+                            parseError.code === 'ERR_OUT_OF_MEMORY') {
+                            throw new Error(`Excel parsing failed due to memory constraints. File may be too large (${fileSizeMB} MB). Consider processing in smaller chunks or increasing Node.js memory limit. Original error: ${parseError.message}`);
+                        }
+                        throw new Error(`Excel parsing failed: ${parseError.message}`);
+                    }
+                }
+            }
+            else {
+                // Parse CSV
+                console.log(`   📝 Parsing CSV data...`);
+                try {
+                    // Remove BOM if present
+                    const csvText = buffer.toString('utf8').replace(/^\uFEFF/, '');
+                    chunkRecords = parse(csvText, {
+                        columns: true, // Use first row as column names
+                        skip_empty_lines: true,
+                        trim: true,
+                        bom: true,
+                        relax_column_count: true,
+                        skip_records_with_error: false
+                    });
+                    console.log(`   ✅ Parsed ${chunkRecords.length} record(s) from CSV chunk ${chunkNumber}`);
+                }
+                catch (parseError) {
+                    console.error(`   ❌ Failed to parse CSV chunk ${chunkNumber}:`, parseError);
+                    throw new Error(`CSV parsing failed: ${parseError.message}`);
+                }
+            }
+            // Add chunk records to all records
+            if (chunkRecords.length > 0) {
+                allRecords.push(...chunkRecords);
+                totalFetched += chunkRecords.length;
+                console.log(`   ✅ Chunk ${chunkNumber} complete: ${chunkRecords.length} records (total so far: ${totalFetched})`);
+                // Check if we've reached the end (got fewer records than requested)
+                if (chunkRecords.length < chunkSize) {
+                    console.log(`   📊 Reached end of data (got ${chunkRecords.length} < ${chunkSize} records)`);
+                    hasMoreData = false;
+                }
+                else {
+                    // Move to next chunk
+                    currentOffset += chunkSize;
+                    chunkNumber++;
+                }
+            }
+            else {
+                // No records in this chunk - we're done
+                console.log(`   📊 No records in chunk ${chunkNumber} - reached end of data`);
+                hasMoreData = false;
+            }
+            // Small delay between requests to avoid rate limiting
+            if (hasMoreData) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        } // End of while loop
+        // After fetching all chunks, process all records
+        if (allRecords.length === 0) {
+            console.log(`\n✅ No records found in any chunk.`);
             return [];
         }
-        // Detect file type from content-type or file signature
-        const isExcel = contentType.includes('spreadsheet') ||
-            contentType.includes('excel') ||
-            contentType.includes('application/vnd.openxmlformats') ||
-            buffer.toString('utf8', 0, 4) === 'PK\x03\x04';
-        let records = [];
-        if (isExcel) {
-            // Parse Excel file
-            console.log(`   📝 Parsing Excel file...`);
-            try {
-                const workbook = XLSX.read(buffer, { type: 'buffer' });
-                // Get the first sheet
-                const sheetName = workbook.SheetNames[0];
-                if (!sheetName) {
-                    throw new Error('No sheets found in Excel file');
-                }
-                const worksheet = workbook.Sheets[sheetName];
-                // Convert to JSON with header row
-                records = XLSX.utils.sheet_to_json(worksheet, {
-                    defval: null, // Use null for empty cells
-                    raw: false, // Convert values to strings
-                    dateNF: 'yyyy-mm-dd' // Date format
-                });
-                console.log(`   ✅ Parsed ${records.length} record(s) from Excel`);
+        console.log(`\n   📊 Total records fetched across all chunks: ${allRecords.length}`);
+        // Process records by grade_name to reduce memory usage
+        // Group records by grade_name
+        console.log(`\n📚 Grouping records by grade_name for efficient processing...`);
+        const recordsByGrade = new Map();
+        for (const record of allRecords) {
+            const gradeName = String(record['Grade Name'] || record['grade_name'] || 'Unknown').trim();
+            if (!recordsByGrade.has(gradeName)) {
+                recordsByGrade.set(gradeName, []);
             }
-            catch (parseError) {
-                console.error('   ❌ Failed to parse Excel:', parseError);
-                throw new Error(`Excel parsing failed: ${parseError.message}`);
+            recordsByGrade.get(gradeName).push(record);
+        }
+        const gradeNames = Array.from(recordsByGrade.keys()).sort();
+        console.log(`   📊 Found ${gradeNames.length} unique grade(s): ${gradeNames.join(', ')}`);
+        // Process each grade separately to reduce memory pressure
+        console.log(`\n💾 Processing and saving records by grade...`);
+        for (const gradeName of gradeNames) {
+            const gradeRecords = recordsByGrade.get(gradeName);
+            console.log(`\n   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
+            try {
+                const gradeInserted = await this.saveAssessmentBatch(gradeRecords, schoolSourcedId);
+                totalInserted += gradeInserted;
+                console.log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
+                // Clear the grade records from memory after processing
+                recordsByGrade.delete(gradeName);
+            }
+            catch (gradeError) {
+                console.error(`   ❌ Failed to save records for grade "${gradeName}":`, gradeError.message);
+                // Continue with other grades even if one fails
+            }
+        }
+        console.log(`\n   ✅ Total saved: ${totalInserted} record(s) across all grades`);
+        // Sync data to RP.student_assessments after processing completes
+        if (schoolSourcedId) {
+            console.log(`\n🔄 Syncing student assessments to RP schema...`);
+            try {
+                const rpInserted = await this.syncStudentAssessmentsToRP(schoolSourcedId);
+                console.log(`   ✅ Synced ${rpInserted} record(s) to RP.student_assessments`);
+            }
+            catch (rpError) {
+                console.error(`   ⚠️  Failed to sync to RP.student_assessments:`, rpError.message);
+                // Don't throw - allow the main process to complete even if RP sync fails
             }
         }
         else {
-            // Parse CSV
-            console.log(`   📝 Parsing CSV data...`);
-            try {
-                // Remove BOM if present
-                const csvText = buffer.toString('utf8').replace(/^\uFEFF/, '');
-                records = parse(csvText, {
-                    columns: true, // Use first row as column names
-                    skip_empty_lines: true,
-                    trim: true,
-                    bom: true,
-                    relax_column_count: true,
-                    skip_records_with_error: false
-                });
-                console.log(`   ✅ Parsed ${records.length} record(s) from CSV`);
-            }
-            catch (parseError) {
-                console.error('   ❌ Failed to parse CSV:', parseError);
-                throw new Error(`CSV parsing failed: ${parseError.message}`);
-            }
+            console.log(`   ⚠️  Skipping RP sync - school sourced_id not available`);
         }
-        if (records.length === 0) {
-            console.log(`✅ No records found in response.`);
-            return [];
-        }
-        allRecords = records;
-        console.log(`   📊 Total records parsed: ${allRecords.length}`);
-        // Save all records to database in batches
-        console.log(`   💾 Saving records to database in batches...`);
-        const batchInserted = await this.saveAssessmentBatch(allRecords, schoolSourcedId);
-        totalInserted = batchInserted;
-        console.log(`   ✅ Saved ${totalInserted} record(s) to database`);
         console.log(`\n✅ Completed fetching all assessment data`);
         console.log(`   Total records fetched: ${allRecords.length}`);
         console.log(`   Total records saved: ${totalInserted}`);
@@ -372,6 +753,176 @@ export async function saveAssessmentBatch(records, schoolSourcedId) {
             console.error('   First record:', JSON.stringify(rowsToInsert[0]).substring(0, 300));
         }
         throw new Error(`Bulk insert failed: ${error.message || error}`);
+    }
+}
+/**
+ * Sync student assessments from NEX.student_assessments to RP.student_assessments
+ * This function runs after the main processing completes
+ * Filters by school_id, grades '10' and '12', and only inserts records that don't already exist
+ *
+ * Note: school_id in NEX.student_assessments is NVARCHAR(100) and stores the sourced_id
+ */
+export async function syncStudentAssessmentsToRP(schoolSourcedId) {
+    try {
+        if (!schoolSourcedId) {
+            console.warn(`   ⚠️  School sourced_id is required for RP sync`);
+            return 0;
+        }
+        console.log(`   🔍 Syncing assessments for school (sourced_id: ${schoolSourcedId})`);
+        // Build the INSERT query to copy from NEX to RP
+        // The query filters by school_id (sourced_id), grades '10' and '12', and only inserts records that don't exist
+        // school_id in NEX.student_assessments is NVARCHAR(100) and stores the sourced_id
+        // Use @@ROWCOUNT to get the number of rows inserted
+        // Note: This query can take up to 10 minutes for large datasets (770+ rows)
+        // The reported_subject is populated from RP.subject_mapping table via LEFT JOIN (can be NULL)
+        const syncQuery = `
+      INSERT INTO RP.student_assessments (
+        nex_assessment_id,
+        school_id,
+        school_name,
+        region_name,
+        student_name,
+        register_number,
+        student_status,
+        grade_name,
+        section_name,
+        class_name,
+        academic_year,
+        subject_id,
+        subject_name,
+        term_id,
+        term_name,
+        component_name,
+        component_value,
+        max_value,
+        data_type,
+        calculation_method,
+        mark_grade_name,
+        mark_rubric_name,
+        reported_subject,
+        created_at,
+        updated_at
+      )
+      SELECT 
+        sa.id,
+        sa.school_id,
+        sa.school_name,
+        sa.region_name,
+        sa.student_name,
+        sa.register_number,
+        sa.student_status,
+        sa.grade_name,
+        sa.section_name,
+        sa.class_name,
+        sa.academic_year,
+        sa.subject_id,
+        sa.subject_name,
+        sa.term_id,
+        sa.term_name,
+        sa.component_name,
+        sa.component_value,
+        sa.max_value,
+        sa.data_type,
+        sa.calculation_method,
+        sa.mark_grade_name,
+        sa.mark_rubric_name,
+        sm.reported_subject,
+        sa.created_at,
+        sa.updated_at
+      FROM NEX.student_assessments sa
+      INNER JOIN RP.assessment_component_config acc 
+        ON sa.school_id = acc.school_id 
+        AND sa.component_name = acc.component_name
+        AND acc.is_active = 1
+      LEFT JOIN RP.subject_mapping sm
+        ON sa.school_id = sm.school_id
+        AND sa.academic_year = sm.academic_year
+        AND sa.grade_name = sm.grade
+        AND sa.subject_name = sm.subject
+      WHERE NOT EXISTS (
+        SELECT 1 
+        FROM RP.student_assessments rsa
+        WHERE rsa.nex_assessment_id = sa.id
+      )
+      AND sa.grade_name IN ('10', '12')
+      AND sa.school_id = @school_id;
+      
+      SELECT @@ROWCOUNT AS rows_affected;
+    `;
+        // Use a direct connection request with explicit 10-minute timeout for this long-running operation
+        const connection = await getConnection();
+        const request = connection.request();
+        request.timeout = 600000; // 10 minutes
+        // Add parameters
+        request.input('school_id', sql.NVarChar(100), schoolSourcedId);
+        console.log(`   ⏱️  Executing sync query (timeout: 10 minutes)...`);
+        const startTime = Date.now();
+        const queryResult = await request.query(syncQuery);
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`   ✅ Query completed in ${duration} seconds`);
+        // Get the number of rows inserted from @@ROWCOUNT
+        const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
+        console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
+        // Update reported_subject for existing records (including newly synced ones)
+        try {
+            console.log(`   🔄 Updating reported_subject for existing records...`);
+            const updateCount = await updateReportedSubjectForSchool.call(this, schoolSourcedId);
+            console.log(`   ✅ Updated ${updateCount} record(s) with reported_subject`);
+        }
+        catch (updateError) {
+            console.warn(`   ⚠️  Failed to update reported_subject: ${updateError.message}`);
+            // Don't throw - allow sync to succeed even if reported_subject update fails
+        }
+        return rowsAffected;
+    }
+    catch (error) {
+        console.error(`   ❌ Error syncing to RP.student_assessments:`, error);
+        throw error;
+    }
+}
+/**
+ * Update reported_subject in RP.student_assessments for a specific school
+ * This function updates existing records with the correct reported_subject from RP.subject_mapping
+ *
+ * @param schoolSourcedId - School sourced_id to filter updates
+ * @returns Number of records updated
+ */
+export async function updateReportedSubjectForSchool(schoolSourcedId) {
+    try {
+        if (!schoolSourcedId) {
+            console.warn(`   ⚠️  School sourced_id is required for reported_subject update`);
+            return 0;
+        }
+        // Update query that joins with subject_mapping to set reported_subject
+        const updateQuery = `
+      UPDATE rsa
+      SET rsa.reported_subject = sm.reported_subject,
+          rsa.updated_at = SYSDATETIMEOFFSET()
+      FROM RP.student_assessments rsa
+      INNER JOIN RP.subject_mapping sm
+          ON rsa.school_id = sm.school_id
+          AND rsa.academic_year = sm.academic_year
+          AND rsa.grade_name = sm.grade
+          AND rsa.subject_name = sm.subject
+      WHERE rsa.school_id = @school_id
+          AND (
+              rsa.reported_subject IS NULL  -- Update if not set
+              OR rsa.reported_subject != sm.reported_subject  -- Or if mapping has changed
+          );
+      
+      SELECT @@ROWCOUNT AS rows_affected;
+    `;
+        const connection = await getConnection();
+        const request = connection.request();
+        request.timeout = 600000; // 10 minutes
+        request.input('school_id', sql.NVarChar(100), schoolSourcedId);
+        const queryResult = await request.query(updateQuery);
+        const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
+        return rowsAffected;
+    }
+    catch (error) {
+        console.error(`   ❌ Error updating reported_subject:`, error);
+        throw error;
     }
 }
 //# sourceMappingURL=studentAssessments.js.map

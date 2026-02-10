@@ -56,7 +56,7 @@ export async function getStudentAllocations(
       queryParams.append('limit', limit.toString());
 
       const url = `${endpoint}?${queryParams.toString()}`;
-      const response = await (this as any).makeRequest(url, config) as any;
+      const response = await this.makeRequest<Record<string, unknown>>(url, config);
 
       // Handle different response structures
       let allocations: any[] = [];

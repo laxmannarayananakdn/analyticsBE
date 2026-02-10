@@ -9,7 +9,7 @@ import { Node, CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/a
  * Get all nodes as flat list
  */
 export async function getAllNodes(): Promise<NodeTree[]> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
     `SELECT * FROM admin.Node ORDER BY Node_ID`
   );
   
@@ -24,7 +24,7 @@ export async function getAllNodes(): Promise<NodeTree[]> {
  * Get node by ID (returns NodeTree format)
  */
 export async function getNodeById(nodeId: string): Promise<NodeTree | null> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
     `SELECT * FROM admin.Node WHERE Node_ID = @nodeId`,
     { nodeId }
   );
@@ -39,12 +39,16 @@ export async function getNodeById(nodeId: string): Promise<NodeTree | null> {
 /**
  * Transform database node to API format
  */
-function transformNodeToTree(node: Node & { Is_School_Node?: boolean }): NodeTree {
+function isTruthy(v: boolean | number | undefined): boolean {
+  return v === true || v === 1;
+}
+
+function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number }): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
-    isHeadOffice: node.Is_Head_Office === true || node.Is_Head_Office === 1,
-    isSchoolNode: node.Is_School_Node === true || node.Is_School_Node === 1,
+    isHeadOffice: isTruthy(node.Is_Head_Office),
+    isSchoolNode: isTruthy(node.Is_School_Node),
     parentNodeId: node.Parent_Node_ID,
     children: [],
   };
@@ -53,12 +57,12 @@ function transformNodeToTree(node: Node & { Is_School_Node?: boolean }): NodeTre
 /**
  * Transform database node to API format (flat)
  */
-function transformNode(node: Node & { Is_School_Node?: boolean }): NodeTree {
+function transformNode(node: Node & { Is_School_Node?: boolean | number }): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
-    isHeadOffice: node.Is_Head_Office === true || node.Is_Head_Office === 1,
-    isSchoolNode: node.Is_School_Node === true || node.Is_School_Node === 1,
+    isHeadOffice: isTruthy(node.Is_Head_Office),
+    isSchoolNode: isTruthy(node.Is_School_Node),
     parentNodeId: node.Parent_Node_ID,
   };
 }
@@ -67,7 +71,7 @@ function transformNode(node: Node & { Is_School_Node?: boolean }): NodeTree {
  * Get nodes as tree structure
  */
 export async function getNodesTree(): Promise<NodeTree[]> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
     `SELECT * FROM admin.Node ORDER BY Node_ID`
   );
   
@@ -137,7 +141,7 @@ export async function createNode(createRequest: CreateNodeRequest): Promise<Node
     }
   }
   
-  const result = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
     `INSERT INTO admin.Node 
      (Node_ID, Node_Description, Is_Head_Office, Is_School_Node, Parent_Node_ID, Created_By)
      VALUES (@nodeId, @nodeDescription, @isHeadOffice, @isSchoolNode, @parentNodeId, @createdBy);
@@ -235,7 +239,7 @@ export async function updateNode(
   
   // Modified_Date is updated by trigger
   
-  const result = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
     `UPDATE admin.Node 
      SET ${updates.join(', ')}
      WHERE Node_ID = @nodeId;

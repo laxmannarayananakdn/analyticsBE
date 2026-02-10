@@ -45,10 +45,10 @@ export async function getStaff(
       }
 
       const url = `${endpoint}?${queryParams.toString()}`;
-      const response = await (this as any).makeRequest<any>(url, config);
+      const response = await this.makeRequest<{ users?: unknown[]; teachers?: unknown[] }>(url, config);
 
       // Handle both 'users' and 'teachers' response keys (OneRoster may use either)
-      const users = response.users || response.teachers || [];
+      const users = (response.users ?? response.teachers ?? []) as NexquareUser[];
       if (users.length === 0) {
         hasMore = false;
         break;

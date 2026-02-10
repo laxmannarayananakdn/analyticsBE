@@ -80,7 +80,7 @@ export async function verifySchoolAccess(config, schoolId) {
         }
         console.log(`🔍 Verifying access to school_id: ${schoolId}`);
         const schools = await this.getSchools(config, `status='active'`);
-        const schoolExists = schools.some(s => s.sourcedId === schoolId);
+        const schoolExists = schools.some((s) => s.sourcedId === schoolId);
         if (schoolExists) {
             this.setCurrentSchoolId(schoolId);
             console.log(`✅ School access verified: ${schoolId}`);
