@@ -35,11 +35,13 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+// Comma-separated list of allowed origins, or single origin (e.g. https://your-app.azurestaticapps.net)
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const corsOrigins = CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
 
 // Middleware
 app.use(cors({
-  origin: CORS_ORIGIN,
+  origin: corsOrigins.length > 1 ? corsOrigins : (corsOrigins[0] || 'http://localhost:5173'),
   credentials: true
 }));
 app.use(express.json());
@@ -115,30 +117,28 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Initialize database connection on startup
+// Start HTTP server first so the app always responds (and sends CORS headers).
+// DB connection is attempted in background; /api/health reports DB status.
 async function startServer() {
+  console.log('🚀 Starting server...');
+
+  const server = app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`📡 CORS enabled for: ${CORS_ORIGIN}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+
+  // 10 minutes for long-running data sync operations (large datasets, etc.)
+  server.timeout = 600000;
+  server.keepAliveTimeout = 600000;
+
+  // Try DB in background so startup is not blocked (CORS and /api/health still work if DB fails)
   try {
-    console.log('🚀 Starting server...');
-    
-    // Test database connection
     console.log('🔌 Testing database connection...');
     await getConnection();
     console.log('✅ Database connection established');
-
-    // Start server with extended timeout for data sync operations
-    const server = app.listen(PORT, () => {
-      console.log(`✅ Server running on port ${PORT}`);
-      console.log(`📡 CORS enabled for: ${CORS_ORIGIN}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
-    
-    // Set server timeout to 10 minutes for long-running data sync operations
-    // This is needed for large datasets (students, staff, classes, etc.)
-    server.timeout = 600000; // 10 minutes
-    server.keepAliveTimeout = 600000;
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
   }
 }
 

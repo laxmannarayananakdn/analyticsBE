@@ -31,10 +31,12 @@ import adminSchoolsRoutes from './routes/adminSchools';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
+// Comma-separated list of allowed origins, or single origin (e.g. https://your-app.azurestaticapps.net)
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const corsOrigins = CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
 // Middleware
 app.use(cors({
-    origin: CORS_ORIGIN,
+    origin: corsOrigins.length > 1 ? corsOrigins : (corsOrigins[0] || 'http://localhost:5173'),
     credentials: true
 }));
 app.use(express.json());
