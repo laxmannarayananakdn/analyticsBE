@@ -2,9 +2,9 @@
  * User Management Routes (Admin only)
  */
 import express from 'express';
-import { getAllUsers, getUserByEmail, createUser, updateUser, deactivateUser, } from '../services/UserService';
-import { resetPassword } from '../services/AuthService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getAllUsers, getUserByEmail, createUser, updateUser, deactivateUser, } from '../services/UserService.js';
+import { resetPassword } from '../services/AuthService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

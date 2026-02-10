@@ -2,7 +2,7 @@
  * ManageBac API Service
  * Handles all interactions with ManageBac API and saves data to Azure SQL Database
  */
-import type { SchoolDetails, Subject, Teacher, Student, Class, YearGroup, TermGradeResponse } from '../types/managebac';
+import type { SchoolDetails, Subject, Teacher, Student, Class, YearGroup, TermGradeResponse } from '../types/managebac.js';
 export declare class ManageBacService {
     private currentSchoolId;
     private studentsSyncedFromYearGroups;

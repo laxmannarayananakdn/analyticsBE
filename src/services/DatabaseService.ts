@@ -3,7 +3,7 @@
  * Handles all database operations with Azure SQL Database
  */
 
-import { executeQuery, getConnection, sql } from '../config/database';
+import { executeQuery, getConnection, sql } from '../config/database.js';
 
 export interface School {
   id: number;

@@ -3,8 +3,8 @@
  * Utility methods used by NexquareService methods
  */
 
-import { executeQuery } from '../../config/database';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { executeQuery } from '../../config/database.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Bulk fetch student IDs by sourced_id or identifier

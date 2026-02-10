@@ -9,8 +9,8 @@ import {
   updateAccess,
   revokeNodeAccess,
   revokeDepartmentAccess,
-} from '../services/AccessService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+} from '../services/AccessService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

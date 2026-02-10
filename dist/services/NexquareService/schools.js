@@ -2,8 +2,8 @@
  * Schools Methods
  * Handles fetching and saving schools/entities from Nexquare API
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get schools/entities and save to database
  * Can be added to a class that extends BaseNexquareService

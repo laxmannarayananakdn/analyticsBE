@@ -5,19 +5,19 @@
  * This class extends BaseNexquareService and includes all API endpoint methods
  * extracted from the original monolithic NexquareService.ts file.
  */
-import { BaseNexquareService } from './BaseNexquareService';
-import { authenticate } from './auth';
-import { getSchools, verifySchoolAccess } from './schools';
-import { getStudents } from './students';
-import { getStaff } from './staff';
-import { getClasses } from './classes';
-import { getAllocationMaster } from './allocationMaster';
-import { getStudentAllocations } from './studentAllocations';
-import { getStaffAllocations } from './staffAllocations';
-import { getDailyPlans } from './dailyPlans';
-import { getDailyAttendance } from './dailyAttendance';
-import { getStudentAssessments, saveAssessmentBatch, syncStudentAssessmentsToRP, updateReportedSubjectForSchool } from './studentAssessments';
-import { bulkGetStudentIds, bulkGetGroupIds } from './helpers';
+import { BaseNexquareService } from './BaseNexquareService.js';
+import { authenticate } from './auth.js';
+import { getSchools, verifySchoolAccess } from './schools.js';
+import { getStudents } from './students.js';
+import { getStaff } from './staff.js';
+import { getClasses } from './classes.js';
+import { getAllocationMaster } from './allocationMaster.js';
+import { getStudentAllocations } from './studentAllocations.js';
+import { getStaffAllocations } from './staffAllocations.js';
+import { getDailyPlans } from './dailyPlans.js';
+import { getDailyAttendance } from './dailyAttendance.js';
+import { getStudentAssessments, saveAssessmentBatch, syncStudentAssessmentsToRP, updateReportedSubjectForSchool } from './studentAssessments.js';
+import { bulkGetStudentIds, bulkGetGroupIds } from './helpers.js';
 /**
  * NexquareService class
  * Composes all API methods into a single service class

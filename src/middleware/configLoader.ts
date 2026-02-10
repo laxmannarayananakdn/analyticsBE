@@ -4,7 +4,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 
 export interface NexquareConfig {
   id: number;

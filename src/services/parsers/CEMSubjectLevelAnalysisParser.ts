@@ -5,8 +5,8 @@
  */
 
 import * as XLSX from 'xlsx';
-import { CEMSubjectLevelAnalysis } from '../../types/ef';
-import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors';
+import { CEMSubjectLevelAnalysis } from '../../types/ef.js';
+import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors.js';
 
 export class CEMSubjectLevelAnalysisParser {
   /**

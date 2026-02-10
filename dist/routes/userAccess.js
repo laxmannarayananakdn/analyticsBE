@@ -2,8 +2,8 @@
  * User Access Management Routes (Admin only)
  */
 import express from 'express';
-import { getUserAccess, grantAccess, updateAccess, revokeNodeAccess, revokeDepartmentAccess, } from '../services/AccessService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getUserAccess, grantAccess, updateAccess, revokeNodeAccess, revokeDepartmentAccess, } from '../services/AccessService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

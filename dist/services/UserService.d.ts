@@ -1,7 +1,7 @@
 /**
  * User Management Service
  */
-import { User, UpdateUserRequest, CreateUserRequest } from '../types/auth';
+import { User, UpdateUserRequest, CreateUserRequest } from '../types/auth.js';
 /**
  * Get all users
  */

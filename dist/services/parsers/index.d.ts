@@ -2,8 +2,8 @@
  * File Parser Factory
  * Selects and uses the appropriate parser based on file type
  */
-import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../../types/ef';
-import { ValidationResult } from '../../types/errors';
+import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../../types/ef.js';
+import { ValidationResult } from '../../types/errors.js';
 export type ParseResult<T> = ValidationResult<T>;
 export declare class FileParserFactory {
     private ibParser;
@@ -37,8 +37,8 @@ export declare class FileParserFactory {
     parseCEMSubjectLevelAnalysis(fileBuffer: Buffer, skipInvalidRows?: boolean): Promise<ParseResult<CEMSubjectLevelAnalysis>>;
 }
 export declare const fileParserFactory: FileParserFactory;
-export { IBExternalExamParser } from './IBExternalExamParser';
-export { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser';
-export { CEMPredictionReportParser } from './CEMPredictionReportParser';
-export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser';
+export { IBExternalExamParser } from './IBExternalExamParser.js';
+export { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser.js';
+export { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
+export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 //# sourceMappingURL=index.d.ts.map

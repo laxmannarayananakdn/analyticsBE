@@ -2,8 +2,8 @@
  * User Access Management Service
  */
 
-import { executeQuery } from '../config/database';
-import { UserNodeAccess, SchoolAccess, UserSchoolAccess, GrantAccessRequest } from '../types/auth';
+import { executeQuery } from '../config/database.js';
+import { UserNodeAccess, SchoolAccess, UserSchoolAccess, GrantAccessRequest } from '../types/auth.js';
 
 /**
  * Get user's node access assignments

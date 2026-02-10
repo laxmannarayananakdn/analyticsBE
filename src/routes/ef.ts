@@ -4,16 +4,16 @@
 
 import { Router, Request, Response } from 'express';
 import * as path from 'path';
-import { efService } from '../services/EFService';
-import { fileParserFactory } from '../services/parsers';
-import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef';
+import { efService } from '../services/EFService.js';
+import { fileParserFactory } from '../services/parsers/index.js';
+import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef.js';
 import {
   validateFileSize,
   validateFileExtension,
   validateMimeType,
   validateRowCount
-} from '../utils/fileValidation';
-import { ErrorCode, UploadError } from '../types/errors';
+} from '../utils/fileValidation.js';
+import { ErrorCode, UploadError } from '../types/errors.js';
 
 // Import multer - using default import with esModuleInterop
 // @ts-ignore - multer is CommonJS but esModuleInterop handles it

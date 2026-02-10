@@ -3,7 +3,7 @@
  * Handles Superset dashboard embedding and guest token generation
  */
 import { Router } from 'express';
-import { supersetService } from '../services/SupersetService';
+import { supersetService } from '../services/SupersetService.js';
 const router = Router();
 /**
  * POST /api/superset/guest-token

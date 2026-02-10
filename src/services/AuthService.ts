@@ -5,8 +5,8 @@
 
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { executeQuery } from '../config/database';
-import { User, LoginRequest, ChangePasswordRequest, CreateUserRequest, JwtPayload } from '../types/auth';
+import { executeQuery } from '../config/database.js';
+import { User, LoginRequest, ChangePasswordRequest, CreateUserRequest, JwtPayload } from '../types/auth.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';

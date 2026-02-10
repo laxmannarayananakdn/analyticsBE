@@ -2,7 +2,7 @@
  * Term Grades API Routes
  */
 import { Router } from 'express';
-import { databaseService } from '../services/DatabaseService';
+import { databaseService } from '../services/DatabaseService.js';
 const router = Router();
 /**
  * POST /api/term-grades

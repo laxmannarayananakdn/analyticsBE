@@ -3,10 +3,10 @@
  */
 
 import express from 'express';
-import { authenticateUser, changePassword } from '../services/AuthService';
-import type { ChangePasswordRequest } from '../types/auth';
-import { loginRateLimiter } from '../middleware/rateLimiter';
-import { authenticate } from '../middleware/auth';
+import { authenticateUser, changePassword } from '../services/AuthService.js';
+import type { ChangePasswordRequest } from '../types/auth.js';
+import { loginRateLimiter } from '../middleware/rateLimiter.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 

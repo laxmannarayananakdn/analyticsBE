@@ -2,8 +2,8 @@
  * Classes Methods
  * Handles fetching and saving classes from Nexquare API
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get classes with pagination and save to database
  * Can be added to a class that extends BaseNexquareService

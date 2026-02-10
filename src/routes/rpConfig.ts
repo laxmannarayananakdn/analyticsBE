@@ -4,7 +4,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { executeQuery, getConnection, sql } from '../config/database';
+import { executeQuery, getConnection, sql } from '../config/database.js';
 
 const router = Router();
 

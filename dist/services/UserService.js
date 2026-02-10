@@ -1,8 +1,8 @@
 /**
  * User Management Service
  */
-import { executeQuery } from '../config/database';
-import { createUser as authCreateUser } from './AuthService';
+import { executeQuery } from '../config/database.js';
+import { createUser as authCreateUser } from './AuthService.js';
 /**
  * Get all users
  */

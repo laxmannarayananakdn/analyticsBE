@@ -4,9 +4,9 @@
  */
 
 import { parse } from 'csv-parse/sync';
-import { IBExternalExam } from '../../types/ef';
-import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors';
-import { validateDataType } from '../../utils/fileValidation';
+import { IBExternalExam } from '../../types/ef.js';
+import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors.js';
+import { validateDataType } from '../../utils/fileValidation.js';
 
 export class IBExternalExamParser {
   /**

@@ -2,8 +2,8 @@
  * Students Methods
  * Handles fetching and saving students from Nexquare API
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get students with pagination and save to database
  * Can be added to a class that extends BaseNexquareService

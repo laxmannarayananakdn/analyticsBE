@@ -2,8 +2,8 @@
  * Daily Plans Methods
  * Handles fetching and saving daily plans (timetable data) from Nexquare API
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Get daily plans (timetable data)
  * Note: API limits date range to 1 week, so we fetch week by week

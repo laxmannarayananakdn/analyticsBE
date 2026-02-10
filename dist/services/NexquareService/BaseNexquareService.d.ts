@@ -2,7 +2,7 @@
  * Base Nexquare Service
  * Provides shared utilities for token management and API requests
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
 export declare class BaseNexquareService {
     protected tokenCache: Map<number, {
         token: string;

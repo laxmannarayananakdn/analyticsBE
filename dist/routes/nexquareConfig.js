@@ -3,7 +3,7 @@
  * Admin-only routes for managing Nexquare API credentials per school
  */
 import { Router } from 'express';
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 const router = Router();
 /**
  * Helper function to mask sensitive data

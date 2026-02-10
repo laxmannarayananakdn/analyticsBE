@@ -3,11 +3,11 @@
  * Handles fetching and saving schools/entities from Nexquare API
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { NexquareSchool, SchoolsResponse } from '../../types/nexquare';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { NexquareSchool, SchoolsResponse } from '../../types/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get schools/entities and save to database

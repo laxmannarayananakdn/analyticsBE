@@ -2,7 +2,7 @@
  * Helper Methods
  * Utility methods used by NexquareService methods
  */
-import { executeQuery } from '../../config/database';
+import { executeQuery } from '../../config/database.js';
 /**
  * Bulk fetch student IDs by sourced_id or identifier
  * Returns a map of student_sourced_id -> { id, sourced_id }

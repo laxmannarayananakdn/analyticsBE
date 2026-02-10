@@ -2,8 +2,8 @@
  * Authentication Methods
  * Handles authentication with Nexquare API
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Authentication method
  * Can be added to a class that extends BaseNexquareService

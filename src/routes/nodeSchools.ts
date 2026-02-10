@@ -7,8 +7,8 @@ import {
   getSchoolsByNode,
   assignSchoolToNode,
   unassignSchoolFromNode,
-} from '../services/SchoolService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+} from '../services/SchoolService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

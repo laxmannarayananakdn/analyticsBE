@@ -2,7 +2,7 @@
  * Health Check Routes
  */
 import { Router } from 'express';
-import { testConnection } from '../config/database';
+import { testConnection } from '../config/database.js';
 const router = Router();
 /**
  * GET /api/health

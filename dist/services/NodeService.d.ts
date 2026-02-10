@@ -1,7 +1,7 @@
 /**
  * Node Management Service
  */
-import { CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth';
+import { CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth.js';
 /**
  * Get all nodes as flat list
  */

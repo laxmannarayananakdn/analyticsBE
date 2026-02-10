@@ -2,9 +2,9 @@
  * Authentication Routes
  */
 import express from 'express';
-import { authenticateUser, changePassword } from '../services/AuthService';
-import { loginRateLimiter } from '../middleware/rateLimiter';
-import { authenticate } from '../middleware/auth';
+import { authenticateUser, changePassword } from '../services/AuthService.js';
+import { loginRateLimiter } from '../middleware/rateLimiter.js';
+import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
 /**
  * POST /auth/login

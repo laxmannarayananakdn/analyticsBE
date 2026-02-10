@@ -1,7 +1,7 @@
 /**
  * Node Management Service
  */
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 /**
  * Get all nodes as flat list
  */

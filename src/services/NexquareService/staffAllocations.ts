@@ -3,11 +3,11 @@
  * Handles fetching and saving staff allocations from Nexquare API
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import { executeQuery } from '../../config/database';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import { executeQuery } from '../../config/database.js';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get staff allocations and save to database

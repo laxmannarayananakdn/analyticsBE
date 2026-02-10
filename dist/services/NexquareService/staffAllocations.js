@@ -2,9 +2,9 @@
  * Staff Allocations Methods
  * Handles fetching and saving staff allocations from Nexquare API
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { executeQuery } from '../../config/database';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { executeQuery } from '../../config/database.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get staff allocations and save to database
  * Can be added to a class that extends BaseNexquareService

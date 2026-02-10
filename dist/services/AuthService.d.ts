@@ -2,7 +2,7 @@
  * Authentication Service
  * Handles user authentication, password management, and JWT token generation
  */
-import { User, LoginRequest, ChangePasswordRequest, CreateUserRequest, JwtPayload } from '../types/auth';
+import { User, LoginRequest, ChangePasswordRequest, CreateUserRequest, JwtPayload } from '../types/auth.js';
 /**
  * Generate a secure temporary password
  */

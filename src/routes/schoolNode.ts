@@ -3,8 +3,8 @@
  */
 
 import express from 'express';
-import { getNodeForSchool } from '../services/SchoolService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getNodeForSchool } from '../services/SchoolService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

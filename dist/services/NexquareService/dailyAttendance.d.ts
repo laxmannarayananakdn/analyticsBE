@@ -3,8 +3,8 @@
  * Handles fetching and saving daily attendance records from Nexquare API
  * Fetches in monthly chunks to avoid timeout
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Get daily attendance records
  * Fetches in monthly chunks to avoid timeout

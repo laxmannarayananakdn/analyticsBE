@@ -3,11 +3,11 @@
  * Handles fetching and saving classes from Nexquare API
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { NexquareClass, ClassesResponse } from '../../types/nexquare';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { NexquareClass, ClassesResponse } from '../../types/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get classes with pagination and save to database

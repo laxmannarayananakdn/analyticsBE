@@ -2,10 +2,10 @@
  * ManageBac API Service
  * Handles all interactions with ManageBac API and saves data to Azure SQL Database
  */
-import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../config/managebac';
-import { retryOperation, validateApiResponse, handleApiError } from '../utils/apiUtils';
-import { databaseService } from './DatabaseService';
-import { executeQuery } from '../config/database';
+import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../config/managebac.js';
+import { retryOperation, validateApiResponse, handleApiError } from '../utils/apiUtils.js';
+import { databaseService } from './DatabaseService.js';
+import { executeQuery } from '../config/database.js';
 export class ManageBacService {
     currentSchoolId = null;
     studentsSyncedFromYearGroups = false;

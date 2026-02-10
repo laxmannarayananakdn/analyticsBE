@@ -4,9 +4,9 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { manageBacService } from '../services/ManageBacService';
-import { databaseService } from '../services/DatabaseService';
-import { loadManageBacConfig } from '../middleware/configLoader';
+import { manageBacService } from '../services/ManageBacService.js';
+import { databaseService } from '../services/DatabaseService.js';
+import { loadManageBacConfig } from '../middleware/configLoader.js';
 
 const router = Router();
 

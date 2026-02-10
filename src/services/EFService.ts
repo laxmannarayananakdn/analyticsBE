@@ -3,7 +3,7 @@
  * Handles all database operations for External Files Upload System
  */
 
-import { getConnection, executeQuery, sql } from '../config/database';
+import { getConnection, executeQuery, sql } from '../config/database.js';
 import {
   FileType,
   Upload,
@@ -12,7 +12,7 @@ import {
   MSNAVFinancialAid,
   CEMPredictionReport,
   CEMSubjectLevelAnalysis
-} from '../types/ef';
+} from '../types/ef.js';
 
 export class EFService {
   /**

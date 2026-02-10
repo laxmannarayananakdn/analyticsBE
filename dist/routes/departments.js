@@ -2,8 +2,8 @@
  * Department Management Routes (Admin only)
  */
 import express from 'express';
-import { getAllDepartments, getDepartmentById, createDepartment, updateDepartment, } from '../services/DepartmentService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getAllDepartments, getDepartmentById, createDepartment, updateDepartment, } from '../services/DepartmentService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

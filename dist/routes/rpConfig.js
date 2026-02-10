@@ -3,7 +3,7 @@
  * Routes for managing RP.subject_mapping and RP.assessment_component_config tables
  */
 import { Router } from 'express';
-import { executeQuery, getConnection, sql } from '../config/database';
+import { executeQuery, getConnection, sql } from '../config/database.js';
 const router = Router();
 // =============================================
 // SUBJECT MAPPING ROUTES

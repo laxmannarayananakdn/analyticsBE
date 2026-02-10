@@ -2,8 +2,8 @@
  * Node Management Routes (Admin only)
  */
 import express from 'express';
-import { getAllNodes, getNodeById, getNodesTree, createNode, updateNode, } from '../services/NodeService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getAllNodes, getNodeById, getNodesTree, createNode, updateNode, } from '../services/NodeService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

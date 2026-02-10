@@ -8,11 +8,11 @@ import {
   getTokenRequestHeaders,
   NEXQUARE_ENDPOINTS,
   NEXQUARE_CONFIG,
-} from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import { retryOperation, handleApiError } from '../../utils/apiUtils';
-import { executeQuery } from '../../config/database';
-import type { TokenResponse } from '../../types/nexquare';
+} from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import { retryOperation, handleApiError } from '../../utils/apiUtils.js';
+import { executeQuery } from '../../config/database.js';
+import type { TokenResponse } from '../../types/nexquare.js';
 
 export class BaseNexquareService {
   // Token cache per config (keyed by config ID)

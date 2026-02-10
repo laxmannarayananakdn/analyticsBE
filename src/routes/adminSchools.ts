@@ -4,8 +4,8 @@
  */
 
 import express from 'express';
-import { executeQuery } from '../config/database';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { executeQuery } from '../config/database.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

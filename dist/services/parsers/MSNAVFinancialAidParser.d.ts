@@ -2,8 +2,8 @@
  * MSNAV Financial Aid XLSX Parser
  * Handles Excel files with financial aid data
  */
-import { MSNAVFinancialAid } from '../../types/ef';
-import { ValidationResult } from '../../types/errors';
+import { MSNAVFinancialAid } from '../../types/ef.js';
+import { ValidationResult } from '../../types/errors.js';
 export declare class MSNAVFinancialAidParser {
     /**
      * Parse MSNAV Financial Aid XLSX file with validation

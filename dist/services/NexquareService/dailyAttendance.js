@@ -3,8 +3,8 @@
  * Handles fetching and saving daily attendance records from Nexquare API
  * Fetches in monthly chunks to avoid timeout
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get daily attendance records
  * Fetches in monthly chunks to avoid timeout

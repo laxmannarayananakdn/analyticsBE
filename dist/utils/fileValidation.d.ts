@@ -1,7 +1,7 @@
 /**
  * File Validation Utilities
  */
-import { UploadError, ValidationErrorDetail } from '../types/errors';
+import { UploadError, ValidationErrorDetail } from '../types/errors.js';
 export declare const MAX_FILE_SIZE: number;
 export declare const MIN_ROWS_REQUIRED: number;
 /**

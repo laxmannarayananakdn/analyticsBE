@@ -9,8 +9,8 @@ import {
   getNodesTree,
   createNode,
   updateNode,
-} from '../services/NodeService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+} from '../services/NodeService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

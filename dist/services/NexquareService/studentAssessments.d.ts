@@ -3,8 +3,8 @@
  * Handles fetching and saving student assessments/grade book data from Nexquare API
  * Fetches CSV or Excel file from API, parses it, and saves to database
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Get student assessment/grade book data
  * Fetches CSV file from API, parses it, and saves to database

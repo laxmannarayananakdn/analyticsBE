@@ -3,10 +3,10 @@
  * Handles fetching and saving daily plans (timetable data) from Nexquare API
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get daily plans (timetable data)

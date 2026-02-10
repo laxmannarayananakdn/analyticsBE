@@ -3,10 +3,10 @@
  */
 import { Router } from 'express';
 import * as path from 'path';
-import { efService } from '../services/EFService';
-import { fileParserFactory } from '../services/parsers';
-import { validateFileSize, validateFileExtension, validateMimeType, validateRowCount } from '../utils/fileValidation';
-import { ErrorCode } from '../types/errors';
+import { efService } from '../services/EFService.js';
+import { fileParserFactory } from '../services/parsers/index.js';
+import { validateFileSize, validateFileExtension, validateMimeType, validateRowCount } from '../utils/fileValidation.js';
+import { ErrorCode } from '../types/errors.js';
 // Import multer - using default import with esModuleInterop
 // @ts-ignore - multer is CommonJS but esModuleInterop handles it
 import multer from 'multer';

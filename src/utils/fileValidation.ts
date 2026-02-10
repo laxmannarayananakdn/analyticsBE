@@ -2,7 +2,7 @@
  * File Validation Utilities
  */
 
-import { UploadError, ErrorCode, ValidationErrorDetail } from '../types/errors';
+import { UploadError, ErrorCode, ValidationErrorDetail } from '../types/errors.js';
 import * as path from 'path';
 
 // Configurable limits

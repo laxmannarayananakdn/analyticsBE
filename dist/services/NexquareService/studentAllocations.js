@@ -5,8 +5,8 @@
  * NOTE: This method uses helper methods bulkGetStudentIds and bulkGetGroupIds
  * which should be available on the class that extends BaseNexquareService
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { databaseService } from '../DatabaseService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get student allocations and extract subjects, cohorts, groups, homerooms
  * Can be added to a class that extends BaseNexquareService

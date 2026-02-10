@@ -2,8 +2,8 @@
  * School Assignment Service
  */
 
-import { executeQuery } from '../config/database';
-import { NodeSchool, AssignSchoolRequest } from '../types/auth';
+import { executeQuery } from '../config/database.js';
+import { NodeSchool, AssignSchoolRequest } from '../types/auth.js';
 
 /**
  * Get schools assigned to a node

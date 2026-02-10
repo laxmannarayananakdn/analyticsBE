@@ -4,9 +4,9 @@
  */
 
 import * as XLSX from 'xlsx';
-import { MSNAVFinancialAid } from '../../types/ef';
-import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors';
-import { validateDataType, validateRequiredColumns } from '../../utils/fileValidation';
+import { MSNAVFinancialAid } from '../../types/ef.js';
+import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors.js';
+import { validateDataType, validateRequiredColumns } from '../../utils/fileValidation.js';
 
 export class MSNAVFinancialAidParser {
   /**

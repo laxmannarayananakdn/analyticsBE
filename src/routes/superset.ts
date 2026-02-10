@@ -4,7 +4,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { supersetService } from '../services/SupersetService';
+import { supersetService } from '../services/SupersetService.js';
 
 const router = Router();
 

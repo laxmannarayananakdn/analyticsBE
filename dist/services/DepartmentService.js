@@ -1,7 +1,7 @@
 /**
  * Department Management Service
  */
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 /**
  * Get all departments (ordered by Display_Order)
  */

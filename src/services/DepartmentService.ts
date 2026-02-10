@@ -2,8 +2,8 @@
  * Department Management Service
  */
 
-import { executeQuery } from '../config/database';
-import { Department, CreateDepartmentRequest, UpdateDepartmentRequest } from '../types/auth';
+import { executeQuery } from '../config/database.js';
+import { Department, CreateDepartmentRequest, UpdateDepartmentRequest } from '../types/auth.js';
 
 /**
  * Get all departments (ordered by Display_Order)

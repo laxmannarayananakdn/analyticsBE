@@ -1,7 +1,7 @@
 /**
  * User Access Management Service
  */
-import { UserNodeAccess, UserSchoolAccess, GrantAccessRequest } from '../types/auth';
+import { UserNodeAccess, UserSchoolAccess, GrantAccessRequest } from '../types/auth.js';
 /**
  * Get user's node access assignments
  */

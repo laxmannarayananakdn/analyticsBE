@@ -4,7 +4,7 @@
  * File structure: Title row (0), Empty (1), Headers (2-3), Data starts at row 4
  */
 import * as XLSX from 'xlsx';
-import { ErrorCode } from '../../types/errors';
+import { ErrorCode } from '../../types/errors.js';
 export class CEMPredictionReportParser {
     /**
      * Parse CEM Prediction Report .xls file with validation

@@ -3,8 +3,8 @@
  * Handles Excel files with financial aid data
  */
 import * as XLSX from 'xlsx';
-import { ErrorCode } from '../../types/errors';
-import { validateDataType, validateRequiredColumns } from '../../utils/fileValidation';
+import { ErrorCode } from '../../types/errors.js';
+import { validateDataType, validateRequiredColumns } from '../../utils/fileValidation.js';
 export class MSNAVFinancialAidParser {
     /**
      * Parse MSNAV Financial Aid XLSX file with validation

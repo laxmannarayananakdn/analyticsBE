@@ -1,7 +1,7 @@
 /**
  * Department Management Service
  */
-import { Department, CreateDepartmentRequest, UpdateDepartmentRequest } from '../types/auth';
+import { Department, CreateDepartmentRequest, UpdateDepartmentRequest } from '../types/auth.js';
 /**
  * Get all departments (ordered by Display_Order)
  */

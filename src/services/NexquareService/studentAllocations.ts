@@ -6,11 +6,11 @@
  * which should be available on the class that extends BaseNexquareService
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { StudentAllocationResponse } from '../../types/nexquare';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { StudentAllocationResponse } from '../../types/nexquare.js';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get student allocations and extract subjects, cohorts, groups, homerooms

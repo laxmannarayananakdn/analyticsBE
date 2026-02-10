@@ -1,7 +1,7 @@
 /**
  * File Validation Utilities
  */
-import { ErrorCode } from '../types/errors';
+import { ErrorCode } from '../types/errors.js';
 import * as path from 'path';
 // Configurable limits
 export const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE_MB || '10') * 1024 * 1024; // 10MB default

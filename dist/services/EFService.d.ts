@@ -2,7 +2,7 @@
  * EF Service
  * Handles all database operations for External Files Upload System
  */
-import { FileType, Upload, UploadStatus, IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef';
+import { FileType, Upload, UploadStatus, IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef.js';
 export declare class EFService {
     /**
      * Get all active file types

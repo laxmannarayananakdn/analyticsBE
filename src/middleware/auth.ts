@@ -3,8 +3,8 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken, getUserById } from '../services/AuthService';
-import { JwtPayload } from '../types/auth';
+import { verifyToken, getUserById } from '../services/AuthService.js';
+import { JwtPayload } from '../types/auth.js';
 
 // Extend Express Request to include user info
 declare global {

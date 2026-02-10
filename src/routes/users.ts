@@ -9,9 +9,9 @@ import {
   createUser,
   updateUser,
   deactivateUser,
-} from '../services/UserService';
-import { resetPassword } from '../services/AuthService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+} from '../services/UserService.js';
+import { resetPassword } from '../services/AuthService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

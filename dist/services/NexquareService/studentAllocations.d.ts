@@ -5,9 +5,9 @@
  * NOTE: This method uses helper methods bulkGetStudentIds and bulkGetGroupIds
  * which should be available on the class that extends BaseNexquareService
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { StudentAllocationResponse } from '../../types/nexquare';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { StudentAllocationResponse } from '../../types/nexquare.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Get student allocations and extract subjects, cohorts, groups, homerooms
  * Can be added to a class that extends BaseNexquareService

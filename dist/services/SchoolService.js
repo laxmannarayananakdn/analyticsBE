@@ -1,7 +1,7 @@
 /**
  * School Assignment Service
  */
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 /**
  * Get schools assigned to a node
  */

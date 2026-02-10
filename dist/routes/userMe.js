@@ -2,8 +2,8 @@
  * User Query Routes (for authenticated users to query their own access)
  */
 import express from 'express';
-import { getUserSchoolAccess, getUserAccess, getUserDepartments, } from '../services/AccessService';
-import { authenticate } from '../middleware/auth';
+import { getUserSchoolAccess, getUserAccess, getUserDepartments, } from '../services/AccessService.js';
+import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication
 router.use(authenticate);

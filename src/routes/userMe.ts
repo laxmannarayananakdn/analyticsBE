@@ -7,8 +7,8 @@ import {
   getUserSchoolAccess,
   getUserAccess,
   getUserDepartments,
-} from '../services/AccessService';
-import { authenticate } from '../middleware/auth';
+} from '../services/AccessService.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 

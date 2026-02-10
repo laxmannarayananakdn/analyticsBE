@@ -2,8 +2,8 @@
  * Node Management Service
  */
 
-import { executeQuery } from '../config/database';
-import { Node, CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth';
+import { executeQuery } from '../config/database.js';
+import { Node, CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth.js';
 
 /**
  * Get all nodes as flat list

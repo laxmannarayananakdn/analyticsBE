@@ -8,8 +8,8 @@ import {
   getDepartmentById,
   createDepartment,
   updateDepartment,
-} from '../services/DepartmentService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+} from '../services/DepartmentService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 

@@ -2,8 +2,8 @@
  * School Assignment Routes (Admin only)
  */
 import express from 'express';
-import { getSchoolsByNode, assignSchoolToNode, unassignSchoolFromNode, } from '../services/SchoolService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getSchoolsByNode, assignSchoolToNode, unassignSchoolFromNode, } from '../services/SchoolService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

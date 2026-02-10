@@ -2,7 +2,7 @@
  * Helper Methods
  * Utility methods used by NexquareService methods
  */
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Bulk fetch student IDs by sourced_id or identifier
  * Returns a map of student_sourced_id -> { id, sourced_id }

@@ -3,8 +3,8 @@
  * Handles .xls files with CEM Initial (Prediction Report) data
  * File structure: Title row (0), Empty (1), Headers (2-3), Data starts at row 4
  */
-import { CEMPredictionReport } from '../../types/ef';
-import { ValidationResult } from '../../types/errors';
+import { CEMPredictionReport } from '../../types/ef.js';
+import { ValidationResult } from '../../types/errors.js';
 export declare class CEMPredictionReportParser {
     /**
      * Parse CEM Prediction Report .xls file with validation

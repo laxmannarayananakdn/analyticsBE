@@ -4,7 +4,7 @@
  * File structure: Title row (0), Info rows (1-4), Headers (5-7), Data starts at row 8
  */
 import * as XLSX from 'xlsx';
-import { ErrorCode } from '../../types/errors';
+import { ErrorCode } from '../../types/errors.js';
 export class CEMSubjectLevelAnalysisParser {
     /**
      * Parse CEM Subject Level Analysis .xls file with validation

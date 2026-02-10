@@ -3,10 +3,10 @@
  * Handles all interactions with ManageBac API and saves data to Azure SQL Database
  */
 
-import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../config/managebac';
-import { retryOperation, validateApiResponse, handleApiError } from '../utils/apiUtils';
-import { databaseService, SubjectGroupRecord, SubjectRecord, YearGroupRecord, TermGradeRubric, type AcademicYear as DBAcademicYear, type TermGrade as DBTermGrade } from './DatabaseService';
-import { executeQuery } from '../config/database';
+import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../config/managebac.js';
+import { retryOperation, validateApiResponse, handleApiError } from '../utils/apiUtils.js';
+import { databaseService, SubjectGroupRecord, SubjectRecord, YearGroupRecord, TermGradeRubric, type AcademicYear as DBAcademicYear, type TermGrade as DBTermGrade } from './DatabaseService.js';
+import { executeQuery } from '../config/database.js';
 import type {
   SchoolDetails,
   AcademicYear,
@@ -21,7 +21,7 @@ import type {
   TermGrade,
   TermGradeResponse,
   ApiResponse
-} from '../types/managebac';
+} from '../types/managebac.js';
 
 export class ManageBacService {
   private currentSchoolId: number | null = null;

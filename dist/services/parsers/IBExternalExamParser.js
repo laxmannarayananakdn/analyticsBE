@@ -3,8 +3,8 @@
  * Handles the peculiar CSV format with double-quoted values
  */
 import { parse } from 'csv-parse/sync';
-import { ErrorCode } from '../../types/errors';
-import { validateDataType } from '../../utils/fileValidation';
+import { ErrorCode } from '../../types/errors.js';
+import { validateDataType } from '../../utils/fileValidation.js';
 export class IBExternalExamParser {
     /**
      * Parse IB External Exams CSV file with validation

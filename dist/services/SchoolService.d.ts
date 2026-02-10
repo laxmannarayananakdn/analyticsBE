@@ -1,7 +1,7 @@
 /**
  * School Assignment Service
  */
-import { NodeSchool, AssignSchoolRequest } from '../types/auth';
+import { NodeSchool, AssignSchoolRequest } from '../types/auth.js';
 /**
  * Get schools assigned to a node
  */

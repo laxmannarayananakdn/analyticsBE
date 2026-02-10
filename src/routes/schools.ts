@@ -3,7 +3,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { databaseService } from '../services/DatabaseService';
+import { databaseService } from '../services/DatabaseService.js';
 
 const router = Router();
 

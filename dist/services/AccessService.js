@@ -1,7 +1,7 @@
 /**
  * User Access Management Service
  */
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 /**
  * Get user's node access assignments
  */

@@ -2,9 +2,9 @@
  * Base Nexquare Service
  * Provides shared utilities for token management and API requests
  */
-import { getNexquareHeaders, getTokenRequestHeaders, NEXQUARE_ENDPOINTS, NEXQUARE_CONFIG, } from '../../config/nexquare';
-import { retryOperation, handleApiError } from '../../utils/apiUtils';
-import { executeQuery } from '../../config/database';
+import { getNexquareHeaders, getTokenRequestHeaders, NEXQUARE_ENDPOINTS, NEXQUARE_CONFIG, } from '../../config/nexquare.js';
+import { retryOperation, handleApiError } from '../../utils/apiUtils.js';
+import { executeQuery } from '../../config/database.js';
 export class BaseNexquareService {
     // Token cache per config (keyed by config ID)
     tokenCache = new Map();

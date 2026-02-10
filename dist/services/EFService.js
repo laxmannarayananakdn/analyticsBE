@@ -2,7 +2,7 @@
  * EF Service
  * Handles all database operations for External Files Upload System
  */
-import { getConnection, executeQuery, sql } from '../config/database';
+import { getConnection, executeQuery, sql } from '../config/database.js';
 export class EFService {
     /**
      * Get all active file types

@@ -2,7 +2,7 @@
  * Configuration Loader Middleware
  * Loads and caches API configurations from database per request
  */
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 /**
  * Middleware to load Nexquare config from database
  * Looks for config_id in query params or body

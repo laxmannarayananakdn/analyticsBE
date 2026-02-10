@@ -2,10 +2,10 @@
  * File Parser Factory
  * Selects and uses the appropriate parser based on file type
  */
-import { IBExternalExamParser } from './IBExternalExamParser';
-import { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser';
-import { CEMPredictionReportParser } from './CEMPredictionReportParser';
-import { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser';
+import { IBExternalExamParser } from './IBExternalExamParser.js';
+import { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser.js';
+import { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
+import { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 export class FileParserFactory {
     ibParser;
     msnavParser;
@@ -89,8 +89,8 @@ export class FileParserFactory {
 // Export singleton instance
 export const fileParserFactory = new FileParserFactory();
 // Export individual parsers for direct use if needed
-export { IBExternalExamParser } from './IBExternalExamParser';
-export { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser';
-export { CEMPredictionReportParser } from './CEMPredictionReportParser';
-export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser';
+export { IBExternalExamParser } from './IBExternalExamParser.js';
+export { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser.js';
+export { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
+export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 //# sourceMappingURL=index.js.map

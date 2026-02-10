@@ -2,8 +2,8 @@
  * Allocation Master Methods
  * Handles fetching and saving allocation master data from Nexquare API
  */
-import type { NexquareConfig } from '../../middleware/configLoader';
-import type { BaseNexquareService } from './BaseNexquareService';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 /**
  * Get allocation master data and save to database
  * Can be added to a class that extends BaseNexquareService

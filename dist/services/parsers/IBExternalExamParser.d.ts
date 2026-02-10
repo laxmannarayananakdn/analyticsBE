@@ -2,8 +2,8 @@
  * IB External Exams CSV Parser
  * Handles the peculiar CSV format with double-quoted values
  */
-import { IBExternalExam } from '../../types/ef';
-import { ValidationResult } from '../../types/errors';
+import { IBExternalExam } from '../../types/ef.js';
+import { ValidationResult } from '../../types/errors.js';
 export declare class IBExternalExamParser {
     /**
      * Parse IB External Exams CSV file with validation

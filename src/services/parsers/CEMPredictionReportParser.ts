@@ -5,8 +5,8 @@
  */
 
 import * as XLSX from 'xlsx';
-import { CEMPredictionReport } from '../../types/ef';
-import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors';
+import { CEMPredictionReport } from '../../types/ef.js';
+import { ValidationResult, UploadError, ErrorCode, ValidationErrorDetail } from '../../types/errors.js';
 
 export class CEMPredictionReportParser {
   /**

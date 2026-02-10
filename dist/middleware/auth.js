@@ -1,7 +1,7 @@
 /**
  * Authentication and Authorization Middleware
  */
-import { verifyToken, getUserById } from '../services/AuthService';
+import { verifyToken, getUserById } from '../services/AuthService.js';
 /**
  * Authentication middleware - verifies JWT token
  */

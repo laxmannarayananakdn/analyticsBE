@@ -3,8 +3,8 @@
  * Exposes Nexquare operations via REST API
  */
 import { Router } from 'express';
-import { nexquareService } from '../services/NexquareService';
-import { loadNexquareConfig } from '../middleware/configLoader';
+import { nexquareService } from '../services/NexquareService/index.js';
+import { loadNexquareConfig } from '../middleware/configLoader.js';
 const router = Router();
 /**
  * POST /api/nexquare/authenticate

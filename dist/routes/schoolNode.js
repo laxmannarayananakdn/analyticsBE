@@ -2,8 +2,8 @@
  * School Node Assignment Route (separate route for /schools/:id/:source/node)
  */
 import express from 'express';
-import { getNodeForSchool } from '../services/SchoolService';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { getNodeForSchool } from '../services/SchoolService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);

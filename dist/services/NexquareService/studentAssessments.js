@@ -3,8 +3,8 @@
  * Handles fetching and saving student assessments/grade book data from Nexquare API
  * Fetches CSV or Excel file from API, parses it, and saves to database
  */
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import { executeQuery, getConnection, sql } from '../../config/database';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import { executeQuery, getConnection, sql } from '../../config/database.js';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';

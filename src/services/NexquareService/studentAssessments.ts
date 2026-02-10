@@ -4,14 +4,14 @@
  * Fetches CSV or Excel file from API, parses it, and saves to database
  */
 
-import { NEXQUARE_ENDPOINTS } from '../../config/nexquare';
-import type { NexquareConfig } from '../../middleware/configLoader';
-import { executeQuery, getConnection, sql } from '../../config/database';
+import { NEXQUARE_ENDPOINTS } from '../../config/nexquare.js';
+import type { NexquareConfig } from '../../middleware/configLoader.js';
+import { executeQuery, getConnection, sql } from '../../config/database.js';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
-import { databaseService } from '../DatabaseService';
-import type { BaseNexquareService } from './BaseNexquareService';
+import { databaseService } from '../DatabaseService.js';
+import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
  * Get student assessment/grade book data

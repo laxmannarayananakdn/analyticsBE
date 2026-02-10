@@ -4,30 +4,30 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { getConnection, closeConnection } from './config/database';
+import { getConnection, closeConnection } from './config/database.js';
 // Import routes
-import healthRoutes from './routes/health';
-import schoolsRoutes from './routes/schools';
-import studentsRoutes from './routes/students';
-import termGradesRoutes from './routes/termGrades';
-import analyticsRoutes from './routes/analytics';
-import manageBacRoutes from './routes/managebac';
-import manageBacConfigRoutes from './routes/managebacConfig';
-import efRoutes from './routes/ef';
-import nexquareRoutes from './routes/nexquare';
-import nexquareConfigRoutes from './routes/nexquareConfig';
-import rpConfigRoutes from './routes/rpConfig';
-import supersetRoutes from './routes/superset';
+import healthRoutes from './routes/health.js';
+import schoolsRoutes from './routes/schools.js';
+import studentsRoutes from './routes/students.js';
+import termGradesRoutes from './routes/termGrades.js';
+import analyticsRoutes from './routes/analytics.js';
+import manageBacRoutes from './routes/managebac.js';
+import manageBacConfigRoutes from './routes/managebacConfig.js';
+import efRoutes from './routes/ef.js';
+import nexquareRoutes from './routes/nexquare.js';
+import nexquareConfigRoutes from './routes/nexquareConfig.js';
+import rpConfigRoutes from './routes/rpConfig.js';
+import supersetRoutes from './routes/superset.js';
 // Auth and access control routes
-import authRoutes from './routes/auth';
-import userRoutes from './routes/users';
-import departmentRoutes from './routes/departments';
-import nodeRoutes from './routes/nodes';
-import nodeSchoolRoutes from './routes/nodeSchools';
-import schoolNodeRoutes from './routes/schoolNode';
-import userAccessRoutes from './routes/userAccess';
-import userMeRoutes from './routes/userMe';
-import adminSchoolsRoutes from './routes/adminSchools';
+import authRoutes from './routes/auth.js';
+import userRoutes from './routes/users.js';
+import departmentRoutes from './routes/departments.js';
+import nodeRoutes from './routes/nodes.js';
+import nodeSchoolRoutes from './routes/nodeSchools.js';
+import schoolNodeRoutes from './routes/schoolNode.js';
+import userAccessRoutes from './routes/userAccess.js';
+import userMeRoutes from './routes/userMe.js';
+import adminSchoolsRoutes from './routes/adminSchools.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -106,28 +106,26 @@ app.use((err, req, res, next) => {
 app.use((req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
-// Initialize database connection on startup
+// Start HTTP server first so the app always responds (and sends CORS headers).
+// DB connection is attempted in background; /api/health reports DB status.
 async function startServer() {
+    console.log('🚀 Starting server...');
+    const server = app.listen(PORT, () => {
+        console.log(`✅ Server running on port ${PORT}`);
+        console.log(`📡 CORS enabled for: ${CORS_ORIGIN}`);
+        console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+    // 10 minutes for long-running data sync operations (large datasets, etc.)
+    server.timeout = 600000;
+    server.keepAliveTimeout = 600000;
+    // Try DB in background so startup is not blocked (CORS and /api/health still work if DB fails)
     try {
-        console.log('🚀 Starting server...');
-        // Test database connection
         console.log('🔌 Testing database connection...');
         await getConnection();
         console.log('✅ Database connection established');
-        // Start server with extended timeout for data sync operations
-        const server = app.listen(PORT, () => {
-            console.log(`✅ Server running on port ${PORT}`);
-            console.log(`📡 CORS enabled for: ${CORS_ORIGIN}`);
-            console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-        });
-        // Set server timeout to 10 minutes for long-running data sync operations
-        // This is needed for large datasets (students, staff, classes, etc.)
-        server.timeout = 600000; // 10 minutes
-        server.keepAliveTimeout = 600000;
     }
     catch (error) {
-        console.error('❌ Failed to start server:', error);
-        process.exit(1);
+        console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
     }
 }
 // Graceful shutdown
