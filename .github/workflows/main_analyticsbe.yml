@@ -1,5 +1,8 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
+# For the STANDALONE backend repo (e.g. analyticsBE) where backend code is at REPO ROOT.
+# Copy this file to your analyticsBE repo: .github/workflows/azure-webapp-backend.yml
+# Do NOT use working-directory or path: backend/ there (no backend/ folder exists).
+
+# Docs: https://github.com/Azure/webapps-deploy
 
 name: Build and deploy Node.js app to Azure Web App - AnalyticsBE
 
@@ -7,8 +10,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'backend/**'
   workflow_dispatch:
 
 jobs:
@@ -25,8 +26,7 @@ jobs:
         with:
           node-version: '24.x'
 
-      - name: npm install, build, and test (backend)
-        working-directory: backend
+      - name: npm install, build, and test
         run: |
           npm ci
           npm run build
@@ -36,7 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: backend/
+          path: .
 
   deploy:
     runs-on: ubuntu-latest
