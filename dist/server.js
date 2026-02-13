@@ -22,6 +22,7 @@ import supersetRoutes from './routes/superset.js';
 import supersetDashboardConfigRoutes from './routes/supersetDashboardConfig.js';
 // Auth and access control routes
 import authRoutes from './routes/auth.js';
+import microsoftAuthRoutes from './routes/microsoftAuth.js';
 import userRoutes from './routes/users.js';
 import departmentRoutes from './routes/departments.js';
 import nodeRoutes from './routes/nodes.js';
@@ -29,6 +30,7 @@ import nodeSchoolRoutes from './routes/nodeSchools.js';
 import schoolNodeRoutes from './routes/schoolNode.js';
 import userAccessRoutes from './routes/userAccess.js';
 import userMeRoutes from './routes/userMe.js';
+import sidebarAccessRoutes from './routes/sidebarAccess.js';
 import adminSchoolsRoutes from './routes/adminSchools.js';
 import accessGroupsRoutes from './routes/accessGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
@@ -81,6 +83,7 @@ app.use('/api/superset', supersetRoutes);
 app.use('/api/superset-dashboard-config', supersetDashboardConfigRoutes);
 // Auth and access control routes
 app.use('/api/auth', authRoutes);
+app.use('/api/auth/microsoft', microsoftAuthRoutes);
 app.use('/api/users', userMeRoutes); // Must be before userRoutes so /me doesn't match /:email
 app.use('/api/users', userRoutes);
 app.use('/api/departments', departmentRoutes);
@@ -91,6 +94,7 @@ app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for 
 app.use('/api/users', userAccessRoutes); // User access management routes
 app.use('/api/access-groups', accessGroupsRoutes);
 app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
+app.use('/api/sidebar-access', sidebarAccessRoutes);
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({

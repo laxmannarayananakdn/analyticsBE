@@ -24,6 +24,7 @@ import supersetRoutes from './routes/superset.js';
 import supersetDashboardConfigRoutes from './routes/supersetDashboardConfig.js';
 // Auth and access control routes
 import authRoutes from './routes/auth.js';
+import microsoftAuthRoutes from './routes/microsoftAuth.js';
 import userRoutes from './routes/users.js';
 import departmentRoutes from './routes/departments.js';
 import nodeRoutes from './routes/nodes.js';
@@ -94,6 +95,7 @@ app.use('/api/superset', supersetRoutes);
 app.use('/api/superset-dashboard-config', supersetDashboardConfigRoutes);
 // Auth and access control routes
 app.use('/api/auth', authRoutes);
+app.use('/api/auth/microsoft', microsoftAuthRoutes);
 app.use('/api/users', userMeRoutes); // Must be before userRoutes so /me doesn't match /:email
 app.use('/api/users', userRoutes);
 app.use('/api/departments', departmentRoutes);

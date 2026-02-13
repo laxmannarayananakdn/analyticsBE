@@ -3,6 +3,7 @@
  */
 import express from 'express';
 import { getUserSchoolAccess, getUserAccess, getUserDepartments, } from '../services/AccessService.js';
+import { getUserSidebarAccess } from '../services/SidebarAccessService.js';
 import { getUserByEmail } from '../services/UserService.js';
 import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
@@ -82,6 +83,24 @@ router.get('/me/departments', async (req, res) => {
     }
     catch (error) {
         console.error('Get user departments error:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /users/me/sidebar-access
+ * Get sidebar item IDs the user can see.
+ * Empty array = full access (no restrictions).
+ */
+router.get('/me/sidebar-access', async (req, res) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+        const itemIds = await getUserSidebarAccess(req.user.email);
+        res.json({ itemIds });
+    }
+    catch (error) {
+        console.error('Get sidebar access error:', error);
         res.status(500).json({ error: error.message || 'Internal server error' });
     }
 });

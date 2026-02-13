@@ -15,10 +15,10 @@ router.get('/', async (req, res) => {
     try {
         const activeOnly = req.query.active !== 'false';
         const query = `
-      SELECT id, uuid, name, description, sort_order, is_active
+      SELECT id, uuid, name, description, sort_order, is_active, folder
       FROM admin.superset_dashboard_configs
       ${activeOnly ? 'WHERE is_active = 1' : ''}
-      ORDER BY sort_order ASC, name ASC
+      ORDER BY folder ASC, sort_order ASC, name ASC
     `;
         const result = await executeQuery(query);
         if (result.error) {
@@ -45,7 +45,7 @@ router.get('/:id', async (req, res) => {
             return res.status(400).json({ error: 'Invalid ID' });
         }
         const query = `
-      SELECT id, uuid, name, description, sort_order, is_active, created_at, updated_at
+      SELECT id, uuid, name, description, sort_order, is_active, folder, created_at, updated_at
       FROM admin.superset_dashboard_configs
       WHERE id = @id
     `;
@@ -70,14 +70,16 @@ router.get('/:id', async (req, res) => {
  */
 router.post('/', authenticate, requireAdmin, async (req, res) => {
     try {
-        const { uuid, name, description, sort_order, is_active } = req.body;
+        const { uuid, name, description, sort_order, is_active, folder } = req.body;
         if (!uuid || !name) {
             return res.status(400).json({ error: 'uuid and name are required' });
         }
+        const validFolders = ['Education', 'Finance', 'HR', 'Operations'];
+        const folderValue = folder && validFolders.includes(String(folder).trim()) ? String(folder).trim() : 'Education';
         const query = `
-      INSERT INTO admin.superset_dashboard_configs (uuid, name, description, sort_order, is_active)
-      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active
-      VALUES (@uuid, @name, @description, @sort_order, @is_active)
+      INSERT INTO admin.superset_dashboard_configs (uuid, name, description, sort_order, is_active, folder)
+      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder
+      VALUES (@uuid, @name, @description, @sort_order, @is_active, @folder)
     `;
         const result = await executeQuery(query, {
             uuid: String(uuid).trim(),
@@ -85,6 +87,7 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
             description: description ? String(description).trim() : null,
             sort_order: sort_order ?? 0,
             is_active: is_active !== false ? 1 : 0,
+            folder: folderValue,
         });
         if (result.error) {
             if (result.error.includes('UNIQUE') || result.error.includes('duplicate')) {
@@ -110,7 +113,11 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
         if (isNaN(id)) {
             return res.status(400).json({ error: 'Invalid ID' });
         }
-        const { uuid, name, description, sort_order, is_active } = req.body;
+        const { uuid, name, description, sort_order, is_active, folder } = req.body;
+        const validFolders = ['Education', 'Finance', 'HR', 'Operations'];
+        const folderValue = folder !== undefined
+            ? (folder && validFolders.includes(String(folder).trim()) ? String(folder).trim() : 'Education')
+            : null;
         const query = `
       UPDATE admin.superset_dashboard_configs
       SET
@@ -119,8 +126,9 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
         description = @description,
         sort_order = COALESCE(@sort_order, sort_order),
         is_active = CASE WHEN @is_active IS NULL THEN is_active ELSE @is_active END,
+        folder = COALESCE(@folder, folder),
         updated_at = SYSDATETIMEOFFSET()
-      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active
+      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder
       WHERE id = @id
     `;
         const result = await executeQuery(query, {
@@ -130,6 +138,7 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
             description: description !== undefined ? (description ? String(description).trim() : null) : null,
             sort_order: sort_order !== undefined ? sort_order : null,
             is_active: is_active !== undefined ? (is_active ? 1 : 0) : null,
+            folder: folderValue,
         });
         if (result.error) {
             return res.status(500).json({ error: result.error });
