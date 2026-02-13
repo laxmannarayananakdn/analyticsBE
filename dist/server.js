@@ -19,6 +19,7 @@ import nexquareRoutes from './routes/nexquare.js';
 import nexquareConfigRoutes from './routes/nexquareConfig.js';
 import rpConfigRoutes from './routes/rpConfig.js';
 import supersetRoutes from './routes/superset.js';
+import supersetDashboardConfigRoutes from './routes/supersetDashboardConfig.js';
 // Auth and access control routes
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -75,6 +76,7 @@ app.use('/api/nexquare', nexquareRoutes);
 app.use('/api/nexquare-config', nexquareConfigRoutes);
 app.use('/api/rp-config', rpConfigRoutes);
 app.use('/api/superset', supersetRoutes);
+app.use('/api/superset-dashboard-config', supersetDashboardConfigRoutes);
 // Auth and access control routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userMeRoutes); // Must be before userRoutes so /me doesn't match /:email
@@ -103,6 +105,7 @@ app.get('/', (req, res) => {
             nexquareConfig: '/api/nexquare-config',
             rpConfig: '/api/rp-config',
             superset: '/api/superset',
+            supersetDashboardConfig: '/api/superset-dashboard-config',
             auth: '/api/auth',
             users: '/api/users',
             departments: '/api/departments',
