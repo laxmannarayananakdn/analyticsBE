@@ -1,0 +1,1 @@
+{"version":3,"file":"MicrosoftOAuthVerifier.d.ts","sourceRoot":"","sources":["../../src/services/MicrosoftOAuthVerifier.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAoBH;;;;;GAKG;AACH,wBAAsB,sBAAsB,CAC1C,OAAO,EAAE,MAAM,GACd,OAAO,CAAC;IAAE,KAAK,EAAE,MAAM,CAAC;IAAC,KAAK,CAAC,EAAE,MAAM,CAAA;CAAE,CAAC,CAkD5C"}

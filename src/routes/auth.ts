@@ -3,12 +3,35 @@
  */
 
 import express from 'express';
-import { authenticateUser, changePassword, setPassword } from '../services/AuthService.js';
+import { authenticateUser, authenticateUserWithOAuth, changePassword, setPassword } from '../services/AuthService.js';
+import { getTenantConfigByDomainPublic } from '../services/MicrosoftTenantService.js';
 import type { ChangePasswordRequest } from '../types/auth.js';
 import { loginRateLimiter } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
+
+/**
+ * GET /auth/tenant-config-by-domain
+ * Public - returns Microsoft tenant config for login page (clientId, authority only)
+ * Used to enable "Sign in with Microsoft" when user enters email
+ */
+router.get('/tenant-config-by-domain', loginRateLimiter, async (req, res) => {
+  try {
+    const domain = (req.query.domain as string)?.toLowerCase()?.trim();
+    if (!domain) {
+      return res.status(400).json({ error: 'Domain is required' });
+    }
+    const config = await getTenantConfigByDomainPublic(domain);
+    if (!config) {
+      return res.status(404).json({ error: 'No Microsoft login configured for this domain' });
+    }
+    res.json(config);
+  } catch (error: any) {
+    console.error('Tenant config error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 /**
  * POST /auth/login
@@ -22,8 +45,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Email is required' });
     }
     
-    // For password authentication
-    if (password) {
+    // For password authentication - use 'password' in body so empty string still triggers password flow
+    if ('password' in req.body && req.body.password !== undefined) {
       const result = await authenticateUser({ email, password });
       
       if ('error' in result) {
@@ -56,9 +79,24 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     
     // For OAuth authentication (Microsoft App Registration)
     if (oauthToken) {
-      // TODO: Verify OAuth token with Microsoft
-      // For now, we'll return an error indicating OAuth is not fully implemented
-      return res.status(501).json({ error: 'OAuth authentication not yet implemented' });
+      const result = await authenticateUserWithOAuth(email, oauthToken);
+      if ('error' in result) {
+        return res.status(401).json({ error: result.error });
+      }
+      res.cookie('session', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+      return res.json({
+        user: {
+          email: result.user.Email,
+          displayName: result.user.Display_Name,
+          authType: result.user.Auth_Type,
+        },
+        token: result.token,
+      });
     }
     
     return res.status(400).json({ error: 'Password or OAuth token is required' });

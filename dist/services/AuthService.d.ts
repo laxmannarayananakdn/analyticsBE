@@ -48,6 +48,16 @@ export declare function authenticateUser(loginRequest: LoginRequest): Promise<{
     error: string;
 }>;
 /**
+ * Authenticate user with Microsoft OAuth token
+ * User MUST be pre-added in admin.[User] before authentication is allowed
+ */
+export declare function authenticateUserWithOAuth(email: string, oauthToken: string): Promise<{
+    user: User;
+    token: string;
+} | {
+    error: string;
+}>;
+/**
  * Change user password
  */
 export declare function changePassword(email: string, changeRequest: ChangePasswordRequest): Promise<{

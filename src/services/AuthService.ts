@@ -7,6 +7,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { executeQuery } from '../config/database.js';
 import { User, LoginRequest, ChangePasswordRequest, CreateUserRequest, JwtPayload } from '../types/auth.js';
+import { verifyMicrosoftIdToken } from './MicrosoftOAuthVerifier.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -175,9 +176,7 @@ export async function authenticateUser(loginRequest: LoginRequest): Promise<{ us
     }
   }
   
-  // For OAuth authentication (Microsoft App Registration)
-  // In a real implementation, you would verify the OAuth token here
-  // For now, we'll assume OAuth users don't need password verification
+  // For OAuth (Microsoft): handled in authenticateUserWithOAuth
   
   // Update last login
   await executeQuery(
@@ -188,6 +187,42 @@ export async function authenticateUser(loginRequest: LoginRequest): Promise<{ us
   // Generate token
   const token = generateToken(user);
   
+  return { user, token };
+}
+
+/**
+ * Authenticate user with Microsoft OAuth token
+ * User MUST be pre-added in admin.[User] before authentication is allowed
+ */
+export async function authenticateUserWithOAuth(
+  email: string,
+  oauthToken: string
+): Promise<{ user: User; token: string } | { error: string }> {
+  const { email: tokenEmail, error: verifyError } = await verifyMicrosoftIdToken(oauthToken);
+  if (verifyError) {
+    return { error: verifyError };
+  }
+  if (tokenEmail.toLowerCase() !== email.toLowerCase()) {
+    return { error: 'Token email does not match' };
+  }
+
+  const user = await getUserByEmail(email);
+  if (!user) {
+    return { error: 'User not found. Please contact your administrator to be added to the system.' };
+  }
+  if (!user.Is_Active) {
+    return { error: 'User account is inactive' };
+  }
+  if (user.Auth_Type !== 'AppRegistration') {
+    return { error: 'This account uses password login. Please sign in with your password.' };
+  }
+
+  await executeQuery(
+    `UPDATE admin.[User] SET Last_Login = GETDATE() WHERE User_ID = @userId`,
+    { userId: user.User_ID }
+  );
+
+  const token = generateToken(user);
   return { user, token };
 }
 
