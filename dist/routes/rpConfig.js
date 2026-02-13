@@ -360,18 +360,16 @@ router.delete('/assessment-component-config/:id', async (req, res) => {
 // =============================================
 /**
  * GET /api/rp-config/schools
- * Get list of schools for dropdown
+ * Get list of schools for dropdown (from NEX.schools - populated by Get Schools / Student Allocations)
  */
 router.get('/schools', async (req, res) => {
     try {
         const query = `
-      SELECT DISTINCT 
-        school_id,
-        MAX(school_name) AS school_name
-      FROM RP.student_assessments
-      WHERE school_id IS NOT NULL
-      GROUP BY school_id
-      ORDER BY school_name
+      SELECT 
+        sourced_id AS school_id,
+        name AS school_name
+      FROM NEX.schools
+      ORDER BY name
     `;
         const result = await executeQuery(query);
         if (result.error) {
@@ -391,17 +389,34 @@ router.get('/schools', async (req, res) => {
 });
 /**
  * GET /api/rp-config/academic-years
- * Get list of academic years for dropdown
+ * Get a unified list of academic years for dropdown from:
+ * - NEX.student_allocations (Student Allocations)
+ * - RP.student_assessments (years where we already have assessment data)
+ * Optional query: school_id - filter years for that school only.
  */
 router.get('/academic-years', async (req, res) => {
     try {
+        const { school_id } = req.query;
+        const params = {};
+        const schoolFilter = school_id && typeof school_id === 'string' ? ' AND school_id = @school_id' : '';
+        if (school_id && typeof school_id === 'string') {
+            params.school_id = school_id;
+        }
         const query = `
-      SELECT DISTINCT academic_year
-      FROM RP.student_assessments
-      WHERE academic_year IS NOT NULL
+      SELECT DISTINCT academic_year FROM (
+        SELECT academic_year
+        FROM NEX.student_allocations
+        WHERE academic_year IS NOT NULL
+        ${schoolFilter}
+        UNION
+        SELECT academic_year
+        FROM RP.student_assessments
+        WHERE academic_year IS NOT NULL
+        ${schoolFilter}
+      ) AS combined
       ORDER BY academic_year DESC
     `;
-        const result = await executeQuery(query);
+        const result = await executeQuery(query, params);
         if (result.error) {
             return res.status(500).json({ error: result.error });
         }
@@ -412,6 +427,41 @@ router.get('/academic-years', async (req, res) => {
     }
     catch (error) {
         console.error('Error fetching academic years:', error);
+        res.status(500).json({
+            error: error.message || 'Internal server error'
+        });
+    }
+});
+/**
+ * GET /api/rp-config/subjects
+ * Get list of subject names for dropdown (from NEX.subjects - populated by Student Allocations).
+ * Query: school_id (required) - subjects for that school.
+ */
+router.get('/subjects', async (req, res) => {
+    try {
+        const { school_id } = req.query;
+        if (!school_id || typeof school_id !== 'string') {
+            return res.status(400).json({ error: 'school_id is required' });
+        }
+        const query = `
+      SELECT DISTINCT subject_name AS subject
+      FROM NEX.subjects
+      WHERE school_id = @school_id
+        AND subject_name IS NOT NULL
+        AND LTRIM(RTRIM(ISNULL(subject_name, ''))) != ''
+      ORDER BY subject_name
+    `;
+        const result = await executeQuery(query, { school_id });
+        if (result.error) {
+            return res.status(500).json({ error: result.error });
+        }
+        res.json({
+            success: true,
+            data: result.data?.map((row) => row.subject) || []
+        });
+    }
+    catch (error) {
+        console.error('Error fetching subjects:', error);
         res.status(500).json({
             error: error.message || 'Internal server error'
         });

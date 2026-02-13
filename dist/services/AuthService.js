@@ -237,6 +237,46 @@ export async function createUser(createRequest) {
     return { user: result.data[0], temporaryPassword };
 }
 /**
+ * Set password (unauthenticated) - for first login when user has temporary password.
+ * Validates current (temporary) password, then sets new password and clears Is_Temporary_Password.
+ */
+export async function setPassword(email, currentPassword, newPassword) {
+    const validation = validatePasswordComplexity(newPassword);
+    if (!validation.valid) {
+        return { success: false, error: validation.error };
+    }
+    const user = await getUserByEmail(email);
+    if (!user) {
+        return { success: false, error: 'User not found' };
+    }
+    if (!user.Is_Active) {
+        return { success: false, error: 'User account is inactive' };
+    }
+    if (user.Auth_Type !== 'Password') {
+        return { success: false, error: 'Password change is only for password-based accounts' };
+    }
+    if (!user.Is_Temporary_Password) {
+        return { success: false, error: 'This account does not require a first-login password change' };
+    }
+    if (!user.Password_Hash) {
+        return { success: false, error: 'Password not set for user' };
+    }
+    const isValid = await comparePassword(currentPassword, user.Password_Hash);
+    if (!isValid) {
+        return { success: false, error: 'Current password is incorrect' };
+    }
+    const passwordHash = await hashPassword(newPassword);
+    const result = await executeQuery(`UPDATE admin.[User] 
+     SET Password_Hash = @passwordHash, 
+         Is_Temporary_Password = 0,
+         Modified_Date = GETDATE()
+     WHERE User_ID = @userId`, { passwordHash, userId: user.User_ID });
+    if (result.error) {
+        return { success: false, error: result.error };
+    }
+    return { success: true };
+}
+/**
  * Reset user password (generates new temporary password)
  */
 export async function resetPassword(email, resetBy) {

@@ -63,6 +63,14 @@ export declare function createUser(createRequest: CreateUserRequest): Promise<{
     error?: string;
 }>;
 /**
+ * Set password (unauthenticated) - for first login when user has temporary password.
+ * Validates current (temporary) password, then sets new password and clears Is_Temporary_Password.
+ */
+export declare function setPassword(email: string, currentPassword: string, newPassword: string): Promise<{
+    success: boolean;
+    error?: string;
+}>;
+/**
  * Reset user password (generates new temporary password)
  */
 export declare function resetPassword(email: string, resetBy: string): Promise<{

@@ -28,14 +28,16 @@ export async function authenticate(
   next: NextFunction
 ): Promise<void> {
   try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    let token: string | undefined =
+      req.cookies?.session ??
+      (req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.substring(7)
+        : undefined);
+
+    if (!token) {
       res.status(401).json({ error: 'No token provided' });
       return;
     }
-    
-    const token = authHeader.substring(7);
     const payload = verifyToken(token);
     
     if (!payload) {
@@ -82,12 +84,14 @@ export async function optionalAuthenticate(
   next: NextFunction
 ): Promise<void> {
   try {
-    const authHeader = req.headers.authorization;
-    
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
+    const token =
+      req.cookies?.session ??
+      (req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.substring(7)
+        : undefined);
+
+    if (token) {
       const payload = verifyToken(token);
-      
       if (payload) {
         const user = await getUserById(payload.userId);
         if (user && user.Is_Active && !user.Is_Temporary_Password) {

@@ -2,7 +2,7 @@
  * Authentication Routes
  */
 import express from 'express';
-import { authenticateUser, changePassword } from '../services/AuthService.js';
+import { authenticateUser, changePassword, setPassword } from '../services/AuthService.js';
 import { loginRateLimiter } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
@@ -28,6 +28,12 @@ router.post('/login', loginRateLimiter, async (req, res) => {
                 }
                 return res.status(401).json({ error: result.error });
             }
+            res.cookie('session', result.token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                maxAge: 24 * 60 * 60 * 1000, // 24 hours
+            });
             return res.json({
                 user: {
                     email: result.user.Email,
@@ -52,16 +58,36 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 });
 /**
  * POST /auth/logout
- * Logout (client-side token removal, but we can track it)
+ * Clear session cookie (no auth required - always clear if present)
  */
-router.post('/logout', authenticate, async (req, res) => {
+router.post('/logout', async (req, res) => {
     try {
-        // In a stateless JWT system, logout is handled client-side
-        // We could implement token blacklisting here if needed
+        res.clearCookie('session');
         res.json({ message: 'Logged out successfully' });
     }
     catch (error) {
         console.error('Logout error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+/**
+ * POST /auth/set-password
+ * Set new password when user has temporary password (first login). No auth required.
+ */
+router.post('/set-password', loginRateLimiter, async (req, res) => {
+    try {
+        const { email, currentPassword, newPassword } = req.body;
+        if (!email || !currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Email, current password, and new password are required' });
+        }
+        const result = await setPassword(email, currentPassword, newPassword);
+        if (!result.success) {
+            return res.status(400).json({ error: result.error });
+        }
+        res.json({ message: 'Password set successfully. You can now log in.' });
+    }
+    catch (error) {
+        console.error('Set password error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

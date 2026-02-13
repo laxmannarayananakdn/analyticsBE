@@ -35,7 +35,14 @@ router.post('/login', loginRateLimiter, async (req, res) => {
         }
         return res.status(401).json({ error: result.error });
       }
-      
+
+      res.cookie('session', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      });
+
       return res.json({
         user: {
           email: result.user.Email,
@@ -62,12 +69,11 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
 /**
  * POST /auth/logout
- * Logout (client-side token removal, but we can track it)
+ * Clear session cookie (no auth required - always clear if present)
  */
-router.post('/logout', authenticate, async (req, res) => {
+router.post('/logout', async (req, res) => {
   try {
-    // In a stateless JWT system, logout is handled client-side
-    // We could implement token blacklisting here if needed
+    res.clearCookie('session');
     res.json({ message: 'Logged out successfully' });
   } catch (error: any) {
     console.error('Logout error:', error);

@@ -4,6 +4,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import { getConnection, closeConnection } from './config/database.js';
 
@@ -35,17 +36,37 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-// Comma-separated list of allowed origins, or single origin (e.g. https://your-app.azurestaticapps.net)
+
+// CORS Configuration - UPDATED to support Superset embedding
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 const corsOrigins = CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
 
+// Always include these origins for Superset embedding
+const defaultOrigins = [
+  'http://localhost:5173',                              // Vite dev server
+  'http://localhost:3000',                              // React dev server
+  'http://localhost:3001',                              // Backend (for same-origin requests)
+  'https://superset-edtech-app.azurewebsites.net',      // Superset instance
+];
+
+// Combine default origins with environment-configured origins
+const allOrigins = [...new Set([...defaultOrigins, ...corsOrigins])];
+
+console.log('🔒 CORS enabled for origins:', allOrigins);
+
 // Middleware
 app.use(cors({
-  origin: corsOrigins.length > 1 ? corsOrigins : (corsOrigins[0] || 'http://localhost:5173'),
-  credentials: true
+  origin: allOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400 // 24 hours
 }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Request logging
 app.use((req, res, next) => {
@@ -124,7 +145,7 @@ async function startServer() {
 
   const server = app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
-    console.log(`📡 CORS enabled for: ${CORS_ORIGIN}`);
+    console.log(`📡 CORS enabled for: ${allOrigins.join(', ')}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 
@@ -156,4 +177,3 @@ process.on('SIGINT', async () => {
 });
 
 startServer();
-

@@ -7,12 +7,14 @@ import { verifyToken, getUserById } from '../services/AuthService.js';
  */
 export async function authenticate(req, res, next) {
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        let token = req.cookies?.session ??
+            (req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.substring(7)
+                : undefined);
+        if (!token) {
             res.status(401).json({ error: 'No token provided' });
             return;
         }
-        const token = authHeader.substring(7);
         const payload = verifyToken(token);
         if (!payload) {
             res.status(401).json({ error: 'Invalid or expired token' });
@@ -50,9 +52,11 @@ export async function authenticate(req, res, next) {
  */
 export async function optionalAuthenticate(req, res, next) {
     try {
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const token = authHeader.substring(7);
+        const token = req.cookies?.session ??
+            (req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.substring(7)
+                : undefined);
+        if (token) {
             const payload = verifyToken(token);
             if (payload) {
                 const user = await getUserById(payload.userId);
