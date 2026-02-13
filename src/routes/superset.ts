@@ -8,6 +8,10 @@ import jwt from 'jsonwebtoken';
 import { supersetService, SupersetAccessDeniedError } from '../services/SupersetService.js';
 import { authenticate } from '../middleware/auth.js';
 import { getUserById } from '../services/AuthService.js';
+import {
+  checkSupersetDashboardAccess,
+  isSupersetAccessCheckEnabled,
+} from '../services/SupersetAccessService.js';
 
 const router = Router();
 
@@ -50,6 +54,18 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
       first_name: firstName,
       last_name: lastName,
     };
+
+    // 0. Optional: Check Superset Postgres for user existence and dashboard access (Option A)
+    if (isSupersetAccessCheckEnabled()) {
+      const accessResult = await checkSupersetDashboardAccess(user.email, dashboardIdString);
+      if (!accessResult.allowed) {
+        return res.status(403).json({
+          error: `User ${user.email} does not have access to this dashboard.`,
+          code: 'SUPERSET_ACCESS_DENIED',
+          userEmail: user.email,
+        });
+      }
+    }
 
     // 1. Try Superset API first - token is signed by Superset, so it will always be accepted
     if (process.env.SUPERSET_USERNAME || process.env.SUPERSET_API_KEY) {
