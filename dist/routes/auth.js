@@ -39,8 +39,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
         if (!email) {
             return res.status(400).json({ error: 'Email is required' });
         }
-        // For password authentication
-        if (password) {
+        // For password authentication - use 'password' in body so empty string still triggers password flow
+        if ('password' in req.body && req.body.password !== undefined) {
             const result = await authenticateUser({ email, password });
             if ('error' in result) {
                 if (result.error === 'PASSWORD_CHANGE_REQUIRED') {

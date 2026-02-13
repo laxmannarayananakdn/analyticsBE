@@ -6,7 +6,7 @@ import express from 'express';
 import { authenticateUser, authenticateUserWithOAuth, changePassword, setPassword } from '../services/AuthService.js';
 import { getTenantConfigByDomainPublic } from '../services/MicrosoftTenantService.js';
 import type { ChangePasswordRequest } from '../types/auth.js';
-import { loginRateLimiter } from '../middleware/rateLimiter.js';
+import { loginRateLimiter, tenantConfigLookupRateLimiter } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -16,7 +16,7 @@ const router = express.Router();
  * Public - returns Microsoft tenant config for login page (clientId, authority only)
  * Used to enable "Sign in with Microsoft" when user enters email
  */
-router.get('/tenant-config-by-domain', loginRateLimiter, async (req, res) => {
+router.get('/tenant-config-by-domain', tenantConfigLookupRateLimiter, async (req, res) => {
   try {
     const domain = (req.query.domain as string)?.toLowerCase()?.trim();
     if (!domain) {
