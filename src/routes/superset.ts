@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { supersetService } from '../services/SupersetService.js';
+import { supersetService, SupersetAccessDeniedError } from '../services/SupersetService.js';
 import { authenticate } from '../middleware/auth.js';
 import { getUserById } from '../services/AuthService.js';
 
@@ -41,16 +41,33 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
 
     const dashboardIdString = String(dashboardId);
 
+    const displayName = dbUser.Display_Name || '';
+    const nameParts = displayName.trim().split(/\s+/);
+    const firstName = nameParts[0] || user.email.split('@')[0] || 'User';
+    const lastName = nameParts.slice(1).join(' ') || '';
+    const supersetUser = {
+      username: user.email,
+      first_name: firstName,
+      last_name: lastName,
+    };
+
     // 1. Try Superset API first - token is signed by Superset, so it will always be accepted
     if (process.env.SUPERSET_USERNAME || process.env.SUPERSET_API_KEY) {
       try {
-        const result = await supersetService.generateGuestToken(dashboardIdString, undefined, false);
+        const result = await supersetService.generateGuestToken(dashboardIdString, undefined, false, supersetUser);
         if (result.token) {
           console.log('🔐 Guest token from Superset API for dashboard:', dashboardIdString);
           return res.json({ token: result.token, dashboardId: dashboardIdString });
         }
-      } catch (apiErr: any) {
-        console.warn('⚠️ Superset API token failed, falling back to JWT:', apiErr.message);
+      } catch (apiErr: unknown) {
+        if (apiErr instanceof SupersetAccessDeniedError) {
+          return res.status(403).json({
+            error: apiErr.message,
+            code: 'SUPERSET_ACCESS_DENIED',
+            userEmail: apiErr.userEmail,
+          });
+        }
+        console.warn('⚠️ Superset API token failed, falling back to JWT:', apiErr instanceof Error ? apiErr.message : String(apiErr));
       }
     }
 
@@ -62,18 +79,9 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
       });
     }
 
-    const displayName = dbUser.Display_Name || '';
-    const nameParts = displayName.trim().split(/\s+/);
-    const firstName = nameParts[0] || user.email.split('@')[0] || 'User';
-    const lastName = nameParts.slice(1).join(' ') || '';
-
     const now = Math.floor(Date.now() / 1000);
     const payload = {
-      user: {
-        username: user.email,
-        first_name: firstName,
-        last_name: lastName,
-      },
+      user: supersetUser,
       resources: [{ type: 'dashboard', id: dashboardIdString }],
       rls_rules: [] as Array<{ clause: string; dataset?: string }>,
       iat: now,
