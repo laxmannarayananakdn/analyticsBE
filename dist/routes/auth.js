@@ -31,7 +31,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
             res.cookie('session', result.token, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
-                sameSite: 'lax',
+                // sameSite: 'none' needed when frontend and backend are on different domains (e.g. Azure)
+                sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
                 maxAge: 24 * 60 * 60 * 1000, // 24 hours
             });
             return res.json({
