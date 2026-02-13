@@ -2,6 +2,11 @@
  * Superset Service
  * Handles Superset API authentication and guest token generation
  */
+/** Thrown when Superset returns 403 for guest token (user has no access to dashboard) */
+export declare class SupersetAccessDeniedError extends Error {
+    userEmail: string;
+    constructor(userEmail: string);
+}
 export declare class SupersetService {
     private config;
     private accessTokenCache;
@@ -20,12 +25,18 @@ export declare class SupersetService {
     /**
      * Generate a guest token for embedded dashboards
      * @param dashboardId - Dashboard ID (numeric or UUID string)
+     * @param resources - Optional resources array
      * @param usePreGenerated - If true and SUPERSET_GUEST_TOKEN is set, return it (use only when token matches dashboard)
+     * @param user - Logged-in user for Superset (username = email). Superset will apply this user's permissions.
      */
     generateGuestToken(dashboardId: number | string, resources?: Array<{
         type: string;
         id: string;
-    }>, usePreGenerated?: boolean): Promise<{
+    }>, usePreGenerated?: boolean, user?: {
+        username: string;
+        first_name: string;
+        last_name: string;
+    }): Promise<{
         token: string;
         expires_in?: number;
     }>;

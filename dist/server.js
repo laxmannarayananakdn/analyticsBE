@@ -30,6 +30,7 @@ import schoolNodeRoutes from './routes/schoolNode.js';
 import userAccessRoutes from './routes/userAccess.js';
 import userMeRoutes from './routes/userMe.js';
 import adminSchoolsRoutes from './routes/adminSchools.js';
+import accessGroupsRoutes from './routes/accessGroups.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -87,6 +88,7 @@ app.use('/api/nodes', nodeSchoolRoutes); // School assignment routes (/nodes/:id
 app.use('/api/schools', schoolNodeRoutes); // Get node for school (/schools/:id/:source/node)
 app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for assignment
 app.use('/api/users', userAccessRoutes); // User access management routes
+app.use('/api/access-groups', accessGroupsRoutes);
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({

@@ -4,10 +4,28 @@
  */
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { supersetService } from '../services/SupersetService.js';
-import { authenticate } from '../middleware/auth.js';
+import { supersetService, SupersetAccessDeniedError } from '../services/SupersetService.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { getUserById } from '../services/AuthService.js';
+import { checkSupersetDashboardAccess, isSupersetAccessCheckEnabled, } from '../services/SupersetAccessService.js';
+import { getSupersetRoles } from '../services/SupersetUserService.js';
 const router = Router();
+/**
+ * GET /api/superset/roles
+ * Fetch Superset roles from ab_role (admin only)
+ */
+router.get('/roles', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const roles = await getSupersetRoles();
+        res.json(roles);
+    }
+    catch (error) {
+        console.error('Error fetching Superset roles:', error);
+        res.status(500).json({
+            error: error.message || 'Failed to fetch Superset roles',
+        });
+    }
+});
 /**
  * POST /api/superset/embed-token
  * Generate guest token for embedded dashboard (requires authentication)
@@ -33,17 +51,44 @@ router.post('/embed-token', authenticate, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         const dashboardIdString = String(dashboardId);
+        const displayName = dbUser.Display_Name || '';
+        const nameParts = displayName.trim().split(/\s+/);
+        const firstName = nameParts[0] || user.email.split('@')[0] || 'User';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        const supersetUser = {
+            username: user.email,
+            first_name: firstName,
+            last_name: lastName,
+        };
+        // 0. Optional: Check Superset Postgres for user existence and dashboard access (Option A)
+        if (isSupersetAccessCheckEnabled()) {
+            const accessResult = await checkSupersetDashboardAccess(user.email, dashboardIdString);
+            if (!accessResult.allowed) {
+                return res.status(403).json({
+                    error: `User ${user.email} does not have access to this dashboard.`,
+                    code: 'SUPERSET_ACCESS_DENIED',
+                    userEmail: user.email,
+                });
+            }
+        }
         // 1. Try Superset API first - token is signed by Superset, so it will always be accepted
         if (process.env.SUPERSET_USERNAME || process.env.SUPERSET_API_KEY) {
             try {
-                const result = await supersetService.generateGuestToken(dashboardIdString, undefined, false);
+                const result = await supersetService.generateGuestToken(dashboardIdString, undefined, false, supersetUser);
                 if (result.token) {
                     console.log('🔐 Guest token from Superset API for dashboard:', dashboardIdString);
                     return res.json({ token: result.token, dashboardId: dashboardIdString });
                 }
             }
             catch (apiErr) {
-                console.warn('⚠️ Superset API token failed, falling back to JWT:', apiErr.message);
+                if (apiErr instanceof SupersetAccessDeniedError) {
+                    return res.status(403).json({
+                        error: apiErr.message,
+                        code: 'SUPERSET_ACCESS_DENIED',
+                        userEmail: apiErr.userEmail,
+                    });
+                }
+                console.warn('⚠️ Superset API token failed, falling back to JWT:', apiErr instanceof Error ? apiErr.message : String(apiErr));
             }
         }
         // 2. Fallback: self-issued JWT (requires GUEST_TOKEN_JWT_SECRET in Superset)
@@ -53,17 +98,9 @@ router.post('/embed-token', authenticate, async (req, res) => {
                 error: 'No token source: Configure SUPERSET_USERNAME+SUPERSET_PASSWORD (or SUPERSET_API_KEY) for API token, or GUEST_TOKEN_JWT_SECRET for JWT.',
             });
         }
-        const displayName = dbUser.Display_Name || '';
-        const nameParts = displayName.trim().split(/\s+/);
-        const firstName = nameParts[0] || user.email.split('@')[0] || 'User';
-        const lastName = nameParts.slice(1).join(' ') || '';
         const now = Math.floor(Date.now() / 1000);
         const payload = {
-            user: {
-                username: user.email,
-                first_name: firstName,
-                last_name: lastName,
-            },
+            user: supersetUser,
             resources: [{ type: 'dashboard', id: dashboardIdString }],
             rls_rules: [],
             iat: now,

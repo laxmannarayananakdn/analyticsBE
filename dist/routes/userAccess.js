@@ -3,11 +3,50 @@
  */
 import express from 'express';
 import { getUserAccess, grantAccess, updateAccess, revokeNodeAccess, revokeDepartmentAccess, } from '../services/AccessService.js';
+import { getUserGroups, setUserGroups } from '../services/GroupService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);
 router.use(requireAdmin);
+/**
+ * GET /users/:email/groups
+ * Get groups assigned to user
+ */
+router.get('/:email/groups', async (req, res) => {
+    try {
+        const { email } = req.params;
+        const groupIds = await getUserGroups(email);
+        res.json({ groupIds });
+    }
+    catch (error) {
+        console.error('Get user groups error:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * PUT /users/:email/groups
+ * Set groups for user (replaces existing)
+ */
+router.put('/:email/groups', async (req, res) => {
+    try {
+        if (!req.user)
+            return res.status(401).json({ error: 'Authentication required' });
+        const { email } = req.params;
+        const { groupIds } = req.body;
+        if (!Array.isArray(groupIds)) {
+            return res.status(400).json({ error: 'groupIds array is required' });
+        }
+        await setUserGroups(email, groupIds, req.user.email);
+        res.json({ message: 'User groups updated', groupIds });
+    }
+    catch (error) {
+        console.error('Set user groups error:', error);
+        if (error.message === 'User not found')
+            return res.status(404).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
 /**
  * POST /users/:email/access
  * Grant user access to node with departments

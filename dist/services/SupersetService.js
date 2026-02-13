@@ -2,6 +2,15 @@
  * Superset Service
  * Handles Superset API authentication and guest token generation
  */
+/** Thrown when Superset returns 403 for guest token (user has no access to dashboard) */
+export class SupersetAccessDeniedError extends Error {
+    userEmail;
+    constructor(userEmail) {
+        super(`User ${userEmail} does not have access to this dashboard.`);
+        this.userEmail = userEmail;
+        this.name = 'SupersetAccessDeniedError';
+    }
+}
 export class SupersetService {
     config;
     accessTokenCache = null;
@@ -137,9 +146,11 @@ export class SupersetService {
     /**
      * Generate a guest token for embedded dashboards
      * @param dashboardId - Dashboard ID (numeric or UUID string)
+     * @param resources - Optional resources array
      * @param usePreGenerated - If true and SUPERSET_GUEST_TOKEN is set, return it (use only when token matches dashboard)
+     * @param user - Logged-in user for Superset (username = email). Superset will apply this user's permissions.
      */
-    async generateGuestToken(dashboardId, resources, usePreGenerated = false) {
+    async generateGuestToken(dashboardId, resources, usePreGenerated = false, user) {
         try {
             // Pre-generated token is dashboard-specific; only use when caller doesn't need a specific dashboard
             if (usePreGenerated && this.config.guestToken) {
@@ -160,7 +171,7 @@ export class SupersetService {
             const guestTokenRequest = {
                 resources: resources || [{ type: 'dashboard', id: dashboardIdStr }],
                 rls: [],
-                user: {
+                user: user ?? {
                     username: 'guest',
                     first_name: 'Guest',
                     last_name: 'User',
@@ -183,6 +194,9 @@ export class SupersetService {
             });
             if (!response.ok) {
                 const errorText = await response.text();
+                if (response.status === 403 && user?.username) {
+                    throw new SupersetAccessDeniedError(user.username);
+                }
                 throw new Error(`Failed to generate guest token: ${response.statusText}. ${errorText}`);
             }
             const data = await response.json();

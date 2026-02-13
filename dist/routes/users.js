@@ -5,20 +5,21 @@ import express from 'express';
 import { getAllUsers, getUserByEmail, createUser, updateUser, deactivateUser, } from '../services/UserService.js';
 import { resetPassword } from '../services/AuthService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { syncUserToSuperset, isSupersetUserSyncEnabled, } from '../services/SupersetUserService.js';
 const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);
 router.use(requireAdmin);
 /**
  * POST /users
- * Create a new user
+ * Create a new user (and sync to Superset if configured)
  */
 router.post('/', async (req, res) => {
     try {
         if (!req.user) {
             return res.status(401).json({ error: 'Authentication required' });
         }
-        const { email, displayName, authType, password } = req.body;
+        const { email, displayName, authType, password, supersetRoleIds } = req.body;
         if (!email || !authType) {
             return res.status(400).json({ error: 'Email and authType are required' });
         }
@@ -34,6 +35,9 @@ router.post('/', async (req, res) => {
                 });
             }
         }
+        const roleIds = Array.isArray(supersetRoleIds)
+            ? supersetRoleIds.filter((r) => typeof r === 'number').map(Number)
+            : [];
         const result = await createUser({
             email,
             displayName,
@@ -43,6 +47,9 @@ router.post('/', async (req, res) => {
         });
         if ('error' in result) {
             return res.status(400).json({ error: result.error });
+        }
+        if (isSupersetUserSyncEnabled()) {
+            await syncUserToSuperset(email, displayName || null, roleIds);
         }
         const response = {
             user: {

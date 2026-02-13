@@ -6,14 +6,31 @@
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { supersetService, SupersetAccessDeniedError } from '../services/SupersetService.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { getUserById } from '../services/AuthService.js';
 import {
   checkSupersetDashboardAccess,
   isSupersetAccessCheckEnabled,
 } from '../services/SupersetAccessService.js';
+import { getSupersetRoles } from '../services/SupersetUserService.js';
 
 const router = Router();
+
+/**
+ * GET /api/superset/roles
+ * Fetch Superset roles from ab_role (admin only)
+ */
+router.get('/roles', authenticate, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const roles = await getSupersetRoles();
+    res.json(roles);
+  } catch (error: any) {
+    console.error('Error fetching Superset roles:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to fetch Superset roles',
+    });
+  }
+});
 
 /**
  * POST /api/superset/embed-token
