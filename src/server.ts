@@ -31,6 +31,7 @@ import nodeSchoolRoutes from './routes/nodeSchools.js';
 import schoolNodeRoutes from './routes/schoolNode.js';
 import userAccessRoutes from './routes/userAccess.js';
 import userMeRoutes from './routes/userMe.js';
+import sidebarAccessRoutes from './routes/sidebarAccess.js';
 import adminSchoolsRoutes from './routes/adminSchools.js';
 import accessGroupsRoutes from './routes/accessGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
@@ -103,6 +104,7 @@ app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for 
 app.use('/api/users', userAccessRoutes); // User access management routes
 app.use('/api/access-groups', accessGroupsRoutes);
 app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
+app.use('/api/sidebar-access', sidebarAccessRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
