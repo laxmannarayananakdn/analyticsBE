@@ -20,8 +20,13 @@ export declare function createUser(createRequest: CreateUserRequest): Promise<{
 }>;
 /**
  * Update user
+ * When switching to AppRegistration: clears Password_Hash.
+ * When switching to Password: generates temporary password (returned).
  */
-export declare function updateUser(email: string, updateRequest: UpdateUserRequest): Promise<User>;
+export declare function updateUser(email: string, updateRequest: UpdateUserRequest): Promise<{
+    user: User;
+    temporaryPassword?: string;
+}>;
 /**
  * Deactivate user (soft delete)
  */

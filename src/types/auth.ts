@@ -98,6 +98,7 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   displayName?: string;
   isActive?: boolean;
+  authType?: 'AppRegistration' | 'Password';
 }
 
 export interface CreateDepartmentRequest {

@@ -2,7 +2,7 @@
  * User Management Service
  */
 import { executeQuery } from '../config/database.js';
-import { createUser as authCreateUser } from './AuthService.js';
+import { createUser as authCreateUser, hashPassword, generateTemporaryPassword } from './AuthService.js';
 /**
  * Get all users
  */
@@ -31,8 +31,14 @@ export async function createUser(createRequest) {
 }
 /**
  * Update user
+ * When switching to AppRegistration: clears Password_Hash.
+ * When switching to Password: generates temporary password (returned).
  */
 export async function updateUser(email, updateRequest) {
+    const user = await getUserByEmail(email);
+    if (!user) {
+        throw new Error('User not found');
+    }
     const updates = [];
     const params = { email };
     if (updateRequest.displayName !== undefined) {
@@ -43,12 +49,24 @@ export async function updateUser(email, updateRequest) {
         updates.push('Is_Active = @isActive');
         params.isActive = updateRequest.isActive ? 1 : 0;
     }
-    if (updates.length === 0) {
-        const user = await getUserByEmail(email);
-        if (!user) {
-            throw new Error('User not found');
+    let temporaryPassword;
+    if (updateRequest.authType !== undefined && updateRequest.authType !== user.Auth_Type) {
+        updates.push('Auth_Type = @authType');
+        params.authType = updateRequest.authType;
+        if (updateRequest.authType === 'AppRegistration') {
+            updates.push('Password_Hash = NULL');
+            updates.push('Is_Temporary_Password = 0');
         }
-        return user;
+        else {
+            temporaryPassword = generateTemporaryPassword();
+            const passwordHash = await hashPassword(temporaryPassword);
+            updates.push('Password_Hash = @passwordHash');
+            updates.push('Is_Temporary_Password = 1');
+            params.passwordHash = passwordHash;
+        }
+    }
+    if (updates.length === 0) {
+        return { user };
     }
     updates.push('Modified_Date = GETDATE()');
     const result = await executeQuery(`UPDATE admin.[User] 
@@ -58,7 +76,7 @@ export async function updateUser(email, updateRequest) {
     if (result.error || !result.data || result.data.length === 0) {
         throw new Error(result.error || 'Failed to update user');
     }
-    return result.data[0];
+    return { user: result.data[0], temporaryPassword };
 }
 /**
  * Deactivate user (soft delete)

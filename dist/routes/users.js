@@ -121,7 +121,8 @@ router.get('/:email', async (req, res) => {
 });
 /**
  * PUT /users/:email
- * Update user
+ * Update user (displayName, isActive, authType)
+ * When switching authType to Password, a temporary password is generated and returned.
  */
 router.put('/:email', async (req, res) => {
     try {
@@ -129,14 +130,24 @@ router.put('/:email', async (req, res) => {
             return res.status(401).json({ error: 'Authentication required' });
         }
         const { email } = req.params;
-        const { displayName, isActive } = req.body;
-        const user = await updateUser(email, { displayName, isActive });
-        res.json({
-            email: user.Email,
-            displayName: user.Display_Name,
-            authType: user.Auth_Type,
-            isActive: user.Is_Active,
-        });
+        const { displayName, isActive, authType } = req.body;
+        if (authType !== undefined && authType !== 'AppRegistration' && authType !== 'Password') {
+            return res.status(400).json({ error: 'authType must be AppRegistration or Password' });
+        }
+        const result = await updateUser(email, { displayName, isActive, authType });
+        const response = {
+            user: {
+                email: result.user.Email,
+                displayName: result.user.Display_Name,
+                authType: result.user.Auth_Type,
+                isActive: result.user.Is_Active,
+                isTemporaryPassword: !!result.user.Is_Temporary_Password,
+            },
+        };
+        if (result.temporaryPassword) {
+            response.temporaryPassword = result.temporaryPassword;
+        }
+        res.json(response);
     }
     catch (error) {
         console.error('Update user error:', error);
