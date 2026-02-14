@@ -122,6 +122,10 @@ export async function authenticateUser(loginRequest) {
     if (user.Is_Temporary_Password) {
         return { error: 'PASSWORD_CHANGE_REQUIRED' };
     }
+    // AppRegistration users must use Microsoft OAuth - reject password login
+    if (user.Auth_Type === 'AppRegistration') {
+        return { error: 'This account uses Microsoft sign-in. Please sign in with Microsoft.' };
+    }
     // For password authentication
     if (user.Auth_Type === 'Password') {
         if (!password) {
@@ -135,7 +139,6 @@ export async function authenticateUser(loginRequest) {
             return { error: 'Invalid email or password' };
         }
     }
-    // For OAuth (Microsoft): handled in authenticateUserWithOAuth
     // Update last login
     await executeQuery(`UPDATE admin.[User] SET Last_Login = GETDATE() WHERE User_ID = @userId`, { userId: user.User_ID });
     // Generate token

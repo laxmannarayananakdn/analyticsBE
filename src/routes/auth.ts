@@ -106,13 +106,23 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   }
 });
 
+function getSessionCookieOptions(): { httpOnly: boolean; secure: boolean; sameSite: 'lax' | 'none'; path: string } {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: '/',
+  };
+}
+
 /**
  * POST /auth/logout
  * Clear session cookie (no auth required - always clear if present)
+ * Uses same options as set to ensure cookie is properly removed in all environments.
  */
 router.post('/logout', async (req, res) => {
   try {
-    res.clearCookie('session');
+    res.clearCookie('session', getSessionCookieOptions());
     res.json({ message: 'Logged out successfully' });
   } catch (error: any) {
     console.error('Logout error:', error);
