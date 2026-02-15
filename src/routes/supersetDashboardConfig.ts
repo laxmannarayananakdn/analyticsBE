@@ -18,7 +18,7 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const activeOnly = req.query.active !== 'false';
     const query = `
-      SELECT id, uuid, name, description, sort_order, is_active, folder
+      SELECT id, uuid, name, description, sort_order, is_active, folder, department_id, report_scope, scope_node_id
       FROM admin.superset_dashboard_configs
       ${activeOnly ? 'WHERE is_active = 1' : ''}
       ORDER BY folder ASC, sort_order ASC, name ASC
@@ -52,7 +52,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
 
     const query = `
-      SELECT id, uuid, name, description, sort_order, is_active, folder, created_at, updated_at
+      SELECT id, uuid, name, description, sort_order, is_active, folder, department_id, report_scope, scope_node_id, created_at, updated_at
       FROM admin.superset_dashboard_configs
       WHERE id = @id
     `;
@@ -81,7 +81,7 @@ router.get('/:id', async (req: Request, res: Response) => {
  */
 router.post('/', authenticate, requireAdmin, async (req: Request, res: Response) => {
   try {
-    const { uuid, name, description, sort_order, is_active, folder } = req.body;
+    const { uuid, name, description, sort_order, is_active, folder, department_id, report_scope, scope_node_id } = req.body;
 
     if (!uuid || !name) {
       return res.status(400).json({ error: 'uuid and name are required' });
@@ -89,11 +89,15 @@ router.post('/', authenticate, requireAdmin, async (req: Request, res: Response)
 
     const validFolders = ['Education', 'Finance', 'HR', 'Operations'];
     const folderValue = folder && validFolders.includes(String(folder).trim()) ? String(folder).trim() : 'Education';
+    const validScopes = ['global', 'country', 'school'];
+    const scopeValue = report_scope && validScopes.includes(String(report_scope).trim())
+      ? String(report_scope).trim()
+      : null;
 
     const query = `
-      INSERT INTO admin.superset_dashboard_configs (uuid, name, description, sort_order, is_active, folder)
-      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder
-      VALUES (@uuid, @name, @description, @sort_order, @is_active, @folder)
+      INSERT INTO admin.superset_dashboard_configs (uuid, name, description, sort_order, is_active, folder, department_id, report_scope, scope_node_id)
+      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder, INSERTED.department_id, INSERTED.report_scope, INSERTED.scope_node_id
+      VALUES (@uuid, @name, @description, @sort_order, @is_active, @folder, @department_id, @scope, @scope_node_id)
     `;
 
     const result = await executeQuery<any>(query, {
@@ -103,6 +107,9 @@ router.post('/', authenticate, requireAdmin, async (req: Request, res: Response)
       sort_order: sort_order ?? 0,
       is_active: is_active !== false ? 1 : 0,
       folder: folderValue,
+      department_id: department_id ? String(department_id).trim() : null,
+      scope: scopeValue,
+      scope_node_id: scope_node_id ? String(scope_node_id).trim() : null,
     });
 
     if (result.error) {
@@ -131,11 +138,15 @@ router.put('/:id', authenticate, requireAdmin, async (req: Request, res: Respons
       return res.status(400).json({ error: 'Invalid ID' });
     }
 
-    const { uuid, name, description, sort_order, is_active, folder } = req.body;
+    const { uuid, name, description, sort_order, is_active, folder, department_id, report_scope, scope_node_id } = req.body;
 
     const validFolders = ['Education', 'Finance', 'HR', 'Operations'];
     const folderValue = folder !== undefined
       ? (folder && validFolders.includes(String(folder).trim()) ? String(folder).trim() : 'Education')
+      : null;
+    const validScopes = ['global', 'country', 'school'];
+    const scopeValue = report_scope !== undefined
+      ? (report_scope && validScopes.includes(String(report_scope).trim()) ? String(report_scope).trim() : null)
       : null;
 
     const query = `
@@ -147,8 +158,11 @@ router.put('/:id', authenticate, requireAdmin, async (req: Request, res: Respons
         sort_order = COALESCE(@sort_order, sort_order),
         is_active = CASE WHEN @is_active IS NULL THEN is_active ELSE @is_active END,
         folder = COALESCE(@folder, folder),
+        department_id = @department_id,
+        report_scope = @report_scope,
+        scope_node_id = @scope_node_id,
         updated_at = SYSDATETIMEOFFSET()
-      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder
+      OUTPUT INSERTED.id, INSERTED.uuid, INSERTED.name, INSERTED.description, INSERTED.sort_order, INSERTED.is_active, INSERTED.folder, INSERTED.department_id, INSERTED.report_scope, INSERTED.scope_node_id
       WHERE id = @id
     `;
 
@@ -160,6 +174,9 @@ router.put('/:id', authenticate, requireAdmin, async (req: Request, res: Respons
       sort_order: sort_order !== undefined ? sort_order : null,
       is_active: is_active !== undefined ? (is_active ? 1 : 0) : null,
       folder: folderValue,
+      department_id: department_id !== undefined ? (department_id ? String(department_id).trim() : null) : null,
+      report_scope: scopeValue ?? null,
+      scope_node_id: scope_node_id !== undefined ? (scope_node_id ? String(scope_node_id).trim() : null) : null,
     });
 
     if (result.error) {

@@ -180,6 +180,44 @@ export async function revokeNodeAccess(email: string, nodeId: string): Promise<v
 }
 
 /**
+ * Get node IDs the user has access to (including descendant nodes via hierarchy).
+ * Used for scope-based report filtering.
+ */
+export async function getUserAccessibleNodeIds(email: string): Promise<string[]> {
+  const result = await executeQuery<{ Node_ID: string }>(
+    `WITH UserDirectNodes AS (
+        SELECT DISTINCT una.Node_ID
+        FROM admin.User_Node_Access una
+        INNER JOIN admin.[User] u ON una.User_ID = u.User_ID
+        WHERE u.User_ID = @email AND u.Is_Active = 1
+    ),
+    UserGroupNodes AS (
+        SELECT DISTINCT gna.Node_ID
+        FROM admin.User_Group ug
+        INNER JOIN admin.[User] u ON ug.User_ID = u.User_ID
+        INNER JOIN admin.Group_Node_Access gna ON ug.Group_ID = gna.Group_ID
+        WHERE u.User_ID = @email AND u.Is_Active = 1
+    ),
+    AllUserNodes AS (
+        SELECT Node_ID FROM UserDirectNodes
+        UNION
+        SELECT Node_ID FROM UserGroupNodes
+    ),
+    NodeHierarchy AS (
+        SELECT Node_ID AS Descendant_Node_ID FROM AllUserNodes
+        UNION ALL
+        SELECT n.Node_ID AS Descendant_Node_ID
+        FROM NodeHierarchy nh
+        INNER JOIN admin.Node n ON nh.Descendant_Node_ID = n.Parent_Node_ID
+    )
+    SELECT DISTINCT Descendant_Node_ID AS Node_ID FROM NodeHierarchy`,
+    { email }
+  );
+  if (result.error) throw new Error(result.error);
+  return (result.data || []).map((r) => r.Node_ID);
+}
+
+/**
  * Revoke specific department access for a node
  */
 export async function revokeDepartmentAccess(

@@ -6,6 +6,7 @@
  */
 
 import { executeQuery } from '../config/database.js';
+import { getUserAccessibleNodeIds } from './AccessService.js';
 
 export interface SidebarItem {
   id: string;
@@ -20,7 +21,8 @@ export interface SidebarAccessMatrix {
   permissions: Record<string, string[]>; // email -> item ids
 }
 
-const ADMIN_ITEMS: { id: string; label: string }[] = [
+/** Admin/dashboard page items for Group_Page_Access (exported for API/UI) */
+export const ADMIN_ITEMS: { id: string; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'admin:superset-config', label: 'Superset Dashboards Config' },
   { id: 'admin:ef-upload', label: 'Upload External Files' },
@@ -33,6 +35,7 @@ const ADMIN_ITEMS: { id: string; label: string }[] = [
   { id: 'admin:access-control', label: 'Access Control' },
   { id: 'admin:access-groups', label: 'Access Groups' },
   { id: 'admin:sidebar-access', label: 'Sidebar Access' },
+  { id: 'admin:report-groups', label: 'Report Groups' },
   { id: 'admin:microsoft-tenant-config', label: 'Microsoft Tenant Config' },
   { id: 'admin:nodes', label: 'Node Management' },
   { id: 'admin:departments', label: 'Department Management' },
@@ -70,17 +73,75 @@ export async function getSidebarItems(): Promise<SidebarItem[]> {
 /**
  * Get item IDs the user is allowed to see.
  * Returns empty array = user has full access (no restrictions).
+ *
+ * Sources (union):
+ * 1. Pages from User Groups (Group_Page_Access via User_Group)
+ * 2. Reports from Report Groups with scope filtering (User_Report_Group -> Report_Group_Report)
+ *
+ * Phase 3: user_sidebar_access removed - use Access Groups + Report Groups only.
+ *
+ * Scope filtering: Report visible only if scope_node_id is in user's accessible nodes.
+ * Reports with null scope_node_id: include (legacy).
  */
 export async function getUserSidebarAccess(email: string): Promise<string[]> {
-  const result = await executeQuery<{ Item_ID: string }>(
-    `SELECT Item_ID FROM admin.user_sidebar_access WHERE User_ID = @email`,
-    { email }
-  );
-  const rows = result.data || [];
-  if (rows.length === 0) {
-    return []; // empty = full access
+  const [groupPagesResult, reportGroupsResult, dashboardsResult] = await Promise.all([
+    executeQuery<{ Item_ID: string }>(
+      `SELECT DISTINCT gpa.Item_ID FROM admin.User_Group ug
+       INNER JOIN admin.Group_Page_Access gpa ON ug.Group_ID = gpa.Group_ID
+       WHERE ug.User_ID = @email`,
+      { email }
+    ),
+    executeQuery<{ Report_Group_ID: string }>(
+      `SELECT Report_Group_ID FROM admin.User_Report_Group WHERE User_ID = @email`,
+      { email }
+    ),
+    executeQuery<{ Report_Group_ID: string; Dashboard_UUID: string }>(
+      `SELECT rgr.Report_Group_ID, rgr.Dashboard_UUID
+       FROM admin.User_Report_Group urg
+       INNER JOIN admin.Report_Group_Report rgr ON urg.Report_Group_ID = rgr.Report_Group_ID
+       WHERE urg.User_ID = @email`,
+      { email }
+    ),
+  ]);
+
+  const groupPages = (groupPagesResult.data || []).map((r) => r.Item_ID);
+  const reportGroupCount = (reportGroupsResult.data || []).length;
+  const dashboardUuids = (dashboardsResult.data || []).map((r) => r.Dashboard_UUID);
+
+  // If no group pages and no report groups -> full access
+  if (groupPages.length === 0 && reportGroupCount === 0) {
+    return [];
   }
-  return rows.map((r) => r.Item_ID);
+
+  const combined = new Set<string>([...groupPages]);
+
+  // Add reports from Report Groups with scope filtering
+  if (dashboardUuids.length > 0) {
+    const [accessibleNodeIds, dashboardScopes] = await Promise.all([
+      getUserAccessibleNodeIds(email),
+      executeQuery<{ uuid: string; scope_node_id: string | null }>(
+        `SELECT uuid, scope_node_id FROM admin.superset_dashboard_configs WHERE is_active = 1`
+      ),
+    ]);
+
+    const scopeByUuid = new Map<string, string | null>();
+    (dashboardScopes.data || []).forEach((d) => scopeByUuid.set(d.uuid, d.scope_node_id || null));
+
+    const nodeSet = new Set(accessibleNodeIds);
+
+    for (const uuid of dashboardUuids) {
+      const scopeNodeId = scopeByUuid.get(uuid);
+      // Include if: no scope (legacy), or user has access to scope_node_id, or scope is HQ and user has HQ
+      if (scopeNodeId === undefined || scopeNodeId === null) {
+        combined.add(`report:${uuid}`);
+      } else if (nodeSet.has(scopeNodeId)) {
+        combined.add(`report:${uuid}`);
+      }
+      // else: user doesn't have access to that node, skip
+    }
+  }
+
+  return Array.from(combined);
 }
 
 /**
