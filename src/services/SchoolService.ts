@@ -56,11 +56,16 @@ export async function assignSchoolToNode(
   }
   
   // Verify school exists in the appropriate schema
-  const schoolSchema = schoolSource === 'nex' ? 'NEX' : 'MB';
-  const schoolResult = await executeQuery(
-    `SELECT TOP 1 id FROM ${schoolSchema}.schools WHERE id = @schoolId OR sourced_id = @schoolId OR identifier = @schoolId`,
-    { schoolId }
-  );
+  // MB.schools has only: id (BIGINT). NEX.schools has: id, sourced_id, identifier.
+  const schoolResult = schoolSource === 'mb'
+    ? await executeQuery(
+        `SELECT TOP 1 id FROM MB.schools WHERE CAST(id AS VARCHAR(50)) = @schoolId`,
+        { schoolId }
+      )
+    : await executeQuery(
+        `SELECT TOP 1 id FROM NEX.schools WHERE id = @schoolId OR sourced_id = @schoolId OR identifier = @schoolId`,
+        { schoolId }
+      );
   
   if (schoolResult.error || !schoolResult.data || schoolResult.data.length === 0) {
     throw new Error(`School not found in ${schoolSource} schema`);
