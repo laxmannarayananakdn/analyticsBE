@@ -48,6 +48,15 @@ export declare function setGroupNodeAccess(groupId: string, nodeAccessList: Arra
  */
 export declare function getUserGroups(email: string): Promise<string[]>;
 /**
+ * Get group's page access (sidebar item IDs: dashboard, admin:*, etc.)
+ */
+export declare function getGroupPageAccess(groupId: string): Promise<string[]>;
+/**
+ * Set group's page access (replaces existing)
+ * itemIds: list of sidebar item IDs (dashboard, admin:nodes, etc. - NOT report:uuid)
+ */
+export declare function setGroupPageAccess(groupId: string, itemIds: string[], createdBy: string): Promise<void>;
+/**
  * Set groups for a user (replaces existing)
  */
 export declare function setUserGroups(email: string, groupIds: string[], createdBy: string): Promise<void>;

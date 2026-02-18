@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import { nexquareService } from '../services/NexquareService/index.js';
 import { loadNexquareConfig } from '../middleware/configLoader.js';
+import { executeQuery } from '../config/database.js';
 const router = Router();
 /**
  * POST /api/nexquare/authenticate
@@ -61,6 +62,16 @@ router.get('/schools', loadNexquareConfig, async (req, res) => {
         }
         const filter = req.query.filter;
         const schools = await nexquareService.getSchools(req.nexquareConfig, filter);
+        // Update config's school_id if empty (use first school's sourcedId)
+        if (schools.length > 0 && schools[0].sourcedId) {
+            const firstSchoolId = schools[0].sourcedId;
+            const updateResult = await executeQuery(`UPDATE NEX.nexquare_school_configs 
+         SET school_id = @schoolId, updated_at = SYSDATETIMEOFFSET() 
+         WHERE id = @configId AND (school_id IS NULL OR school_id = '')`, { configId: req.nexquareConfig.id, schoolId: firstSchoolId });
+            if (!updateResult.error) {
+                console.log(`✅ Updated school_id (${firstSchoolId}) for Nexquare config ID ${req.nexquareConfig.id}`);
+            }
+        }
         res.json({
             success: true,
             count: schools.length,

@@ -2,7 +2,8 @@
  * Access Groups Routes (Admin only)
  */
 import express from 'express';
-import { getAllGroups, getGroupById, createGroup, updateGroup, deleteGroup, getGroupNodeAccess, setGroupNodeAccess, } from '../services/GroupService.js';
+import { getAllGroups, getGroupById, createGroup, updateGroup, deleteGroup, getGroupNodeAccess, setGroupNodeAccess, getGroupPageAccess, setGroupPageAccess, } from '../services/GroupService.js';
+import { ADMIN_ITEMS } from '../services/SidebarAccessService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 router.use(authenticate);
@@ -45,6 +46,14 @@ router.post('/', async (req, res) => {
         }
         res.status(500).json({ error: error.message || 'Internal server error' });
     }
+});
+/**
+ * GET /api/access-groups/available-pages
+ * Returns page items for Group_Page_Access (dashboard, admin:*, etc.)
+ * Must be before /:id to avoid "available-pages" being captured as id
+ */
+router.get('/available-pages', (req, res) => {
+    res.json({ items: ADMIN_ITEMS });
 });
 /**
  * GET /api/access-groups/:id
@@ -125,6 +134,46 @@ router.put('/:id/nodes', async (req, res) => {
     }
     catch (error) {
         console.error('Set group nodes error:', error);
+        if (error.message.includes('not found'))
+            return res.status(404).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /api/access-groups/:id/pages
+ * Get sidebar pages the group grants access to
+ */
+router.get('/:id/pages', async (req, res) => {
+    try {
+        const group = await getGroupById(req.params.id);
+        if (!group)
+            return res.status(404).json({ error: 'Group not found' });
+        const itemIds = await getGroupPageAccess(req.params.id);
+        res.json({ itemIds });
+    }
+    catch (error) {
+        console.error('Get group pages error:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * PUT /api/access-groups/:id/pages
+ * Body: { itemIds: string[] } - dashboard, admin:nodes, etc. (not report:uuid)
+ */
+router.put('/:id/pages', async (req, res) => {
+    try {
+        if (!req.user)
+            return res.status(401).json({ error: 'Authentication required' });
+        const { itemIds } = req.body;
+        if (!Array.isArray(itemIds)) {
+            return res.status(400).json({ error: 'itemIds array is required' });
+        }
+        await setGroupPageAccess(req.params.id, itemIds, req.user.email);
+        const pages = await getGroupPageAccess(req.params.id);
+        res.json({ message: 'Group page access updated', itemIds: pages });
+    }
+    catch (error) {
+        console.error('Set group pages error:', error);
         if (error.message.includes('not found'))
             return res.status(404).json({ error: error.message });
         res.status(500).json({ error: error.message || 'Internal server error' });

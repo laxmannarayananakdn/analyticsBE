@@ -4,6 +4,7 @@
 import express from 'express';
 import { getUserAccess, grantAccess, updateAccess, revokeNodeAccess, revokeDepartmentAccess, } from '../services/AccessService.js';
 import { getUserGroups, setUserGroups } from '../services/GroupService.js';
+import { getUserReportGroups, setUserReportGroups } from '../services/ReportGroupService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 const router = express.Router();
 // All routes require authentication and admin access
@@ -42,6 +43,44 @@ router.put('/:email/groups', async (req, res) => {
     }
     catch (error) {
         console.error('Set user groups error:', error);
+        if (error.message === 'User not found')
+            return res.status(404).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /users/:email/report-groups
+ * Get report groups assigned to user
+ */
+router.get('/:email/report-groups', async (req, res) => {
+    try {
+        const email = decodeURIComponent(req.params.email);
+        const reportGroupIds = await getUserReportGroups(email);
+        res.json({ reportGroupIds });
+    }
+    catch (error) {
+        console.error('Get user report groups error:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * PUT /users/:email/report-groups
+ * Set report groups for user (replaces existing)
+ */
+router.put('/:email/report-groups', async (req, res) => {
+    try {
+        if (!req.user)
+            return res.status(401).json({ error: 'Authentication required' });
+        const email = decodeURIComponent(req.params.email);
+        const { reportGroupIds } = req.body;
+        if (!Array.isArray(reportGroupIds)) {
+            return res.status(400).json({ error: 'reportGroupIds array is required' });
+        }
+        await setUserReportGroups(email, reportGroupIds, req.user.email);
+        res.json({ message: 'User report groups updated', reportGroupIds });
+    }
+    catch (error) {
+        console.error('Set user report groups error:', error);
         if (error.message === 'User not found')
             return res.status(404).json({ error: error.message });
         res.status(500).json({ error: error.message || 'Internal server error' });

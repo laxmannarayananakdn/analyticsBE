@@ -33,6 +33,7 @@ import userMeRoutes from './routes/userMe.js';
 import sidebarAccessRoutes from './routes/sidebarAccess.js';
 import adminSchoolsRoutes from './routes/adminSchools.js';
 import accessGroupsRoutes from './routes/accessGroups.js';
+import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 dotenv.config();
 const app = express();
@@ -93,6 +94,7 @@ app.use('/api/schools', schoolNodeRoutes); // Get node for school (/schools/:id/
 app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for assignment
 app.use('/api/users', userAccessRoutes); // User access management routes
 app.use('/api/access-groups', accessGroupsRoutes);
+app.use('/api/report-groups', reportGroupsRoutes);
 app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
 app.use('/api/sidebar-access', sidebarAccessRoutes);
 // Root endpoint

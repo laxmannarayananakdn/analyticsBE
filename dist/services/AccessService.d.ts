@@ -3,7 +3,8 @@
  */
 import { UserNodeAccess, UserSchoolAccess, GrantAccessRequest } from '../types/auth.js';
 /**
- * Get user's node access assignments
+ * Get user's effective node access (derived from Access Groups only).
+ * Node access is configured in Access Groups; users get access via User Groups assignment.
  */
 export declare function getUserAccess(email: string): Promise<UserNodeAccess[]>;
 /**
@@ -28,6 +29,11 @@ export declare function updateAccess(email: string, nodeId: string, updateReques
  * Revoke all user access to a node
  */
 export declare function revokeNodeAccess(email: string, nodeId: string): Promise<void>;
+/**
+ * Get node IDs the user has access to (from Access Groups only, including descendant nodes via hierarchy).
+ * Used for scope-based report filtering.
+ */
+export declare function getUserAccessibleNodeIds(email: string): Promise<string[]>;
 /**
  * Revoke specific department access for a node
  */

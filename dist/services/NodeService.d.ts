@@ -11,6 +11,11 @@ export declare function getAllNodes(): Promise<NodeTree[]>;
  */
 export declare function getNodeById(nodeId: string): Promise<NodeTree | null>;
 /**
+ * Get Head Office node ID (for global report scope).
+ * Uses Is_Head_Office = 1 first, else topmost node (Parent_Node_ID IS NULL).
+ */
+export declare function getHeadOfficeNodeId(): Promise<string | null>;
+/**
  * Get nodes as tree structure
  */
 export declare function getNodesTree(): Promise<NodeTree[]>;

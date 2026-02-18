@@ -26,7 +26,8 @@ export const loadNexquareConfig = async (req, res, next) => {
         client_id,
         client_secret,
         domain_url,
-        school_name
+        school_name,
+        school_id
       FROM NEX.nexquare_school_configs
       WHERE id = @configId AND is_active = 1
     `;
@@ -74,7 +75,8 @@ export const loadManageBacConfig = async (req, res, next) => {
         id,
         api_token,
         base_url,
-        school_name
+        school_name,
+        school_id
       FROM MB.managebac_school_configs
       WHERE id = @configId AND is_active = 1
     `;

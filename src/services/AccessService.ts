@@ -46,8 +46,9 @@ export async function getUserAccess(email: string): Promise<UserNodeAccess[]> {
     User_ID: email,
     Node_ID: r.Node_ID,
     Department_ID: r.Department_ID,
-    Department_Name: r.Department_Name,
-    Node_Description: r.Node_Description,
+    Created_Date: new Date(),
+    Modified_Date: new Date(),
+    Created_By: null,
   }));
 }
 

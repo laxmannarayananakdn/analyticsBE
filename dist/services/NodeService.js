@@ -51,6 +51,20 @@ function transformNode(node) {
     };
 }
 /**
+ * Get Head Office node ID (for global report scope).
+ * Uses Is_Head_Office = 1 first, else topmost node (Parent_Node_ID IS NULL).
+ */
+export async function getHeadOfficeNodeId() {
+    const result = await executeQuery(`SELECT TOP 1 Node_ID FROM admin.Node WHERE Is_Head_Office = 1`);
+    if (result.error || !result.data || result.data.length === 0) {
+        const fallback = await executeQuery(`SELECT TOP 1 Node_ID FROM admin.Node WHERE Parent_Node_ID IS NULL`);
+        if (fallback.error || !fallback.data || fallback.data.length === 0)
+            return null;
+        return fallback.data[0].Node_ID;
+    }
+    return result.data[0].Node_ID;
+}
+/**
  * Get nodes as tree structure
  */
 export async function getNodesTree() {

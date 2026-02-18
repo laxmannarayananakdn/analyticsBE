@@ -6,6 +6,7 @@ import { Router } from 'express';
 import { manageBacService } from '../services/ManageBacService.js';
 import { databaseService } from '../services/DatabaseService.js';
 import { loadManageBacConfig } from '../middleware/configLoader.js';
+import { executeQuery } from '../config/database.js';
 const router = Router();
 /**
  * Helper to get API key from request (for backward compatibility when config_id not provided)
@@ -91,6 +92,15 @@ router.get('/school', loadManageBacConfig, async (req, res) => {
             apiKey = directKey;
         }
         const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
+        // Update config's school_id if empty (when using config_id)
+        if (req.manageBacConfig && school?.id != null) {
+            const updateResult = await executeQuery(`UPDATE MB.managebac_school_configs 
+         SET school_id = @schoolId, updated_at = SYSDATETIMEOFFSET() 
+         WHERE id = @configId AND (school_id IS NULL OR school_id = 0)`, { configId: req.manageBacConfig.id, schoolId: school.id });
+            if (!updateResult.error) {
+                console.log(`✅ Updated school_id (${school.id}) for ManageBac config ID ${req.manageBacConfig.id}`);
+            }
+        }
         res.json(school);
     }
     catch (error) {

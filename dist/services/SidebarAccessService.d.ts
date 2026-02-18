@@ -18,6 +18,11 @@ export interface SidebarAccessMatrix {
     items: SidebarItem[];
     permissions: Record<string, string[]>;
 }
+/** Admin/dashboard page items for Group_Page_Access (exported for API/UI) */
+export declare const ADMIN_ITEMS: {
+    id: string;
+    label: string;
+}[];
 /**
  * Get all sidebar items (static + dynamic reports from superset_dashboard_configs)
  */
@@ -25,6 +30,13 @@ export declare function getSidebarItems(): Promise<SidebarItem[]>;
 /**
  * Get item IDs the user is allowed to see.
  * Returns empty array = user has full access (no restrictions).
+ *
+ * Sources (union):
+ * 1. Pages from User Groups (Group_Page_Access via User_Group)
+ * 2. Reports from Report Groups only (User_Report_Group -> Report_Group_Report)
+ *
+ * Report folders and reports flow from Report Groups alone.
+ * Scope (scope_node_id) filtering is not applied here; RLS in Superset handles data filtering per report.
  */
 export declare function getUserSidebarAccess(email: string): Promise<string[]>;
 /**

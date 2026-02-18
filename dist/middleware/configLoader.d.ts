@@ -9,12 +9,14 @@ export interface NexquareConfig {
     client_secret: string;
     domain_url: string;
     school_name: string;
+    school_id?: string | null;
 }
 export interface ManageBacConfig {
     id: number;
     api_token: string;
     base_url: string;
     school_name: string;
+    school_id?: number | null;
 }
 declare global {
     namespace Express {

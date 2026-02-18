@@ -3,19 +3,45 @@
  */
 import { executeQuery } from '../config/database.js';
 /**
- * Get user's node access assignments
+ * Get user's effective node access (derived from Access Groups only).
+ * Node access is configured in Access Groups; users get access via User Groups assignment.
  */
 export async function getUserAccess(email) {
-    const result = await executeQuery(`SELECT una.*, d.Department_Name, n.Node_Description
-     FROM admin.User_Node_Access una
-     INNER JOIN admin.Department d ON una.Department_ID = d.Department_ID
-     INNER JOIN admin.Node n ON una.Node_ID = n.Node_ID
-     WHERE una.User_ID = @email
-     ORDER BY una.Node_ID, una.Department_ID`, { email });
+    const result = await executeQuery(`WITH UserGroupNodes AS (
+        SELECT DISTINCT gna.Node_ID, gna.Department_ID
+        FROM admin.User_Group ug
+        INNER JOIN admin.[User] u ON ug.User_ID = u.User_ID
+        INNER JOIN admin.Group_Node_Access gna ON ug.Group_ID = gna.Group_ID
+        WHERE u.User_ID = @email AND u.Is_Active = 1
+    ),
+    NodeHierarchy AS (
+        SELECT Node_ID AS Ancestor_Node_ID, Node_ID AS Descendant_Node_ID, Department_ID
+        FROM UserGroupNodes
+        UNION ALL
+        SELECT nh.Ancestor_Node_ID, n.Node_ID AS Descendant_Node_ID, nh.Department_ID
+        FROM NodeHierarchy nh
+        INNER JOIN admin.Node n ON nh.Descendant_Node_ID = n.Parent_Node_ID
+    ),
+    EffectiveNodes AS (
+        SELECT DISTINCT nh.Descendant_Node_ID AS Node_ID, nh.Department_ID
+        FROM NodeHierarchy nh
+    )
+    SELECT en.Node_ID, en.Department_ID, d.Department_Name, n.Node_Description
+    FROM EffectiveNodes en
+    INNER JOIN admin.Department d ON en.Department_ID = d.Department_ID
+    INNER JOIN admin.Node n ON en.Node_ID = n.Node_ID
+    ORDER BY en.Node_ID, en.Department_ID`, { email });
     if (result.error) {
         throw new Error(result.error);
     }
-    return result.data || [];
+    return (result.data || []).map((r) => ({
+        User_ID: email,
+        Node_ID: r.Node_ID,
+        Department_ID: r.Department_ID,
+        Created_Date: new Date(),
+        Modified_Date: new Date(),
+        Created_By: null,
+    }));
 }
 /**
  * Get user's school access (using database function)
@@ -109,6 +135,30 @@ export async function revokeNodeAccess(email, nodeId) {
     if (result.error) {
         throw new Error(result.error);
     }
+}
+/**
+ * Get node IDs the user has access to (from Access Groups only, including descendant nodes via hierarchy).
+ * Used for scope-based report filtering.
+ */
+export async function getUserAccessibleNodeIds(email) {
+    const result = await executeQuery(`WITH UserGroupNodes AS (
+        SELECT DISTINCT gna.Node_ID
+        FROM admin.User_Group ug
+        INNER JOIN admin.[User] u ON ug.User_ID = u.User_ID
+        INNER JOIN admin.Group_Node_Access gna ON ug.Group_ID = gna.Group_ID
+        WHERE u.User_ID = @email AND u.Is_Active = 1
+    ),
+    NodeHierarchy AS (
+        SELECT Node_ID AS Descendant_Node_ID FROM UserGroupNodes
+        UNION ALL
+        SELECT n.Node_ID AS Descendant_Node_ID
+        FROM NodeHierarchy nh
+        INNER JOIN admin.Node n ON nh.Descendant_Node_ID = n.Parent_Node_ID
+    )
+    SELECT DISTINCT Descendant_Node_ID AS Node_ID FROM NodeHierarchy`, { email });
+    if (result.error)
+        throw new Error(result.error);
+    return (result.data || []).map((r) => r.Node_ID);
 }
 /**
  * Revoke specific department access for a node

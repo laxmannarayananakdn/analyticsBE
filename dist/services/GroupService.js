@@ -102,6 +102,37 @@ export async function getUserGroups(email) {
     return (result.data || []).map((r) => r.Group_ID);
 }
 /**
+ * Get group's page access (sidebar item IDs: dashboard, admin:*, etc.)
+ */
+export async function getGroupPageAccess(groupId) {
+    const result = await executeQuery(`SELECT Item_ID FROM admin.Group_Page_Access WHERE Group_ID = @groupId ORDER BY Item_ID`, { groupId });
+    if (result.error)
+        throw new Error(result.error);
+    return (result.data || []).map((r) => r.Item_ID);
+}
+/**
+ * Set group's page access (replaces existing)
+ * itemIds: list of sidebar item IDs (dashboard, admin:nodes, etc. - NOT report:uuid)
+ */
+export async function setGroupPageAccess(groupId, itemIds, createdBy) {
+    const group = await getGroupById(groupId);
+    if (!group)
+        throw new Error('Group not found');
+    await executeQuery(`DELETE FROM admin.Group_Page_Access WHERE Group_ID = @groupId`, { groupId });
+    if (itemIds.length === 0)
+        return;
+    const insertParts = [];
+    const params = { groupId, createdBy };
+    itemIds.forEach((itemId, i) => {
+        insertParts.push(`(@groupId, @itemId${i}, @createdBy)`);
+        params[`itemId${i}`] = itemId;
+    });
+    const sql = `INSERT INTO admin.Group_Page_Access (Group_ID, Item_ID, Created_By) VALUES ${insertParts.join(', ')}`;
+    const result = await executeQuery(sql, params);
+    if (result.error)
+        throw new Error(result.error);
+}
+/**
  * Set groups for a user (replaces existing)
  */
 export async function setUserGroups(email, groupIds, createdBy) {
