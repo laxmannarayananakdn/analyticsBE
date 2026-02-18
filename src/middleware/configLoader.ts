@@ -12,6 +12,7 @@ export interface NexquareConfig {
   client_secret: string;
   domain_url: string;
   school_name: string;
+  school_id?: string | null;
 }
 
 export interface ManageBacConfig {
@@ -19,6 +20,7 @@ export interface ManageBacConfig {
   api_token: string;
   base_url: string;
   school_name: string;
+  school_id?: number | null;
 }
 
 // Extend Express Request to include configs
@@ -57,7 +59,8 @@ export const loadNexquareConfig = async (req: Request, res: Response, next: Next
         client_id,
         client_secret,
         domain_url,
-        school_name
+        school_name,
+        school_id
       FROM NEX.nexquare_school_configs
       WHERE id = @configId AND is_active = 1
     `;
@@ -112,7 +115,8 @@ export const loadManageBacConfig = async (req: Request, res: Response, next: Nex
         id,
         api_token,
         base_url,
-        school_name
+        school_name,
+        school_id
       FROM MB.managebac_school_configs
       WHERE id = @configId AND is_active = 1
     `;
