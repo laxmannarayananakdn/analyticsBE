@@ -213,9 +213,22 @@ export class SupersetService {
 
       // Otherwise, generate a new guest token using authentication
       console.log('🔐 Generating new guest token via authentication...');
-      const accessToken = await this.getAccessToken();
-      // CSRF endpoint on Azure Superset requires Bearer token, not Basic auth
-      const { token: csrfToken, cookieHeader } = await this.getCsrfToken(accessToken);
+      let accessToken = await this.getAccessToken();
+      let csrfResult: { token: string; cookieHeader?: string };
+      try {
+        csrfResult = await this.getCsrfToken(accessToken);
+      } catch (csrfErr: any) {
+        // Token may have expired - clear cache and retry with fresh login
+        if (csrfErr?.message?.includes('401') || csrfErr?.message?.toLowerCase().includes('expired')) {
+          console.log('🔄 Access token expired, refreshing...');
+          this.accessTokenCache = null;
+          accessToken = await this.getAccessToken();
+          csrfResult = await this.getCsrfToken(accessToken);
+        } else {
+          throw csrfErr;
+        }
+      }
+      const { token: csrfToken, cookieHeader } = csrfResult;
 
       const dashboardIdStr = typeof dashboardId === 'string' ? dashboardId : String(dashboardId);
       const guestTokenRequest: GuestTokenRequest = {
