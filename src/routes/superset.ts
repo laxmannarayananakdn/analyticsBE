@@ -10,6 +10,7 @@ import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { getUserById } from '../services/AuthService.js';
 import {
   checkSupersetDashboardAccess,
+  getRlsRulesForUser,
   isSupersetAccessCheckEnabled,
 } from '../services/SupersetAccessService.js';
 import { getSupersetRoles } from '../services/SupersetUserService.js';
@@ -72,6 +73,8 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
       last_name: lastName,
     };
 
+    console.log('👤 Superset embed user:', JSON.stringify(supersetUser), '(matches webapp user:', user.email + ')');
+
     // 0. Optional: Check Superset Postgres for user existence and dashboard access (Option A)
     if (isSupersetAccessCheckEnabled()) {
       const accessResult = await checkSupersetDashboardAccess(user.email, dashboardIdString);
@@ -84,10 +87,19 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
       }
     }
 
+    // Fetch RLS rules for this user from Superset (so embedded view matches direct Superset login)
+    const rlsRules = await getRlsRulesForUser(user.email);
+
     // 1. Try Superset API first - token is signed by Superset, so it will always be accepted
     if (process.env.SUPERSET_USERNAME || process.env.SUPERSET_API_KEY) {
       try {
-        const result = await supersetService.generateGuestToken(dashboardIdString, undefined, false, supersetUser);
+        const result = await supersetService.generateGuestToken(
+          dashboardIdString,
+          undefined,
+          false,
+          supersetUser,
+          rlsRules
+        );
         if (result.token) {
           console.log('🔐 Guest token from Superset API for dashboard:', dashboardIdString);
           return res.json({ token: result.token, dashboardId: dashboardIdString });
@@ -116,7 +128,7 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
     const payload = {
       user: supersetUser,
       resources: [{ type: 'dashboard', id: dashboardIdString }],
-      rls_rules: [] as Array<{ clause: string; dataset?: string }>,
+      rls_rules: rlsRules.map((r) => ({ clause: r.clause, dataset: r.dataset })),
       iat: now,
       exp: now + 60 * 60,
       aud: process.env.GUEST_TOKEN_JWT_AUDIENCE || 'superset',

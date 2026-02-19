@@ -13,6 +13,12 @@ export interface SupersetAccessCheckResult {
   reason?: string; // "user_not_found" | "no_dashboard_access"
 }
 
+/** RLS rule for guest token - matches Superset's expected format */
+export interface SupersetRlsRule {
+  clause: string;
+  dataset: number;
+}
+
 interface SupersetDbConfig {
   connectionString?: string;
   host?: string;
@@ -160,4 +166,52 @@ export async function checkSupersetDashboardAccess(
  */
 export function isSupersetAccessCheckEnabled(): boolean {
   return getSupersetDbConfig() !== null;
+}
+
+/**
+ * Get RLS (Row Level Security) rules for a Superset user by email/username.
+ * Returns rules from row_level_security_filters that apply to the user's roles.
+ * Used to pass RLS into guest tokens so embedded dashboards show the same
+ * restricted data as when the user logs in directly to Superset.
+ *
+ * @param userEmail - User's email (must match ab_user.username or ab_user.email)
+ * @returns Array of { clause, dataset } for the guest token, or [] if none/user not found
+ */
+export async function getRlsRulesForUser(
+  userEmail: string
+): Promise<SupersetRlsRule[]> {
+  const db = getPool();
+  if (!db) {
+    return [];
+  }
+
+  try {
+    // Get RLS rules: filters that apply to the user's roles, with their dataset (table) mappings
+    // Schema: row_level_security_filters, rls_filter_roles, rls_filter_tables, ab_user_role, ab_user
+    const result = await db.query(
+      `SELECT DISTINCT rlsf.clause, rft.table_id AS dataset_id
+       FROM row_level_security_filters rlsf
+       JOIN rls_filter_roles rfr ON rlsf.id = rfr.rls_filter_id
+       JOIN rls_filter_tables rft ON rlsf.id = rft.rls_filter_id
+       JOIN ab_user_role aur ON rfr.role_id = aur.role_id
+       JOIN ab_user u ON aur.user_id = u.id
+       WHERE (u.username = $1 OR u.email = $1) AND u.active = true`,
+      [userEmail]
+    );
+
+    const rules: SupersetRlsRule[] = result.rows.map((r: { clause: string; dataset_id: number }) => ({
+      clause: r.clause,
+      dataset: r.dataset_id,
+    }));
+
+    if (rules.length > 0) {
+      console.log(
+        `🔒 RLS: Loaded ${rules.length} rule(s) for ${userEmail} (roles from Superset)`
+      );
+    }
+    return rules;
+  } catch (err) {
+    console.error('SupersetAccessService: Error fetching RLS rules:', err);
+    return [];
+  }
 }
