@@ -133,6 +133,72 @@ router.get('/verify-school', loadNexquareConfig, async (req: Request, res: Respo
 });
 
 /**
+ * GET /api/nexquare/sync-stream/:endpoint
+ * SSE endpoint - streams logs and final result for long-running syncs (students, staff, classes, student-assessments)
+ */
+router.get('/sync-stream/:endpoint', loadNexquareConfig, async (req: Request, res: Response) => {
+  const endpoint = req.params.endpoint as string;
+  if (!['students', 'staff', 'classes', 'student-assessments'].includes(endpoint)) {
+    return res.status(400).json({ error: 'sync-stream only supports: students, staff, classes, student-assessments' });
+  }
+
+  if (!req.nexquareConfig) {
+    return res.status(400).json({ error: 'config_id is required for sync-stream' });
+  }
+
+  const schoolId = req.query.schoolId as string | undefined;
+  if (['students', 'staff', 'classes', 'student-assessments'].includes(endpoint) && !schoolId) {
+    return res.status(400).json({ error: 'schoolId is required for this endpoint' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (data: object) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    res.flush?.();
+  };
+
+  try {
+    if (endpoint === 'students') {
+      const filter = req.query.filter as string | undefined;
+      const fetchMode = req.query.fetchMode ? parseInt(req.query.fetchMode as string) : 1;
+      const students = await nexquareService.getStudents(req.nexquareConfig, schoolId, filter, fetchMode, (msg) => send({ type: 'log', msg }));
+      send({ type: 'done', data: students, count: students.length, success: true, schoolId: schoolId || nexquareService.getCurrentSchoolId() });
+    } else if (endpoint === 'staff') {
+      const filter = req.query.filter as string | undefined;
+      const staff = await nexquareService.getStaff(req.nexquareConfig, schoolId, filter, (msg) => send({ type: 'log', msg }));
+      send({ type: 'done', data: staff, count: staff.length, success: true, schoolId: schoolId || nexquareService.getCurrentSchoolId() });
+    } else if (endpoint === 'classes') {
+      const classes = await nexquareService.getClasses(req.nexquareConfig, schoolId, (msg) => send({ type: 'log', msg }));
+      send({ type: 'done', data: classes, count: classes.length, success: true, schoolId: schoolId || nexquareService.getCurrentSchoolId() });
+    } else if (endpoint === 'student-assessments') {
+      const academicYear = req.query.academicYear as string | undefined;
+      const fileName = req.query.fileName as string | undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10000;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      const assessments = await nexquareService.getStudentAssessments(
+        req.nexquareConfig,
+        schoolId,
+        academicYear,
+        fileName,
+        limit,
+        offset,
+        (msg) => send({ type: 'log', msg })
+      );
+      send({ type: 'done', data: assessments, count: assessments.length, success: true, schoolId: schoolId || nexquareService.getCurrentSchoolId() });
+    }
+  } catch (error: any) {
+    send({ type: 'done', error: error.message || 'Unknown error', success: false });
+  } finally {
+    res.end();
+  }
+});
+
+/**
  * GET /api/nexquare/status
  * Get current service status
  */

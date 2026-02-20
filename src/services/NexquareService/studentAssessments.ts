@@ -25,8 +25,13 @@ export async function getStudentAssessments(
   academicYear?: string,
   fileName?: string,
   limit: number = 10000,
-  offset: number = 0
+  offset: number = 0,
+  onLog?: (msg: string) => void
 ): Promise<any[]> {
+  const log = (msg: string) => {
+    console.log(msg);
+    onLog?.(msg);
+  };
   try {
     const targetSchoolId = schoolId || this.getCurrentSchoolId();
     if (!targetSchoolId) {
@@ -39,18 +44,18 @@ export async function getStudentAssessments(
     // Get the school sourced_id from sourced_id
     const schoolSourcedId = await (this as any).getSchoolSourcedId(targetSchoolId);
     if (!schoolSourcedId) {
-      console.warn(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Assessments will be saved with school_id = NULL.`);
+      log(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Assessments will be saved with school_id = NULL.`);
     }
 
-    console.log(`📊 Fetching student assessments for school ${targetSchoolId}, academic year ${defaultAcademicYear}...`);
-    console.log(`   Using chunked fetching: ${limit} records per request`);
+    log(`📋 Step 1: Fetching student assessments from Nexquare API (school: ${targetSchoolId}, academic year: ${defaultAcademicYear})...`);
+    log(`   Using chunked fetching: ${limit} records per request`);
 
     const endpoint = NEXQUARE_ENDPOINTS.STUDENT_ASSESSMENTS;
     let allRecords: any[] = [];
     let totalInserted = 0;
 
     // Fetch data in chunks to avoid memory issues with large files
-    console.log(`\n📥 Fetching assessment data in chunks...`);
+    log(`📥 Fetching assessment data in chunks...`);
     
     const chunkSize = limit; // Use the limit parameter (default 10000)
     let currentOffset = offset; // Start from the offset parameter (default 0)
@@ -59,7 +64,7 @@ export async function getStudentAssessments(
     let totalFetched = 0;
     
     while (hasMoreData) {
-      console.log(`\n   📦 Fetching chunk ${chunkNumber} (offset: ${currentOffset}, limit: ${chunkSize})...`);
+      log(`   📦 Fetching chunk ${chunkNumber} (offset: ${currentOffset}, limit: ${chunkSize})...`);
       
       // Build query parameters with offset and limit
       const queryParams = new URLSearchParams();
@@ -80,19 +85,19 @@ export async function getStudentAssessments(
         buffer = fileResponse.buffer;
         contentType = fileResponse.contentType;
       } catch (error: any) {
-        console.error(`❌ Failed to fetch chunk ${chunkNumber}:`, error);
+        log(`❌ Failed to fetch chunk ${chunkNumber}: ${error.message}`);
         throw error;
       }
       
       if (!buffer || buffer.length === 0) {
-        console.log(`   ✅ No more data returned (chunk ${chunkNumber} is empty)`);
+        log(`   ✅ No more data returned (chunk ${chunkNumber} is empty)`);
         hasMoreData = false;
         break;
       }
 
       // Log file size for debugging
       const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
-      console.log(`   📦 Chunk ${chunkNumber} size: ${fileSizeMB} MB (${buffer.length.toLocaleString()} bytes)`);
+      log(`   📦 Chunk ${chunkNumber} size: ${fileSizeMB} MB (${buffer.length.toLocaleString()} bytes)`);
 
       // Detect file type from content-type or file signature
       const isExcel = contentType.includes('spreadsheet') || 
@@ -488,11 +493,11 @@ export async function getStudentAssessments(
     if (chunkRecords.length > 0) {
       allRecords.push(...chunkRecords);
       totalFetched += chunkRecords.length;
-      console.log(`   ✅ Chunk ${chunkNumber} complete: ${chunkRecords.length} records (total so far: ${totalFetched})`);
+      log(`   ✅ Chunk ${chunkNumber} complete: ${chunkRecords.length} records (total so far: ${totalFetched})`);
       
       // Check if we've reached the end (got fewer records than requested)
       if (chunkRecords.length < chunkSize) {
-        console.log(`   📊 Reached end of data (got ${chunkRecords.length} < ${chunkSize} records)`);
+        log(`   📊 Reached end of data (got ${chunkRecords.length} < ${chunkSize} records)`);
         hasMoreData = false;
       } else {
         // Move to next chunk
@@ -501,7 +506,7 @@ export async function getStudentAssessments(
       }
     } else {
       // No records in this chunk - we're done
-      console.log(`   📊 No records in chunk ${chunkNumber} - reached end of data`);
+      log(`   📊 No records in chunk ${chunkNumber} - reached end of data`);
       hasMoreData = false;
     }
     
@@ -513,15 +518,15 @@ export async function getStudentAssessments(
     
     // After fetching all chunks, process all records
     if (allRecords.length === 0) {
-      console.log(`\n✅ No records found in any chunk.`);
+      log(`✅ No records found in any chunk.`);
       return [];
     }
 
-    console.log(`\n   📊 Total records fetched across all chunks: ${allRecords.length}`);
+    log(`✅ Step 1 complete: Fetched ${allRecords.length} records across all chunks`);
 
     // Process records by grade_name to reduce memory usage
     // Group records by grade_name
-    console.log(`\n📚 Grouping records by grade_name for efficient processing...`);
+    log(`📋 Step 2: Saving assessment records to database (NEX.student_assessments)...`);
     const recordsByGrade = new Map<string, any[]>();
     
     for (const record of allRecords) {
@@ -533,46 +538,45 @@ export async function getStudentAssessments(
     }
     
     const gradeNames = Array.from(recordsByGrade.keys()).sort();
-    console.log(`   📊 Found ${gradeNames.length} unique grade(s): ${gradeNames.join(', ')}`);
+    log(`   📊 Found ${gradeNames.length} unique grade(s): ${gradeNames.join(', ')}`);
     
     // Process each grade separately to reduce memory pressure
-    console.log(`\n💾 Processing and saving records by grade...`);
     for (const gradeName of gradeNames) {
       const gradeRecords = recordsByGrade.get(gradeName)!;
-      console.log(`\n   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
+      log(`   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
       
       try {
         const gradeInserted = await (this as any).saveAssessmentBatch(gradeRecords, schoolSourcedId);
         totalInserted += gradeInserted;
-        console.log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
+        log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
         
         // Clear the grade records from memory after processing
         recordsByGrade.delete(gradeName);
       } catch (gradeError: any) {
-        console.error(`   ❌ Failed to save records for grade "${gradeName}":`, gradeError.message);
+        log(`   ❌ Failed to save records for grade "${gradeName}": ${gradeError.message}`);
         // Continue with other grades even if one fails
       }
     }
     
-    console.log(`\n   ✅ Total saved: ${totalInserted} record(s) across all grades`);
+    log(`✅ Step 2 complete: Saved ${totalInserted} record(s) to NEX.student_assessments`);
 
     // Sync data to RP.student_assessments after processing completes
     if (schoolSourcedId) {
-      console.log(`\n🔄 Syncing student assessments to RP schema...`);
+      log(`📋 Step 3: Syncing to RP.student_assessments...`);
       try {
         const rpInserted = await (this as any).syncStudentAssessmentsToRP(schoolSourcedId);
-        console.log(`   ✅ Synced ${rpInserted} record(s) to RP.student_assessments`);
+        log(`✅ Step 3 complete: Synced ${rpInserted} record(s) to RP.student_assessments`);
       } catch (rpError: any) {
-        console.error(`   ⚠️  Failed to sync to RP.student_assessments:`, rpError.message);
+        log(`⚠️  Step 3 failed: ${rpError.message}`);
         // Don't throw - allow the main process to complete even if RP sync fails
       }
     } else {
-      console.log(`   ⚠️  Skipping RP sync - school sourced_id not available`);
+      log(`⚠️  Skipping RP sync - school sourced_id not available`);
     }
 
-    console.log(`\n✅ Completed fetching all assessment data`);
-    console.log(`   Total records fetched: ${allRecords.length}`);
-    console.log(`   Total records saved: ${totalInserted}`);
+    log(`✅ Student assessments sync complete`);
+    log(`   Total records fetched: ${allRecords.length}`);
+    log(`   Total records saved: ${totalInserted}`);
 
     return allRecords;
   } catch (error) {

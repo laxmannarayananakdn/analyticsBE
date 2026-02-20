@@ -16,15 +16,20 @@ import type { BaseNexquareService } from './BaseNexquareService.js';
 export async function getClasses(
   this: BaseNexquareService,
   config: NexquareConfig,
-  schoolId?: string
+  schoolId?: string,
+  onLog?: (msg: string) => void
 ): Promise<NexquareClass[]> {
+  const log = (msg: string) => {
+    console.log(msg);
+    onLog?.(msg);
+  };
   try {
     const targetSchoolId = schoolId || this.getCurrentSchoolId();
     if (!targetSchoolId) {
       throw new Error('School ID is required');
     }
 
-    console.log(`📚 Fetching classes for school ${targetSchoolId}...`);
+    log(`📋 Step 1: Fetching classes from Nexquare API for school ${targetSchoolId}...`);
     
     const allClasses: NexquareClass[] = [];
     let offset = 0;
@@ -47,7 +52,7 @@ export async function getClasses(
       }
 
       allClasses.push(...classes);
-      console.log(`   Fetched ${classes.length} classes (total: ${allClasses.length})`);
+      log(`   📄 Page at offset ${offset}: fetched ${classes.length} classes (total: ${allClasses.length})`);
 
       // If we got fewer than the limit, we've reached the end
       if (classes.length < limit) {
@@ -60,14 +65,14 @@ export async function getClasses(
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    console.log(`✅ Found ${allClasses.length} total class(es)`);
+    log(`✅ Step 1 complete: Fetched ${allClasses.length} classes from API`);
 
     // Save classes to database using bulk insert
-    console.log('💾 Preparing classes for bulk insert...');
+    log(`📋 Step 2: Saving ${allClasses.length} classes to database (NEX.classes)...`);
     
     const schoolSourcedId = await (this as any).getSchoolSourcedId(targetSchoolId);
     if (!schoolSourcedId) {
-      console.warn(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Classes will be saved with school_id = NULL.`);
+      log(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Classes will be saved with school_id = NULL.`);
     }
 
     const recordsToInsert: Array<{
@@ -101,24 +106,25 @@ export async function getClasses(
           metadata: metadataJson,
         });
       } catch (error: any) {
-        console.error(`❌ Error preparing class ${classData.sourcedId}:`, error.message);
+        log(`❌ Error preparing class ${classData.sourcedId}: ${error.message}`);
         skippedCount++;
       }
     }
 
-    console.log(`   💾 Bulk inserting ${recordsToInsert.length} class(es) to database...`);
+    log(`   💾 Bulk inserting ${recordsToInsert.length} classes...`);
     const { inserted, error: bulkError } = await databaseService.bulkInsertClasses(recordsToInsert);
 
     if (bulkError) {
-      console.error(`❌ Bulk insert failed: ${bulkError}`);
+      log(`❌ Step 2 failed: ${bulkError}`);
       throw new Error(`Bulk insert failed: ${bulkError}`);
     }
 
-    console.log(`✅ Saved ${inserted} class(es) to database`);
+    log(`✅ Step 2 complete: Saved ${inserted} classes to database`);
     if (skippedCount > 0) {
-      console.warn(`⚠️  Skipped ${skippedCount} class(es) due to errors`);
+      log(`⚠️  Skipped ${skippedCount} classes due to errors`);
     }
 
+    log(`✅ Classes sync complete`);
     return allClasses;
   } catch (error) {
     console.error('Failed to fetch classes:', error);

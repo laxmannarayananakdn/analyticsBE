@@ -216,10 +216,16 @@ router.get('/teachers', loadManageBacConfig, async (req: Request, res: Response)
   try {
     let apiKey: string;
     let baseUrl: string | undefined;
-    
+    let schoolId: number | undefined;
+
     if (req.manageBacConfig) {
       apiKey = req.manageBacConfig.api_token;
       baseUrl = req.manageBacConfig.base_url;
+      schoolId = req.manageBacConfig.school_id ?? undefined;
+      if (!schoolId) {
+        const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
+        schoolId = school?.id;
+      }
     } else {
       const directKey = getApiKeyFromRequest(req);
       if (!directKey) {
@@ -227,20 +233,74 @@ router.get('/teachers', loadManageBacConfig, async (req: Request, res: Response)
       }
       apiKey = directKey;
     }
-    
+
     const filters: { department?: string; active_only?: boolean } = {};
-    if (req.query.department) {
-      filters.department = req.query.department as string;
-    }
-    if (req.query.active_only === 'true') {
-      filters.active_only = true;
-    }
-    
-    const teachers = await manageBacService.getTeachers(apiKey, filters, baseUrl);
+    if (req.query.department) filters.department = req.query.department as string;
+    if (req.query.active_only === 'true') filters.active_only = true;
+
+    const teachers = await manageBacService.getTeachers(apiKey, filters, baseUrl, schoolId);
     res.json(teachers);
   } catch (error: any) {
     console.error('Error fetching teachers:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/managebac/sync-stream/:endpoint
+ * SSE endpoint - streams logs and final result for long-running syncs (students, teachers)
+ */
+router.get('/sync-stream/:endpoint', loadManageBacConfig, async (req: Request, res: Response) => {
+  const endpoint = req.params.endpoint as string;
+  if (!['students', 'teachers'].includes(endpoint)) {
+    return res.status(400).json({ error: 'sync-stream only supports: students, teachers' });
+  }
+
+  let apiKey: string;
+  let baseUrl: string | undefined;
+  let schoolId: number | undefined;
+
+  if (!req.manageBacConfig) {
+    return res.status(400).json({ error: 'config_id is required for sync-stream' });
+  }
+  apiKey = req.manageBacConfig.api_token;
+  baseUrl = req.manageBacConfig.base_url;
+  schoolId = req.manageBacConfig.school_id ?? undefined;
+  if (!schoolId) {
+    const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
+    schoolId = school?.id;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (data: object) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    res.flush?.();
+  };
+
+  try {
+    if (endpoint === 'students') {
+      const filters: any = {};
+      if (req.query.grade_id) filters.grade_id = req.query.grade_id as string;
+      if (req.query.active_only === 'true') filters.active_only = true;
+      if (req.query.academic_year_id) filters.academic_year_id = req.query.academic_year_id as string;
+      const students = await manageBacService.getStudents(apiKey, filters, baseUrl, schoolId, (msg) => send({ type: 'log', msg }));
+      send({ type: 'done', data: students, count: students.length, success: true });
+    } else {
+      const filters: any = {};
+      if (req.query.department) filters.department = req.query.department as string;
+      if (req.query.active_only === 'true') filters.active_only = true;
+      const teachers = await manageBacService.getTeachers(apiKey, filters, baseUrl, schoolId, (msg) => send({ type: 'log', msg }));
+      send({ type: 'done', data: teachers, count: teachers.length, success: true });
+    }
+  } catch (error: any) {
+    send({ type: 'done', error: error.message || 'Unknown error', success: false });
+  } finally {
+    res.end();
   }
 });
 
@@ -252,10 +312,16 @@ router.get('/students', loadManageBacConfig, async (req: Request, res: Response)
   try {
     let apiKey: string;
     let baseUrl: string | undefined;
-    
+    let schoolId: number | undefined;
+
     if (req.manageBacConfig) {
       apiKey = req.manageBacConfig.api_token;
       baseUrl = req.manageBacConfig.base_url;
+      schoolId = req.manageBacConfig.school_id ?? undefined;
+      if (!schoolId) {
+        const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
+        schoolId = school?.id;
+      }
     } else {
       const directKey = getApiKeyFromRequest(req);
       if (!directKey) {
@@ -263,19 +329,13 @@ router.get('/students', loadManageBacConfig, async (req: Request, res: Response)
       }
       apiKey = directKey;
     }
-    
+
     const filters: { grade_id?: string; active_only?: boolean; academic_year_id?: string } = {};
-    if (req.query.grade_id) {
-      filters.grade_id = req.query.grade_id as string;
-    }
-    if (req.query.active_only === 'true') {
-      filters.active_only = true;
-    }
-    if (req.query.academic_year_id) {
-      filters.academic_year_id = req.query.academic_year_id as string;
-    }
-    
-    const students = await manageBacService.getStudents(apiKey, filters, baseUrl);
+    if (req.query.grade_id) filters.grade_id = req.query.grade_id as string;
+    if (req.query.active_only === 'true') filters.active_only = true;
+    if (req.query.academic_year_id) filters.academic_year_id = req.query.academic_year_id as string;
+
+    const students = await manageBacService.getStudents(apiKey, filters, baseUrl, schoolId);
     res.json(students);
   } catch (error: any) {
     console.error('Error fetching students:', error);

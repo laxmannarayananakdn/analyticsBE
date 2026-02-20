@@ -18,15 +18,20 @@ export async function getStudents(
   config: NexquareConfig,
   schoolId?: string,
   filter?: string,
-  fetchMode: number = 1
+  fetchMode: number = 1,
+  onLog?: (msg: string) => void
 ): Promise<NexquareUser[]> {
+  const log = (msg: string) => {
+    console.log(msg);
+    onLog?.(msg);
+  };
   try {
     const targetSchoolId = schoolId || this.getCurrentSchoolId();
     if (!targetSchoolId) {
       throw new Error('School ID is required');
     }
 
-    console.log(`👥 Fetching students for school ${targetSchoolId}...`);
+    log(`📋 Step 1: Fetching students from Nexquare API for school ${targetSchoolId}...`);
     
     const allStudents: NexquareUser[] = [];
     let offset = 0;
@@ -53,7 +58,7 @@ export async function getStudents(
       }
 
       allStudents.push(...users);
-      console.log(`   Fetched ${users.length} students (total: ${allStudents.length})`);
+      log(`   📄 Page at offset ${offset}: fetched ${users.length} students (total: ${allStudents.length})`);
 
       // If we got fewer than the limit, we've reached the end
       if (users.length < limit) {
@@ -66,16 +71,16 @@ export async function getStudents(
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    console.log(`✅ Found ${allStudents.length} total student(s)`);
+    log(`✅ Step 1 complete: Fetched ${allStudents.length} students from API`);
 
     // Save students to database using bulk insert
-    console.log('💾 Preparing students for bulk insert...');
+    log(`📋 Step 2: Saving ${allStudents.length} students to database (NEX.students)...`);
     
     // Get the school sourced_id from sourced_id
     const schoolSourcedId = await (this as any).getSchoolSourcedId(targetSchoolId);
     if (!schoolSourcedId) {
-      console.warn(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Students will be saved with school_id = NULL.`);
-      console.warn(`   Make sure to run "Get Schools" first to populate the schools table.`);
+      log(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Students will be saved with school_id = NULL.`);
+      log(`   Make sure to run "Get Schools" first to populate the schools table.`);
     }
 
     // Helper function to parse date strings
@@ -187,25 +192,25 @@ export async function getStudents(
           homeroom_teacher_sourced_id: classDetails.homeroomTeacherSourcedId || null,
         });
       } catch (error: any) {
-        console.error(`❌ Error preparing student ${student.sourcedId}:`, error.message);
+        log(`❌ Error preparing student ${student.sourcedId}: ${error.message}`);
         skippedCount++;
       }
     }
 
-    // Bulk insert all records
-    console.log(`   💾 Bulk inserting ${recordsToInsert.length} student(s) to database...`);
+    log(`   💾 Bulk inserting ${recordsToInsert.length} student(s)...`);
     const { inserted, error: bulkError } = await databaseService.bulkInsertStudents(recordsToInsert);
 
     if (bulkError) {
-      console.error(`❌ Bulk insert failed: ${bulkError}`);
+      log(`❌ Step 2 failed: ${bulkError}`);
       throw new Error(`Bulk insert failed: ${bulkError}`);
     }
 
-    console.log(`✅ Saved ${inserted} student(s) to database`);
+    log(`✅ Step 2 complete: Saved ${inserted} student(s) to database`);
     if (skippedCount > 0) {
-      console.warn(`⚠️  Skipped ${skippedCount} student(s) due to errors`);
+      log(`⚠️  Skipped ${skippedCount} student(s) due to errors`);
     }
 
+    log(`✅ Students sync complete`);
     return allStudents;
   } catch (error) {
     console.error('Failed to fetch students:', error);

@@ -36,8 +36,20 @@ export class ManageBacService {
     options: RequestInit = {},
     baseUrl?: string
   ): Promise<ApiResponse<T>> {
-    // Use custom base URL if provided, otherwise use default from config
-    const url = baseUrl 
+    const result = await this.makeRequestRaw(endpoint, apiKey, options, baseUrl);
+    return validateApiResponse<T>(result);
+  }
+
+  /**
+   * Make request and return raw response (including meta for pagination)
+   */
+  private async makeRequestRaw(
+    endpoint: string,
+    apiKey: string,
+    options: RequestInit = {},
+    baseUrl?: string
+  ): Promise<any> {
+    const url = baseUrl
       ? this.buildManageBacUrl(endpoint, baseUrl)
       : this.buildManageBacUrl(endpoint, MANAGEBAC_CONFIG.DEFAULT_BASE_URL);
     const method = (options.method || 'GET').toUpperCase();
@@ -55,21 +67,56 @@ export class ManageBacService {
     try {
       const response = await retryOperation(async () => {
         const res = await fetch(url, requestOptions);
-        
+
         if (!res.ok) {
           const errorText = await res.text();
           throw new Error(`HTTP ${res.status}: ${res.statusText}. Response: ${errorText.substring(0, 200)}`);
         }
-        
-        const jsonData = await res.json();
-        return jsonData;
+
+        return await res.json();
       }, 3);
 
-      return validateApiResponse<T>(response);
+      return response;
     } catch (error) {
       console.error('💥 ManageBac API request failed:', error);
       throw handleApiError(error);
     }
+  }
+
+  /**
+   * Fetch all pages for a paginated ManageBac list endpoint
+   */
+  private async fetchAllPaginated<T>(
+    endpointBase: string,
+    dataKey: string,
+    apiKey: string,
+    baseUrl: string | undefined,
+    existingParams: Record<string, string> = {},
+    logLabel: string = 'Items'
+  ): Promise<T[]> {
+    const allItems: T[] = [];
+    let page = 1;
+    let totalPages = 1;
+    const perPage = 250;
+
+    do {
+      const params = new URLSearchParams({ ...existingParams, page: String(page), per_page: String(perPage) });
+      const endpoint = `${endpointBase}?${params.toString()}`;
+      const rawResponse = await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl);
+
+      const raw = rawResponse.data ?? rawResponse;
+      const items = (Array.isArray(raw) ? raw : (raw?.[dataKey] ?? [])) as T[];
+      allItems.push(...items);
+
+      const meta = rawResponse.meta ?? raw?.meta;
+      totalPages = meta?.total_pages ?? 1;
+      if (items.length > 0) {
+        console.log(`   📄 ${logLabel} page ${page}/${totalPages} (${items.length} items)`);
+      }
+      page++;
+    } while (page <= totalPages);
+
+    return allItems;
   }
 
   /**
@@ -479,35 +526,66 @@ export class ManageBacService {
   }
 
   /**
-   * Get all teachers
+   * Get all teachers (with pagination to fetch all pages)
+   * onLog: optional callback to stream progress to frontend (e.g. SSE)
    */
-  async getTeachers(apiKey: string, filters?: { department?: string; active_only?: boolean }, baseUrl?: string): Promise<Teacher[]> {
+  async getTeachers(
+    apiKey: string,
+    filters?: { department?: string; active_only?: boolean },
+    baseUrl?: string,
+    schoolId?: number,
+    onLog?: (msg: string) => void
+  ): Promise<Teacher[]> {
+    const log = (msg: string) => {
+      console.log(msg);
+      onLog?.(msg);
+    };
     try {
-      let endpoint = MANAGEBAC_ENDPOINTS.TEACHERS;
-      
-      if (filters) {
+      log(`📋 Step 1: Fetching teachers from ManageBac API...`);
+      const allTeachers: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+      const perPage = 250;
+
+      do {
         const params = new URLSearchParams();
-        if (filters.department) params.append('department', filters.department);
-        if (filters.active_only) params.append('active_only', 'true');
-        
-        if (params.toString()) {
-          endpoint += `?${params.toString()}`;
+        params.append('page', String(page));
+        params.append('per_page', String(perPage));
+        if (filters?.department) params.append('department', filters.department);
+        if (filters?.active_only) params.append('active_only', 'true');
+
+        const endpoint = `${MANAGEBAC_ENDPOINTS.TEACHERS}?${params.toString()}`;
+        const rawResponse = await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl);
+
+        const raw = rawResponse.data ?? rawResponse;
+        const teachers = Array.isArray(raw) ? raw : (raw?.teachers ?? []);
+        allTeachers.push(...teachers);
+
+        const meta = rawResponse.meta ?? raw?.meta;
+        totalPages = meta?.total_pages ?? 1;
+        if (teachers.length > 0) {
+          log(`   📄 Teachers page ${page}/${totalPages} (${teachers.length} items)`);
         }
+        page++;
+      } while (page <= totalPages);
+
+      log(`✅ Step 1 complete: Fetched ${allTeachers.length} teachers from API`);
+
+      const effectiveSchoolId = schoolId ?? this.currentSchoolId;
+      if (effectiveSchoolId && allTeachers.length > 0) {
+        log(`📋 Step 2: Saving ${allTeachers.length} teachers to database (MB.users + MB.teachers)...`);
+        const { error } = await databaseService.upsertTeachers(allTeachers, effectiveSchoolId, (msg) => log(`   ${msg}`));
+        if (error) {
+          log(`❌ Failed to save teachers: ${error}`);
+        } else {
+          log(`✅ Step 2 complete: ${allTeachers.length} teachers saved to database`);
+        }
+      } else if (!effectiveSchoolId) {
+        log(`⚠️ Skipping database save: No school ID configured`);
       }
-      
-      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
-      // ManageBac API returns { data: { teachers: [...] } }, not { data: [...] }
-      const raw = response.data;
-      const teachers = Array.isArray(raw) ? raw : (raw?.teachers ?? []);
-      
-      // Save to database if available
-      if (this.currentSchoolId && teachers.length > 0) {
-        console.log('💾 Saving teachers to database...');
-        // Note: We'll need to add upsertTeachers to DatabaseService
-        console.log('⚠️ Teachers database save not yet implemented');
-      }
-      
-      return teachers;
+
+      log(`✅ Teachers sync complete`);
+      return allTeachers;
     } catch (error) {
       console.error('Failed to fetch teachers:', error);
       throw error;
@@ -515,59 +593,112 @@ export class ManageBacService {
   }
 
   /**
-   * Get all students in the school
+   * Get all students in the school (with pagination to fetch all pages)
+   * onLog: optional callback to stream progress to frontend (e.g. SSE)
    */
-  async getStudents(apiKey: string, filters?: { 
-    grade_id?: string; 
-    active_only?: boolean;
-    academic_year_id?: string;
-  }, baseUrl?: string): Promise<Student[]> {
+  async getStudents(
+    apiKey: string,
+    filters?: { grade_id?: string; active_only?: boolean; academic_year_id?: string },
+    baseUrl?: string,
+    schoolId?: number,
+    onLog?: (msg: string) => void
+  ): Promise<Student[]> {
+    const log = (msg: string) => {
+      console.log(msg);
+      onLog?.(msg);
+    };
     try {
-      let endpoint = MANAGEBAC_ENDPOINTS.STUDENTS;
-      
-      if (filters) {
-        const params = new URLSearchParams();
-        if (filters.grade_id) params.append('grade_id', filters.grade_id);
-        if (filters.academic_year_id) params.append('academic_year_id', filters.academic_year_id);
-        if (filters.active_only) params.append('active_only', 'true');
-        
-        if (params.toString()) {
-          endpoint += `?${params.toString()}`;
-        }
-      }
-      
-      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
-      // ManageBac API returns { data: { students: [...] } }, not { data: [...] }
-      const raw = response.data;
-      const students = Array.isArray(raw) ? raw : (raw?.students ?? []);
-      
-      // Save to database if available
-    if (this.currentSchoolId && students.length > 0) {
-        console.log('💾 Saving students to database...');
-        // Convert ManageBac Student format to database format
-        const studentsForDb = students.map((student: any) => ({
-          id: parseInt(student.id),
-          first_name: student.first_name,
-          last_name: student.last_name,
-          email: student.email,
-          student_id: student.student_id,
-          archived: !student.is_active,
-          // Add other fields as needed
-        }));
-        
-        const { error } = await databaseService.upsertStudents(studentsForDb);
-        if (error) {
-          console.error('❌ Failed to save students to database:', error);
-        } else {
-          console.log('✅ Students saved to database');
-        }
-      }
-      
-    if (this.currentSchoolId && !this.studentsSyncedFromYearGroups) {
-      await this.syncStudentsByGradesAndYearGroups(apiKey);
-    }
+      log(`📋 Step 1: Fetching students from ManageBac API...`);
+      const allStudents: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+      const perPage = 250;
 
-    return students;
+      do {
+        const params = new URLSearchParams();
+        params.append('page', String(page));
+        params.append('per_page', String(perPage));
+        if (filters?.grade_id) params.append('grade_id', filters.grade_id);
+        if (filters?.academic_year_id) params.append('academic_year_id', filters.academic_year_id);
+        if (filters?.active_only) params.append('active_only', 'true');
+
+        const endpoint = `${MANAGEBAC_ENDPOINTS.STUDENTS}?${params.toString()}`;
+        const rawResponse = await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl);
+
+        const raw = rawResponse.data ?? rawResponse;
+        const students = Array.isArray(raw) ? raw : (raw?.students ?? []);
+        allStudents.push(...students);
+
+        const meta = rawResponse.meta ?? raw?.meta;
+        totalPages = meta?.total_pages ?? 1;
+        if (students.length > 0) {
+          log(`   📄 Students page ${page}/${totalPages} (${students.length} items)`);
+        }
+        page++;
+      } while (page <= totalPages);
+
+      log(`✅ Step 1 complete: Fetched ${allStudents.length} students from API`);
+
+      // Paginated list may return minimal records; fetch full details if key fields are missing
+      const sample = allStudents.slice(0, 3);
+      const needsEnrichment = sample.some(
+        (s: any) =>
+          !(s.year_group_id ?? s.yearGroupId) &&
+          !(s.class_grade ?? s.classGrade) &&
+          !(s.program ?? s.program)
+      );
+      if (needsEnrichment && allStudents.length > 0) {
+        log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
+        const CONCURRENCY = 20;
+        const enriched: any[] = [];
+        for (let i = 0; i < allStudents.length; i += CONCURRENCY) {
+          const chunk = allStudents.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(
+            chunk.map(async (s: any) => {
+              try {
+                const res = await this.makeRequest<any>(`/students/${s.id}`, apiKey, {}, baseUrl);
+                const full = res.data?.student ?? res.data ?? s;
+                return full;
+              } catch {
+                return s;
+              }
+            })
+          );
+          enriched.push(...results);
+          const done = Math.min(i + CONCURRENCY, allStudents.length);
+          if (done % 100 === 0 || done === allStudents.length) {
+            log(`   📥 Enriched ${done}/${allStudents.length} students`);
+          }
+        }
+        allStudents.length = 0;
+        allStudents.push(...enriched);
+        log(`✅ Step 2 complete: Enriched ${enriched.length} students`);
+      }
+
+      const effectiveSchoolId = schoolId ?? this.currentSchoolId;
+      const saveStepNum = needsEnrichment ? 3 : 2;
+      if (effectiveSchoolId && allStudents.length > 0) {
+        log(`📋 Step ${saveStepNum}: Saving ${allStudents.length} students to database (MB.students)...`);
+        const studentsForDb = allStudents.map((s: any) => this.mapManageBacStudentToDb(s));
+        const { error } = await databaseService.bulkUpsertManageBacStudents(studentsForDb, (cur, tot, batchNum, totalBatches) => {
+          log(`   📊 Batch ${batchNum}/${totalBatches}: ${cur}/${tot} students (${Math.round((cur / tot) * 100)}%)`);
+        });
+        if (error) {
+          log(`❌ Step ${saveStepNum} failed: ${error}`);
+        } else {
+          log(`✅ Step ${saveStepNum} complete: ${allStudents.length} students saved to database`);
+        }
+
+        if (!this.studentsSyncedFromYearGroups) {
+          log(`📋 Syncing year group - student relationships...`);
+          await this.syncStudentsByGradesAndYearGroups(apiKey);
+        }
+      } else if (!effectiveSchoolId) {
+        log(`⚠️ Skipping database save: No school ID configured`);
+      }
+
+      log(`✅ Students sync complete`);
+      return allStudents;
     } catch (error) {
       console.error('Failed to fetch students:', error);
       throw error;
@@ -575,20 +706,76 @@ export class ManageBacService {
   }
 
   /**
-   * Get all classes in the school
+   * Map ManageBac student API response to DB format
+   * Supports both snake_case and camelCase (API may vary by version)
+   */
+  private mapManageBacStudentToDb(s: any): any {
+    const id = typeof s.id === 'string' ? parseInt(s.id, 10) : s.id;
+    const pick = (snake: string, camel: string) => s[snake] ?? s[camel] ?? null;
+    const pickNum = (snake: string, camel: string) => {
+      const v = s[snake] ?? s[camel];
+      return v !== undefined && v !== null ? (typeof v === 'number' ? v : parseInt(String(v), 10)) : null;
+    };
+    const nationalitiesRaw = pick('nationalities', 'nationalities');
+    const languagesRaw = pick('languages', 'languages');
+    const parentIdsRaw = pick('parent_ids', 'parentIds');
+    const additionalHomeroomRaw = pick('additional_homeroom_advisor_ids', 'additionalHomeroomAdvisorIds');
+
+    return {
+      id,
+      grade_id: pickNum('grade_id', 'gradeId'),
+      year_group_id: pickNum('year_group_id', 'yearGroupId'),
+      uniq_student_id: pick('uniq_student_id', 'uniqStudentId') || pick('student_id', 'studentId') || pick('identifier', 'identifier'),
+      first_name: (pick('first_name', 'firstName') ?? '') as string,
+      last_name: (pick('last_name', 'lastName') ?? '') as string,
+      email: (pick('email', 'email') || `mb-student-${id}@placeholder.local`) as string,
+      gender: pick('gender', 'gender'),
+      birthday: pick('birthday', 'birthday'),
+      archived: s.archived ?? false,
+      program: pick('program', 'program'),
+      program_code: pick('program_code', 'programCode'),
+      class_grade: pick('class_grade', 'classGrade'),
+      class_grade_number: pickNum('class_grade_number', 'classGradeNumber'),
+      graduating_year: pickNum('graduating_year', 'graduatingYear'),
+      nationalities: Array.isArray(nationalitiesRaw) ? JSON.stringify(nationalitiesRaw) : (typeof nationalitiesRaw === 'string' ? nationalitiesRaw : '[]'),
+      languages: Array.isArray(languagesRaw) ? JSON.stringify(languagesRaw) : (typeof languagesRaw === 'string' ? languagesRaw : '[]'),
+      timezone: pick('timezone', 'timezone'),
+      ui_language: pick('ui_language', 'uiLanguage'),
+      student_id: pick('student_id', 'studentId') || pick('identifier', 'identifier'),
+      identifier: pick('identifier', 'identifier'),
+      oa_id: pick('oa_id', 'oaId'),
+      withdrawn_on: pick('withdrawn_on', 'withdrawnOn'),
+      photo_url: pick('photo_url', 'photoUrl'),
+      homeroom_advisor_id: pickNum('homeroom_advisor_id', 'homeroomAdvisorId'),
+      attendance_start_date: pick('attendance_start_date', 'attendanceStartDate'),
+      parent_ids: Array.isArray(parentIdsRaw) ? JSON.stringify(parentIdsRaw) : (typeof parentIdsRaw === 'string' ? parentIdsRaw : '[]'),
+      additional_homeroom_advisor_ids: Array.isArray(additionalHomeroomRaw)
+        ? JSON.stringify(additionalHomeroomRaw)
+        : (typeof additionalHomeroomRaw === 'string' ? additionalHomeroomRaw : '[]')
+    };
+  }
+
+  /**
+   * Get all classes in the school (with pagination)
    */
   async getClasses(apiKey: string, baseUrl?: string): Promise<Class[]> {
     try {
-      const response = await this.makeRequest<any>(MANAGEBAC_ENDPOINTS.CLASSES, apiKey, {}, baseUrl);
-      const classes = response.data.classes || [];
-      
+      const classes = await this.fetchAllPaginated<Class>(
+        MANAGEBAC_ENDPOINTS.CLASSES,
+        'classes',
+        apiKey,
+        baseUrl,
+        {},
+        'Classes'
+      );
+
       // Save to database if available
       if (this.currentSchoolId && classes.length > 0) {
         console.log('💾 Saving classes to database...');
         // Note: We'll need to add upsertClasses to DatabaseService
         console.log('⚠️ Classes database save not yet implemented');
       }
-      
+
       return classes;
     } catch (error) {
       console.error('Failed to fetch classes:', error);
@@ -630,14 +817,14 @@ export class ManageBacService {
         }
       }
 
-      const response = await this.makeRequest<any>(MANAGEBAC_ENDPOINTS.YEAR_GROUPS, apiKey, {}, baseUrl);
-      const payload = response.data;
-
-      const yearGroupsRaw: YearGroup[] = Array.isArray(payload?.year_groups)
-        ? payload.year_groups
-        : Array.isArray(payload)
-          ? payload
-          : payload?.year_groups || [];
+      const yearGroupsRaw = await this.fetchAllPaginated<YearGroup>(
+        MANAGEBAC_ENDPOINTS.YEAR_GROUPS,
+        'year_groups',
+        apiKey,
+        baseUrl,
+        {},
+        'Year groups'
+      );
 
       const normalizedYearGroups: YearGroup[] = yearGroupsRaw.map((yearGroup) => ({
         ...yearGroup,
@@ -681,24 +868,29 @@ export class ManageBacService {
   }
 
   /**
-   * Get students in a specific year group
+   * Get students in a specific year group (with pagination)
    */
   async getYearGroupStudents(apiKey: string, yearGroupId: string, academicYearId?: string, termId?: string, baseUrl?: string): Promise<any> {
     try {
-      let endpoint = `/year-groups/${yearGroupId}/students`;
-      
-      if (academicYearId && termId) {
-        endpoint = `${endpoint}?academic_year_id=${academicYearId}&term_id=${termId}`;
-      } else if (academicYearId) {
-        endpoint = `${endpoint}?academic_year_id=${academicYearId}`;
-      }
-      
-      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
-      
+      const endpointBase = `/year-groups/${yearGroupId}/students`;
+      const existingParams: Record<string, string> = {};
+      if (academicYearId) existingParams.academic_year_id = academicYearId;
+      if (termId) existingParams.term_id = termId;
+
+      const students = await this.fetchAllPaginated<any>(
+        endpointBase,
+        'students',
+        apiKey,
+        baseUrl,
+        existingParams,
+        'Year group students'
+      );
+
+      const responseData = { students };
+
       // Save to database if available
-      if (this.currentSchoolId && response.data) {
+      if (this.currentSchoolId && students.length > 0) {
         console.log('💾 Processing year group students for database...');
-        const students = response.data.students || [];
         
         if (students.length > 0) {
           // Fetch individual student details
@@ -762,16 +954,16 @@ export class ManageBacService {
                 if (relationshipCount > 0) {
                   console.log(`✅ Saved ${relationshipCount} year group-student relationship(s)`);
                 }
-                if (relationshipErrors > 0) {
-                  console.warn(`⚠️ Failed to save ${relationshipErrors} relationship(s)`);
-                }
+        if (relationshipErrors > 0) {
+          console.warn(`⚠️ Failed to save ${relationshipErrors} relationship(s)`);
+        }
               }
             }
           }
         }
       }
-      
-      return response.data;
+
+      return responseData;
     } catch (error) {
       console.error('Failed to fetch year group students:', error);
       throw error;
@@ -941,28 +1133,23 @@ export class ManageBacService {
         console.log(`   Found ${filteredUserIds.length} student(s) in year groups with grade_number = ${gradeNumber}`);
       }
 
-      let endpoint = MANAGEBAC_ENDPOINTS.MEMBERSHIPS;
-      const urlParams = new URLSearchParams();
-      
-      urlParams.append('classes', 'active');
-      
+      const existingParams: Record<string, string> = { classes: 'active' };
       if (filteredUserIds && filteredUserIds.length > 0) {
-        urlParams.append('user_ids', filteredUserIds.join(','));
+        existingParams.user_ids = filteredUserIds.join(',');
       }
-      
-      if (academicYearId) {
-        urlParams.append('academic_year_id', academicYearId);
-      }
-      if (termId) {
-        urlParams.append('term_id', termId);
-      }
-      
-      const requestEndpoint = urlParams.toString()
-        ? `${endpoint}?${urlParams.toString()}`
-        : endpoint;
-      
-      const response = await this.makeRequest<any>(requestEndpoint as string, apiKey, {}, baseUrl);
-      return response.data;
+      if (academicYearId) existingParams.academic_year_id = academicYearId;
+      if (termId) existingParams.term_id = termId;
+
+      const memberships = await this.fetchAllPaginated<any>(
+        MANAGEBAC_ENDPOINTS.MEMBERSHIPS,
+        'memberships',
+        apiKey,
+        baseUrl,
+        existingParams,
+        'Memberships'
+      );
+
+      return { memberships, count: memberships.length };
     } catch (error) {
       console.error('Failed to fetch memberships:', error);
       throw error;
