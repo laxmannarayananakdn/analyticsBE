@@ -495,8 +495,10 @@ export class ManageBacService {
         }
       }
       
-      const response = await this.makeRequest<Teacher[]>(endpoint, apiKey, {}, baseUrl);
-      const teachers = Array.isArray(response.data) ? response.data : [];
+      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
+      // ManageBac API returns { data: { teachers: [...] } }, not { data: [...] }
+      const raw = response.data;
+      const teachers = Array.isArray(raw) ? raw : (raw?.teachers ?? []);
       
       // Save to database if available
       if (this.currentSchoolId && teachers.length > 0) {
@@ -534,8 +536,10 @@ export class ManageBacService {
         }
       }
       
-      const response = await this.makeRequest<Student[]>(endpoint, apiKey, {}, baseUrl);
-      const students = Array.isArray(response.data) ? response.data : [];
+      const response = await this.makeRequest<any>(endpoint, apiKey, {}, baseUrl);
+      // ManageBac API returns { data: { students: [...] } }, not { data: [...] }
+      const raw = response.data;
+      const students = Array.isArray(raw) ? raw : (raw?.students ?? []);
       
       // Save to database if available
     if (this.currentSchoolId && students.length > 0) {
