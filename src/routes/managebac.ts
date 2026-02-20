@@ -625,8 +625,61 @@ router.get('/memberships', loadManageBacConfig, async (req: Request, res: Respon
 });
 
 /**
+ * GET /api/managebac/term-grades
+ * Sync term grades for classes with memberships.
+ * Query params: grade_number (default 13), term_id (optional), class_id (optional).
+ * Run "Get Memberships" first to populate class memberships.
+ */
+router.get('/term-grades', loadManageBacConfig, async (req: Request, res: Response) => {
+  try {
+    let apiKey: string;
+    let baseUrl: string | undefined;
+
+    if (req.manageBacConfig) {
+      apiKey = req.manageBacConfig.api_token;
+      baseUrl = req.manageBacConfig.base_url;
+    } else {
+      const directKey = getApiKeyFromRequest(req);
+      if (!directKey) {
+        return res.status(400).json({ error: 'API key or config_id is required' });
+      }
+      apiKey = directKey;
+    }
+
+    const gradeNumber = req.query.grade_number ? parseInt(req.query.grade_number as string, 10) : undefined;
+    const termId = req.query.term_id ? parseInt(req.query.term_id as string, 10) : undefined;
+    const classId = req.query.class_id ? parseInt(req.query.class_id as string, 10) : undefined;
+
+    let schoolId: number | undefined = req.manageBacConfig?.school_id ?? undefined;
+    if (gradeNumber != null && !schoolId && req.manageBacConfig) {
+      const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
+      schoolId = school?.id;
+      if (!schoolId) {
+        return res.status(400).json({
+          error: 'Grade filter requires school ID. Run "Authenticate" or "Get School Details" first, or ensure config has school_id set.',
+        });
+      }
+    }
+
+    const options: Parameters<typeof manageBacService.syncAllTermGrades>[2] = {};
+    if (gradeNumber != null && schoolId != null) {
+      options.grade_number = gradeNumber;
+      options.school_id = schoolId;
+    }
+    if (termId != null) options.term_id = termId;
+    if (classId != null) options.class_id = classId;
+
+    const result = await manageBacService.syncAllTermGrades(apiKey, baseUrl, Object.keys(options).length ? options : undefined);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error syncing term grades:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
  * GET /api/managebac/classes/:classId/term-grades/:termId
- * Get term grades for a class and term
+ * Get term grades for a specific class and term (manual override)
  */
 router.get('/classes/:classId/term-grades/:termId', loadManageBacConfig, async (req: Request, res: Response) => {
   try {

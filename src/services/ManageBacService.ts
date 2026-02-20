@@ -649,10 +649,18 @@ export class ManageBacService {
       );
       if (needsEnrichment && allStudents.length > 0) {
         log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
-        const CONCURRENCY = 20;
+        const BATCH_SIZE = 150;
+        const DELAY_BETWEEN_BATCHES_MS = 60000;
         const enriched: any[] = [];
-        for (let i = 0; i < allStudents.length; i += CONCURRENCY) {
-          const chunk = allStudents.slice(i, i + CONCURRENCY);
+        const totalBatches = Math.ceil(allStudents.length / BATCH_SIZE);
+        for (let i = 0; i < allStudents.length; i += BATCH_SIZE) {
+          if (i > 0) {
+            log(`   ⏳ Pausing ${DELAY_BETWEEN_BATCHES_MS / 1000}s to avoid rate limits...`);
+            await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+          }
+          const chunk = allStudents.slice(i, i + BATCH_SIZE);
+          const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+          log(`   📥 Enriching batch ${batchNum}/${totalBatches} (${chunk.length} students)...`);
           const results = await Promise.all(
             chunk.map(async (s: any) => {
               try {
@@ -665,10 +673,8 @@ export class ManageBacService {
             })
           );
           enriched.push(...results);
-          const done = Math.min(i + CONCURRENCY, allStudents.length);
-          if (done % 100 === 0 || done === allStudents.length) {
-            log(`   📥 Enriched ${done}/${allStudents.length} students`);
-          }
+          const done = Math.min(i + BATCH_SIZE, allStudents.length);
+          log(`   ✅ Enriched ${done}/${allStudents.length} students`);
         }
         allStudents.length = 0;
         allStudents.push(...enriched);
@@ -786,9 +792,9 @@ export class ManageBacService {
   /**
    * Get a single class by ID
    */
-  async getClassById(apiKey: string, classId: number): Promise<Class | null> {
+  async getClassById(apiKey: string, classId: number, baseUrl?: string): Promise<Class | null> {
     try {
-      const response = await this.makeRequest<any>(`${MANAGEBAC_ENDPOINTS.CLASSES}/${classId}`, apiKey);
+      const response = await this.makeRequest<any>(`${MANAGEBAC_ENDPOINTS.CLASSES}/${classId}`, apiKey, {}, baseUrl);
       const classData = response.data?.class || response.data;
       
       if (!classData) {
@@ -1320,6 +1326,145 @@ export class ManageBacService {
       console.error('Failed to fetch term grades:', error);
       throw error;
     }
+  }
+
+  /**
+   * Sync term grades for classes that have memberships.
+   * Discovers class-term combinations from class memberships and class term ranges,
+   * fetches term grades for each, and saves to database.
+   * @param options - grade_number (default 13 when filtering by grade), term_id (specific term only), class_id (specific class only), school_id (required when grade_number used)
+   */
+  async syncAllTermGrades(
+    apiKey: string,
+    baseUrl?: string,
+    options?: { grade_number?: number; term_id?: number; class_id?: number; school_id?: number }
+  ): Promise<{
+    classesProcessed: number;
+    classesSkipped: number;
+    totalCombinations: number;
+    termGradesFetched: number;
+    errors: number;
+    details: Array<{ classId: number; className: string; termId: number; termName: string; count: number; error?: string }>;
+  }> {
+    const gradeNumber = options?.grade_number;
+    const termIdFilter = options?.term_id;
+    const classIdFilter = options?.class_id;
+    const schoolId = options?.school_id;
+
+    const filters: Parameters<typeof databaseService.getDistinctClassesWithMemberships>[0] = {};
+    if (classIdFilter != null) filters.class_id = classIdFilter;
+    if (gradeNumber != null && schoolId != null) {
+      filters.grade_number = gradeNumber;
+      filters.school_id = schoolId;
+    }
+
+    console.log('📋 syncAllTermGrades: fetching classes with memberships...', filters && Object.keys(filters).length ? `(filters: ${JSON.stringify(filters)})` : '');
+    const classIds = await databaseService.getDistinctClassesWithMemberships(Object.keys(filters).length ? filters : undefined);
+    console.log(`📋 syncAllTermGrades: found ${classIds.length} classes with memberships`);
+    if (classIds.length === 0) {
+      console.log('ℹ️ No classes with memberships found. Run "Get Memberships" first.');
+      return {
+        classesProcessed: 0,
+        classesSkipped: classIds.length,
+        totalCombinations: 0,
+        termGradesFetched: 0,
+        errors: 0,
+        details: [],
+      };
+    }
+
+    // Pre-pass: build list of (classId, classDetails, term) combinations so we know total upfront
+    type Combo = { classId: number; className: string; termId: number; termName: string };
+    const combinations: Combo[] = [];
+    console.log('📋 Building class-term combinations (fetching class details and terms)...');
+
+    for (let ci = 0; ci < classIds.length; ci++) {
+      const classId = classIds[ci];
+      if (ci > 0 && ci % 10 === 0) {
+        console.log(`   ... processed ${ci}/${classIds.length} classes`);
+      }
+      let classDetails = await databaseService.getClassById(classId);
+      if (!classDetails || !classDetails.start_term_id || !classDetails.end_term_id) {
+        try {
+          const apiClass = await this.getClassById(apiKey, classId, baseUrl);
+          if (apiClass) {
+            const start = (apiClass as any).start_term_id ?? (apiClass as any).startTermId;
+            const end = (apiClass as any).end_term_id ?? (apiClass as any).endTermId;
+            if (start != null && end != null) {
+              classDetails = {
+                ...(classDetails || { id: classId, name: (apiClass as any).name || String(classId) }),
+                start_term_id: start,
+                end_term_id: end,
+              } as any;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (!classDetails || !classDetails.start_term_id || !classDetails.end_term_id) {
+        continue;
+      }
+
+      let terms: { id: number; name: string }[];
+      if (termIdFilter != null) {
+        const termInRange = classDetails.start_term_id <= termIdFilter && termIdFilter <= classDetails.end_term_id;
+        if (!termInRange) continue;
+        const singleTerm = await databaseService.getAcademicTermsInRange(termIdFilter, termIdFilter);
+        terms = singleTerm.length > 0 ? singleTerm : [{ id: termIdFilter, name: `Term ${termIdFilter}` }];
+      } else {
+        terms = await databaseService.getAcademicTermsInRange(
+          classDetails.start_term_id,
+          classDetails.end_term_id
+        );
+      }
+
+      for (const term of terms) {
+        combinations.push({
+          classId,
+          className: classDetails!.name,
+          termId: term.id,
+          termName: term.name,
+        });
+      }
+    }
+
+    const totalCombinations = combinations.length;
+    const classesWithCombos = new Set(combinations.map(c => c.classId)).size;
+    const skipped = classIds.length - classesWithCombos;
+    console.log(`📋 Found ${classIds.length} classes with memberships, ${totalCombinations} class-term combinations to fetch (${skipped} classes skipped)`);
+
+    const details: Array<{ classId: number; className: string; termId: number; termName: string; count: number; error?: string }> = [];
+    let totalFetched = 0;
+    let errors = 0;
+
+    for (let i = 0; i < combinations.length; i++) {
+      const { classId, className, termId, termName } = combinations[i];
+      const completed = i + 1;
+
+      try {
+        const response = await this.getTermGrades(apiKey, classId, termId, baseUrl);
+        const count = response?.students?.length ?? 0;
+        totalFetched += count;
+        details.push({ classId, className, termId, termName, count });
+        console.log(`  [${completed}/${totalCombinations}] Class ${classId} (${className}), Term ${termId} (${termName}): ${count > 0 ? `${count} term grades` : 'no data'}`);
+      } catch (error: any) {
+        errors++;
+        details.push({ classId, className, termId, termName, count: 0, error: error.message });
+        console.warn(`  [${completed}/${totalCombinations}] Class ${classId}, Term ${termId}: ${error.message}`);
+      }
+    }
+
+    console.log(`\n✅ Sync complete: ${classesWithCombos} classes, ${totalCombinations}/${totalCombinations} combinations processed, ${totalFetched} term grades fetched, ${errors} errors`);
+    return {
+      classesProcessed: classesWithCombos,
+      classesSkipped: skipped,
+      totalCombinations,
+      termGradesFetched: totalFetched,
+      errors,
+      details,
+    };
   }
 
   /**

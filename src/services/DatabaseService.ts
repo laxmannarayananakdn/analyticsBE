@@ -803,6 +803,51 @@ export class DatabaseService {
   }
 
   /**
+   * Get distinct class IDs that have at least one membership (for term grades sync)
+   * @param filters - Optional: grade_number (filter by year groups with this grade), class_id (single class only), school_id (required when grade_number used)
+   */
+  async getDistinctClassesWithMemberships(filters?: {
+    grade_number?: number;
+    class_id?: number;
+    school_id?: number;
+  }): Promise<number[]> {
+    if (filters?.class_id != null) {
+      const check = await executeQuery<{ class_id: number }>(
+        'SELECT TOP 1 class_id FROM MB.class_memberships WHERE class_id = @class_id',
+        { class_id: filters.class_id }
+      );
+      if (check.error || !check.data || check.data.length === 0) return [];
+      return [filters.class_id];
+    }
+
+    if (filters?.grade_number != null && filters?.school_id != null) {
+      const query = `
+        SELECT DISTINCT cm.class_id
+        FROM MB.class_memberships cm
+        INNER JOIN MB.year_group_students ygs ON cm.user_id = ygs.student_id
+        INNER JOIN MB.year_groups yg ON ygs.year_group_id = yg.id
+        WHERE yg.grade_number = @grade_number AND yg.school_id = @school_id
+        ORDER BY cm.class_id
+      `;
+      const result = await executeQuery<{ class_id: number }>(query, {
+        grade_number: filters.grade_number,
+        school_id: filters.school_id,
+      });
+      if (result.error || !result.data) return [];
+      return result.data.map(r => r.class_id);
+    }
+
+    const query = `
+      SELECT DISTINCT class_id
+      FROM MB.class_memberships
+      ORDER BY class_id
+    `;
+    const result = await executeQuery<{ class_id: number }>(query, {});
+    if (result.error || !result.data) return [];
+    return result.data.map(r => r.class_id);
+  }
+
+  /**
    * Get class memberships for students in a year group (limited to first N students)
    */
   async getClassMembershipsForYearGroup(yearGroupId: number, limitStudents?: number): Promise<Array<{ class_id: number; user_id: number; role: string }>> {
