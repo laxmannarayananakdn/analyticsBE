@@ -337,7 +337,7 @@ router.delete('/schedules/:id', async (req: Request, res: Response) => {
  */
 router.post('/trigger', async (req: Request, res: Response) => {
   try {
-    const { nodeIds, nodeId, academicYear, all, includeDescendants } = req.body;
+    const { nodeIds, nodeId, academicYear, all, includeDescendants, endpointsMb, endpointsNex } = req.body;
     const triggeredBy = req.user?.email || 'manual';
 
     const resolvedNodeIds = nodeIds ?? (nodeId ? [nodeId] : undefined);
@@ -376,6 +376,8 @@ router.post('/trigger', async (req: Request, res: Response) => {
           triggeredBy,
           existingRunId: runId,
           abortSignal: abortController.signal,
+          endpointsMb: Array.isArray(endpointsMb) && endpointsMb.length > 0 ? endpointsMb : undefined,
+          endpointsNex: Array.isArray(endpointsNex) && endpointsNex.length > 0 ? endpointsNex : undefined,
         });
         console.log(`✅ Sync run ${result.runId} ${result.status}: ${result.schoolsSucceeded} succeeded, ${result.schoolsFailed} failed`);
       } catch (err: any) {
