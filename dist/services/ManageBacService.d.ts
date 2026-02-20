@@ -11,6 +11,14 @@ export declare class ManageBacService {
      */
     private makeRequest;
     /**
+     * Make request and return raw response (including meta for pagination)
+     */
+    private makeRequestRaw;
+    /**
+     * Fetch all pages for a paginated ManageBac list endpoint
+     */
+    private fetchAllPaginated;
+    /**
      * Build ManageBac URL with custom base URL
      */
     private buildManageBacUrl;
@@ -39,22 +47,29 @@ export declare class ManageBacService {
      */
     getSubjects(apiKey: string, baseUrl?: string): Promise<Subject[]>;
     /**
-     * Get all teachers
+     * Get all teachers (with pagination to fetch all pages)
+     * onLog: optional callback to stream progress to frontend (e.g. SSE)
      */
     getTeachers(apiKey: string, filters?: {
         department?: string;
         active_only?: boolean;
-    }, baseUrl?: string): Promise<Teacher[]>;
+    }, baseUrl?: string, schoolId?: number, onLog?: (msg: string) => void): Promise<Teacher[]>;
     /**
-     * Get all students in the school
+     * Get all students in the school (with pagination to fetch all pages)
+     * onLog: optional callback to stream progress to frontend (e.g. SSE)
      */
     getStudents(apiKey: string, filters?: {
         grade_id?: string;
         active_only?: boolean;
         academic_year_id?: string;
-    }, baseUrl?: string): Promise<Student[]>;
+    }, baseUrl?: string, schoolId?: number, onLog?: (msg: string) => void): Promise<Student[]>;
     /**
-     * Get all classes in the school
+     * Map ManageBac student API response to DB format
+     * Supports both snake_case and camelCase (API may vary by version)
+     */
+    private mapManageBacStudentToDb;
+    /**
+     * Get all classes in the school (with pagination)
      */
     getClasses(apiKey: string, baseUrl?: string): Promise<Class[]>;
     /**
@@ -66,7 +81,7 @@ export declare class ManageBacService {
      */
     getYearGroups(apiKey: string, baseUrl?: string): Promise<YearGroup[]>;
     /**
-     * Get students in a specific year group
+     * Get students in a specific year group (with pagination)
      */
     getYearGroupStudents(apiKey: string, yearGroupId: string, academicYearId?: string, termId?: string, baseUrl?: string): Promise<any>;
     /**

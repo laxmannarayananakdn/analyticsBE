@@ -303,6 +303,21 @@ export declare class DatabaseService {
         error: string | null;
     }>;
     /**
+     * Bulk upsert ManageBac students using batched MERGE (much faster than one-by-one)
+     */
+    bulkUpsertManageBacStudents(students: Student[], onProgress?: (current: number, total: number, batchNum: number, totalBatches: number) => void): Promise<{
+        upserted: number;
+        error: string | null;
+    }>;
+    /**
+     * Upsert teachers (MB.users + MB.teachers)
+     * Teachers must exist in MB.users first (FK constraint)
+     */
+    upsertTeachers(teachers: Array<Record<string, any>>, schoolId: number, onLog?: (msg: string) => void): Promise<{
+        data: any[] | null;
+        error: string | null;
+    }>;
+    /**
      * Upsert term grades
      */
     upsertTermGrades(termGrades: TermGrade[]): Promise<{

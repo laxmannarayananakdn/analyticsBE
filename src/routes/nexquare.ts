@@ -159,7 +159,7 @@ router.get('/sync-stream/:endpoint', loadNexquareConfig, async (req: Request, re
 
   const send = (data: object) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
-    res.flush?.();
+    (res as any).flush?.();
   };
 
   try {

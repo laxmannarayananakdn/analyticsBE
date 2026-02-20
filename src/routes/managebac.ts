@@ -279,7 +279,7 @@ router.get('/sync-stream/:endpoint', loadManageBacConfig, async (req: Request, r
 
   const send = (data: object) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
-    res.flush?.();
+    (res as any).flush?.();
   };
 
   try {

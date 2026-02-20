@@ -10,7 +10,7 @@ import type { BaseNexquareService } from './BaseNexquareService.js';
  * Fetches CSV file from API, parses it, and saves to database
  * Can be added to a class that extends BaseNexquareService
  */
-export declare function getStudentAssessments(this: BaseNexquareService, config: NexquareConfig, schoolId?: string, academicYear?: string, fileName?: string, limit?: number, offset?: number): Promise<any[]>;
+export declare function getStudentAssessments(this: BaseNexquareService, config: NexquareConfig, schoolId?: string, academicYear?: string, fileName?: string, limit?: number, offset?: number, onLog?: (msg: string) => void): Promise<any[]>;
 /**
  * Save a batch of assessment records to database using temporary table approach
  * This is faster than batched INSERT statements as SQL Server can optimize the final insert

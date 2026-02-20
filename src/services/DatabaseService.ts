@@ -1554,12 +1554,12 @@ export class DatabaseService {
 
     try {
       await transaction.begin();
-      await transaction.request().query('SET IDENTITY_INSERT MB.students ON');
 
       for (let i = 0; i < students.length; i += batchSize) {
         const batch = students.slice(i, i + batchSize);
         const batchNum = Math.floor(i / batchSize) + 1;
 
+        // IDENTITY_INSERT must be in the SAME batch as MERGE for SQL Server
         const mergeStatements = batch.map((record, index) => {
           const baseIndex = i + index;
           return `
@@ -1594,6 +1594,8 @@ export class DatabaseService {
           `;
         }).join('\n');
 
+        // Wrap with IDENTITY_INSERT in same batch (required for SQL Server MERGE + explicit id)
+        const batchSql = `SET IDENTITY_INSERT MB.students ON;\n${mergeStatements}\nSET IDENTITY_INSERT MB.students OFF;`;
         const request = transaction.request();
         batch.forEach((record, index) => {
           const baseIndex = i + index;
@@ -1632,12 +1634,11 @@ export class DatabaseService {
           request.input(`additionalHomeroomAdvisorIds${baseIndex}`, sql.NVarChar(sql.MAX), record.additional_homeroom_advisor_ids || '[]');
         });
 
-        await request.query(mergeStatements);
+        await request.query(batchSql);
 
         onProgress?.(Math.min(i + batchSize, students.length), students.length, batchNum, totalBatches);
       }
 
-      await transaction.request().query('SET IDENTITY_INSERT MB.students OFF');
       await transaction.commit();
       return { upserted: students.length, error: null };
     } catch (error: any) {

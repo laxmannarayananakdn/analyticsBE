@@ -94,19 +94,13 @@ export class SupersetService {
                 return this.config.apiKey;
             }
             // Otherwise, authenticate with username/password
+            // NOTE: Login first - do NOT fetch CSRF before login. Many Superset instances (incl. Azure)
+            // require Bearer token for the CSRF endpoint, so we must login to get JWT, then get CSRF with it.
             console.log(`🔐 Attempting to authenticate with username: ${this.config.username}`);
             const loginHeaders = {
                 'Content-Type': 'application/json',
                 Accept: 'application/json',
             };
-            // Try with CSRF token first (some instances require it); fallback to login without if CSRF fails
-            try {
-                const { token: csrfToken } = await this.getCsrfToken();
-                loginHeaders['X-CSRFToken'] = csrfToken;
-            }
-            catch (csrfErr) {
-                console.log('   CSRF token unavailable, attempting login without it (some instances allow this)');
-            }
             console.log(`🔐 Logging in to Superset...`);
             const response = await fetch(`${this.config.baseUrl}/api/v1/security/login`, {
                 method: 'POST',
@@ -149,8 +143,9 @@ export class SupersetService {
      * @param resources - Optional resources array
      * @param usePreGenerated - If true and SUPERSET_GUEST_TOKEN is set, return it (use only when token matches dashboard)
      * @param user - Logged-in user for Superset (username = email). Superset will apply this user's permissions.
+     * @param rls - RLS rules from Superset for this user (clause + dataset). Enables same data restriction as direct Superset login.
      */
-    async generateGuestToken(dashboardId, resources, usePreGenerated = false, user) {
+    async generateGuestToken(dashboardId, resources, usePreGenerated = false, user, rls) {
         try {
             // Pre-generated token is dashboard-specific; only use when caller doesn't need a specific dashboard
             if (usePreGenerated && this.config.guestToken) {
@@ -164,13 +159,28 @@ export class SupersetService {
             }
             // Otherwise, generate a new guest token using authentication
             console.log('🔐 Generating new guest token via authentication...');
-            const accessToken = await this.getAccessToken();
-            // CSRF endpoint on Azure Superset requires Bearer token, not Basic auth
-            const { token: csrfToken, cookieHeader } = await this.getCsrfToken(accessToken);
+            let accessToken = await this.getAccessToken();
+            let csrfResult;
+            try {
+                csrfResult = await this.getCsrfToken(accessToken);
+            }
+            catch (csrfErr) {
+                // Token may have expired - clear cache and retry with fresh login
+                if (csrfErr?.message?.includes('401') || csrfErr?.message?.toLowerCase().includes('expired')) {
+                    console.log('🔄 Access token expired, refreshing...');
+                    this.accessTokenCache = null;
+                    accessToken = await this.getAccessToken();
+                    csrfResult = await this.getCsrfToken(accessToken);
+                }
+                else {
+                    throw csrfErr;
+                }
+            }
+            const { token: csrfToken, cookieHeader } = csrfResult;
             const dashboardIdStr = typeof dashboardId === 'string' ? dashboardId : String(dashboardId);
             const guestTokenRequest = {
                 resources: resources || [{ type: 'dashboard', id: dashboardIdStr }],
-                rls: [],
+                rls: rls ?? [],
                 user: user ?? {
                     username: 'guest',
                     first_name: 'Guest',

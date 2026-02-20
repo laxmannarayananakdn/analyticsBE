@@ -1016,7 +1016,14 @@ export class DatabaseService {
         }
         const results = [];
         const errors = [];
-        for (const student of students) {
+        const total = students.length;
+        const logInterval = Math.max(1, Math.floor(total / 20)); // ~20 progress logs
+        console.log(`   📊 Upserting ${total} students (logging every ${logInterval} records)...`);
+        for (let i = 0; i < students.length; i++) {
+            const student = students[i];
+            if ((i + 1) % logInterval === 0 || i === 0 || i === total - 1) {
+                console.log(`   📊 Student progress: ${i + 1}/${total} (${Math.round(((i + 1) / total) * 100)}%)`);
+            }
             try {
                 // First, try to update existing student
                 const updateQuery = `
@@ -1193,6 +1200,223 @@ export class DatabaseService {
             return { data: null, error: result.error };
         }
         return { data: result.data, error: null };
+    }
+    /**
+     * Bulk upsert ManageBac students using batched MERGE (much faster than one-by-one)
+     */
+    async bulkUpsertManageBacStudents(students, onProgress) {
+        if (!students || students.length === 0) {
+            return { upserted: 0, error: null };
+        }
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        const batchSize = 50; // Stay under 2100 params (50 * ~28 cols)
+        const totalBatches = Math.ceil(students.length / batchSize);
+        try {
+            await transaction.begin();
+            for (let i = 0; i < students.length; i += batchSize) {
+                const batch = students.slice(i, i + batchSize);
+                const batchNum = Math.floor(i / batchSize) + 1;
+                // IDENTITY_INSERT must be in the SAME batch as MERGE for SQL Server
+                const mergeStatements = batch.map((record, index) => {
+                    const baseIndex = i + index;
+                    return `
+            MERGE MB.students AS target
+            USING (SELECT @id${baseIndex} AS id) AS source ON target.id = source.id
+            WHEN MATCHED THEN
+              UPDATE SET
+                grade_id = @gradeId${baseIndex}, year_group_id = @yearGroupId${baseIndex}, uniq_student_id = @uniqStudentId${baseIndex},
+                first_name = @firstName${baseIndex}, last_name = @lastName${baseIndex}, email = @email${baseIndex},
+                gender = @gender${baseIndex}, birthday = @birthday${baseIndex}, archived = @archived${baseIndex},
+                program = @program${baseIndex}, program_code = @programCode${baseIndex}, class_grade = @classGrade${baseIndex},
+                class_grade_number = @classGradeNumber${baseIndex}, graduating_year = @graduatingYear${baseIndex},
+                nationalities = @nationalities${baseIndex}, languages = @languages${baseIndex}, timezone = @timezone${baseIndex},
+                ui_language = @uiLanguage${baseIndex}, student_id = @studentId${baseIndex}, identifier = @identifier${baseIndex},
+                oa_id = @oaId${baseIndex}, withdrawn_on = @withdrawnOn${baseIndex}, photo_url = @photoUrl${baseIndex},
+                homeroom_advisor_id = @homeroomAdvisorId${baseIndex}, attendance_start_date = @attendanceStartDate${baseIndex},
+                parent_ids = @parentIds${baseIndex}, additional_homeroom_advisor_ids = @additionalHomeroomAdvisorIds${baseIndex},
+                updated_at = SYSDATETIMEOFFSET()
+            WHEN NOT MATCHED THEN
+              INSERT (id, grade_id, year_group_id, uniq_student_id, first_name, last_name, email, gender, birthday,
+                archived, program, program_code, class_grade, class_grade_number, graduating_year, nationalities,
+                languages, timezone, ui_language, student_id, identifier, oa_id, withdrawn_on, photo_url,
+                homeroom_advisor_id, attendance_start_date, parent_ids, additional_homeroom_advisor_ids, created_at, updated_at)
+              VALUES (@id${baseIndex}, @gradeId${baseIndex}, @yearGroupId${baseIndex}, @uniqStudentId${baseIndex},
+                @firstName${baseIndex}, @lastName${baseIndex}, @email${baseIndex}, @gender${baseIndex}, @birthday${baseIndex},
+                @archived${baseIndex}, @program${baseIndex}, @programCode${baseIndex}, @classGrade${baseIndex},
+                @classGradeNumber${baseIndex}, @graduatingYear${baseIndex}, @nationalities${baseIndex}, @languages${baseIndex},
+                @timezone${baseIndex}, @uiLanguage${baseIndex}, @studentId${baseIndex}, @identifier${baseIndex},
+                @oaId${baseIndex}, @withdrawnOn${baseIndex}, @photoUrl${baseIndex}, @homeroomAdvisorId${baseIndex},
+                @attendanceStartDate${baseIndex}, @parentIds${baseIndex}, @additionalHomeroomAdvisorIds${baseIndex},
+                SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+          `;
+                }).join('\n');
+                // Wrap with IDENTITY_INSERT in same batch (required for SQL Server MERGE + explicit id)
+                const batchSql = `SET IDENTITY_INSERT MB.students ON;\n${mergeStatements}\nSET IDENTITY_INSERT MB.students OFF;`;
+                const request = transaction.request();
+                batch.forEach((record, index) => {
+                    const baseIndex = i + index;
+                    const parseDate = (d) => {
+                        if (!d)
+                            return null;
+                        if (d instanceof Date)
+                            return d.toISOString().split('T')[0];
+                        return String(d).split('T')[0] || null;
+                    };
+                    request.input(`id${baseIndex}`, sql.BigInt, record.id);
+                    request.input(`gradeId${baseIndex}`, sql.Int, record.grade_id || null);
+                    request.input(`yearGroupId${baseIndex}`, sql.BigInt, record.year_group_id || null);
+                    request.input(`uniqStudentId${baseIndex}`, sql.NVarChar(100), record.uniq_student_id || null);
+                    request.input(`firstName${baseIndex}`, sql.NVarChar(255), record.first_name || '');
+                    request.input(`lastName${baseIndex}`, sql.NVarChar(255), record.last_name || '');
+                    request.input(`email${baseIndex}`, sql.NVarChar(320), record.email || null);
+                    request.input(`gender${baseIndex}`, sql.NVarChar(50), record.gender || null);
+                    request.input(`birthday${baseIndex}`, sql.Date, parseDate(record.birthday));
+                    request.input(`archived${baseIndex}`, sql.Bit, record.archived ?? false);
+                    request.input(`program${baseIndex}`, sql.NVarChar(255), record.program || null);
+                    request.input(`programCode${baseIndex}`, sql.NVarChar(50), record.program_code || null);
+                    request.input(`classGrade${baseIndex}`, sql.NVarChar(100), record.class_grade || null);
+                    request.input(`classGradeNumber${baseIndex}`, sql.Int, record.class_grade_number ?? null);
+                    request.input(`graduatingYear${baseIndex}`, sql.Int, record.graduating_year ?? null);
+                    request.input(`nationalities${baseIndex}`, sql.NVarChar(sql.MAX), record.nationalities || '[]');
+                    request.input(`languages${baseIndex}`, sql.NVarChar(sql.MAX), record.languages || '[]');
+                    request.input(`timezone${baseIndex}`, sql.NVarChar(100), record.timezone || null);
+                    request.input(`uiLanguage${baseIndex}`, sql.NVarChar(10), record.ui_language || null);
+                    request.input(`studentId${baseIndex}`, sql.NVarChar(100), record.student_id || null);
+                    request.input(`identifier${baseIndex}`, sql.NVarChar(100), record.identifier || null);
+                    request.input(`oaId${baseIndex}`, sql.NVarChar(100), record.oa_id || null);
+                    request.input(`withdrawnOn${baseIndex}`, sql.Date, parseDate(record.withdrawn_on));
+                    request.input(`photoUrl${baseIndex}`, sql.NVarChar(1000), record.photo_url || null);
+                    request.input(`homeroomAdvisorId${baseIndex}`, sql.BigInt, record.homeroom_advisor_id ?? null);
+                    request.input(`attendanceStartDate${baseIndex}`, sql.Date, parseDate(record.attendance_start_date));
+                    request.input(`parentIds${baseIndex}`, sql.NVarChar(sql.MAX), record.parent_ids || '[]');
+                    request.input(`additionalHomeroomAdvisorIds${baseIndex}`, sql.NVarChar(sql.MAX), record.additional_homeroom_advisor_ids || '[]');
+                });
+                await request.query(batchSql);
+                onProgress?.(Math.min(i + batchSize, students.length), students.length, batchNum, totalBatches);
+            }
+            await transaction.commit();
+            return { upserted: students.length, error: null };
+        }
+        catch (error) {
+            try {
+                await transaction.rollback();
+            }
+            catch {
+                /* ignore */
+            }
+            console.error('bulkUpsertManageBacStudents failed:', error);
+            return { upserted: 0, error: error.message || 'Bulk upsert failed' };
+        }
+    }
+    /**
+     * Upsert teachers (MB.users + MB.teachers)
+     * Teachers must exist in MB.users first (FK constraint)
+     */
+    async upsertTeachers(teachers, schoolId, onLog) {
+        if (!teachers || teachers.length === 0) {
+            return { data: [], error: null };
+        }
+        const results = [];
+        const errors = [];
+        const total = teachers.length;
+        const logInterval = Math.max(1, Math.floor(total / 20));
+        const log = (msg) => {
+            console.log(msg);
+            onLog?.(msg);
+        };
+        log(`📊 Upserting ${total} teachers (MB.users then MB.teachers)...`);
+        for (let i = 0; i < teachers.length; i++) {
+            const teacher = teachers[i];
+            if ((i + 1) % logInterval === 0 || i === 0 || i === total - 1) {
+                log(`📊 Teacher progress: ${i + 1}/${total} (${Math.round(((i + 1) / total) * 100)}%)`);
+            }
+            try {
+                const id = typeof teacher.id === 'string' ? parseInt(teacher.id, 10) : teacher.id;
+                if (!id)
+                    continue;
+                const nationalities = Array.isArray(teacher.nationalities)
+                    ? JSON.stringify(teacher.nationalities)
+                    : (teacher.nationalities ?? '[]');
+                const languages = Array.isArray(teacher.languages)
+                    ? JSON.stringify(teacher.languages)
+                    : (teacher.languages ?? '[]');
+                const programs = Array.isArray(teacher.programs)
+                    ? JSON.stringify(teacher.programs)
+                    : (teacher.programs ?? '[]');
+                // 1. Upsert MB.users (required before MB.teachers due to FK)
+                const userParams = {
+                    id,
+                    school_id: schoolId,
+                    email: teacher.email || `mb-teacher-${id}@placeholder.local`,
+                    first_name: teacher.first_name || '',
+                    last_name: teacher.last_name || '',
+                    identifier: teacher.account_uid || teacher.identifier || null,
+                    role: teacher.role || 'Teacher',
+                    archived: teacher.archived ?? false,
+                    ui_language: teacher.ui_language || null,
+                    gender: teacher.gender || null,
+                    street_address: teacher.street_address || null,
+                    city: teacher.city || null,
+                    state: teacher.state || null,
+                    zipcode: teacher.zipcode || null,
+                    country: teacher.country || null
+                };
+                const usersUpdateQuery = `
+          UPDATE MB.users SET
+            school_id = @school_id, email = @email, first_name = @first_name, last_name = @last_name,
+            identifier = @identifier, role = @role, archived = @archived, ui_language = @ui_language,
+            gender = @gender, street_address = @street_address, city = @city, state = @state,
+            zipcode = @zipcode, country = @country, updated_at = SYSDATETIMEOFFSET()
+          WHERE id = @id;
+          SELECT @@ROWCOUNT as rows_affected;
+        `;
+                const usersUpdateResult = await executeQuery(usersUpdateQuery, userParams);
+                const rowsAffected = usersUpdateResult.data?.[0]?.rows_affected || 0;
+                if (rowsAffected === 0) {
+                    const usersInsertQuery = `
+            SET IDENTITY_INSERT MB.users ON;
+            INSERT INTO MB.users (id, school_id, email, first_name, last_name, identifier, role, archived, ui_language, gender, street_address, city, state, zipcode, country, created_at, updated_at)
+            VALUES (@id, @school_id, @email, @first_name, @last_name, @identifier, @role, @archived, @ui_language, @gender, @street_address, @city, @state, @zipcode, @country, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+            SET IDENTITY_INSERT MB.users OFF;
+          `;
+                    const usersInsertResult = await executeQuery(usersInsertQuery, userParams);
+                    if (usersInsertResult.error) {
+                        errors.push(`Teacher ${id} (users): ${usersInsertResult.error}`);
+                        continue;
+                    }
+                }
+                // 2. Upsert MB.teachers
+                const teachersMergeQuery = `
+          MERGE MB.teachers AS target
+          USING (SELECT @id AS id) AS source ON target.id = source.id
+          WHEN MATCHED THEN
+            UPDATE SET nationalities = @nationalities, languages = @languages, programs = @programs, updated_at = SYSDATETIMEOFFSET()
+          WHEN NOT MATCHED THEN
+            INSERT (id, nationalities, languages, programs, created_at, updated_at)
+            VALUES (@id, @nationalities, @languages, @programs, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+        `;
+                const teachersResult = await executeQuery(teachersMergeQuery, {
+                    id,
+                    nationalities,
+                    languages,
+                    programs
+                });
+                if (teachersResult.error) {
+                    errors.push(`Teacher ${id} (teachers): ${teachersResult.error}`);
+                }
+                else {
+                    results.push(teacher);
+                }
+            }
+            catch (error) {
+                errors.push(`Teacher ${teacher.id}: ${error.message || error}`);
+            }
+        }
+        if (errors.length > 0 && results.length === 0) {
+            return { data: null, error: errors.join('; ') };
+        }
+        return { data: results, error: errors.length > 0 ? errors.join('; ') : null };
     }
     /**
      * Upsert term grades

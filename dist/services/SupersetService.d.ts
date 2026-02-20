@@ -28,6 +28,7 @@ export declare class SupersetService {
      * @param resources - Optional resources array
      * @param usePreGenerated - If true and SUPERSET_GUEST_TOKEN is set, return it (use only when token matches dashboard)
      * @param user - Logged-in user for Superset (username = email). Superset will apply this user's permissions.
+     * @param rls - RLS rules from Superset for this user (clause + dataset). Enables same data restriction as direct Superset login.
      */
     generateGuestToken(dashboardId: number | string, resources?: Array<{
         type: string;
@@ -36,7 +37,10 @@ export declare class SupersetService {
         username: string;
         first_name: string;
         last_name: string;
-    }): Promise<{
+    }, rls?: Array<{
+        clause: string;
+        dataset: number;
+    }>): Promise<{
         token: string;
         expires_in?: number;
     }>;
