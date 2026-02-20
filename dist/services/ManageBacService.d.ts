@@ -75,7 +75,7 @@ export declare class ManageBacService {
     /**
      * Get a single class by ID
      */
-    getClassById(apiKey: string, classId: number): Promise<Class | null>;
+    getClassById(apiKey: string, classId: number, baseUrl?: string): Promise<Class | null>;
     /**
      * Get all year groups in the school
      */
@@ -97,6 +97,32 @@ export declare class ManageBacService {
      * Get term grades for a class and term
      */
     getTermGrades(apiKey: string, classId: number, termId: number, baseUrl?: string): Promise<TermGradeResponse>;
+    /**
+     * Sync term grades for classes that have memberships.
+     * Discovers class-term combinations from class memberships and class term ranges,
+     * fetches term grades for each, and saves to database.
+     * @param options - grade_number (default 13 when filtering by grade), term_id (specific term only), class_id (specific class only), school_id (required when grade_number used)
+     */
+    syncAllTermGrades(apiKey: string, baseUrl?: string, options?: {
+        grade_number?: number;
+        term_id?: number;
+        class_id?: number;
+        school_id?: number;
+    }): Promise<{
+        classesProcessed: number;
+        classesSkipped: number;
+        totalCombinations: number;
+        termGradesFetched: number;
+        errors: number;
+        details: Array<{
+            classId: number;
+            className: string;
+            termId: number;
+            termName: string;
+            count: number;
+            error?: string;
+        }>;
+    }>;
     /**
      * Get current school ID
      */

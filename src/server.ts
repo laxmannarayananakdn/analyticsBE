@@ -37,6 +37,7 @@ import adminSchoolsRoutes from './routes/adminSchools.js';
 import accessGroupsRoutes from './routes/accessGroups.js';
 import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
+import syncRoutes from './routes/sync.js';
 
 dotenv.config();
 
@@ -109,6 +110,7 @@ app.use('/api/access-groups', accessGroupsRoutes);
 app.use('/api/report-groups', reportGroupsRoutes);
 app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
 app.use('/api/sidebar-access', sidebarAccessRoutes);
+app.use('/api/sync', syncRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -132,7 +134,8 @@ app.get('/', (req, res) => {
         auth: '/api/auth',
         users: '/api/users',
         departments: '/api/departments',
-        nodes: '/api/nodes'
+        nodes: '/api/nodes',
+        sync: '/api/sync'
       }
   });
 });

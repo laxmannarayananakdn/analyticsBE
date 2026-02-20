@@ -1741,10 +1741,12 @@ export class DatabaseService {
           : (teacher.programs ?? '[]');
 
         // 1. Upsert MB.users (required before MB.teachers due to FK)
+        // MERGE by id OR email to handle parallel sync + duplicate email (UQ_users_email)
+        const emailVal = teacher.email || `mb-teacher-${id}@placeholder.local`;
         const userParams = {
           id,
           school_id: schoolId,
-          email: teacher.email || `mb-teacher-${id}@placeholder.local`,
+          email: emailVal,
           first_name: teacher.first_name || '',
           last_name: teacher.last_name || '',
           identifier: teacher.account_uid || teacher.identifier || null,
@@ -1759,45 +1761,56 @@ export class DatabaseService {
           country: teacher.country || null
         };
 
-        const usersUpdateQuery = `
-          UPDATE MB.users SET
-            school_id = @school_id, email = @email, first_name = @first_name, last_name = @last_name,
-            identifier = @identifier, role = @role, archived = @archived, ui_language = @ui_language,
-            gender = @gender, street_address = @street_address, city = @city, state = @state,
-            zipcode = @zipcode, country = @country, updated_at = SYSDATETIMEOFFSET()
-          WHERE id = @id;
-          SELECT @@ROWCOUNT as rows_affected;
+        const usersMergeQuery = `
+          SET IDENTITY_INSERT MB.users ON;
+          MERGE MB.users AS target
+          USING (SELECT @id AS id, @school_id AS school_id, @email AS email, @first_name AS first_name, @last_name AS last_name,
+                 @identifier AS identifier, @role AS role, @archived AS archived, @ui_language AS ui_language,
+                 @gender AS gender, @street_address AS street_address, @city AS city, @state AS state,
+                 @zipcode AS zipcode, @country AS country) AS source
+          ON target.id = source.id OR target.email = source.email
+          WHEN MATCHED THEN
+            UPDATE SET school_id = source.school_id, email = source.email, first_name = source.first_name,
+              last_name = source.last_name, identifier = source.identifier, role = source.role,
+              archived = source.archived, ui_language = source.ui_language, gender = source.gender,
+              street_address = source.street_address, city = source.city, state = source.state,
+              zipcode = source.zipcode, country = source.country, updated_at = SYSDATETIMEOFFSET()
+          WHEN NOT MATCHED BY TARGET THEN
+            INSERT (id, school_id, email, first_name, last_name, identifier, role, archived, ui_language,
+              gender, street_address, city, state, zipcode, country, created_at, updated_at)
+            VALUES (source.id, source.school_id, source.email, source.first_name, source.last_name,
+              source.identifier, source.role, source.archived, source.ui_language, source.gender,
+              source.street_address, source.city, source.state, source.zipcode, source.country,
+              SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+          SET IDENTITY_INSERT MB.users OFF;
         `;
-        const usersUpdateResult = await executeQuery<{ rows_affected: number }>(usersUpdateQuery, userParams);
-        const rowsAffected = usersUpdateResult.data?.[0]?.rows_affected || 0;
 
-        if (rowsAffected === 0) {
-          const usersInsertQuery = `
-            SET IDENTITY_INSERT MB.users ON;
-            INSERT INTO MB.users (id, school_id, email, first_name, last_name, identifier, role, archived, ui_language, gender, street_address, city, state, zipcode, country, created_at, updated_at)
-            VALUES (@id, @school_id, @email, @first_name, @last_name, @identifier, @role, @archived, @ui_language, @gender, @street_address, @city, @state, @zipcode, @country, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
-            SET IDENTITY_INSERT MB.users OFF;
-          `;
-          const usersInsertResult = await executeQuery(usersInsertQuery, userParams);
-          if (usersInsertResult.error) {
-            errors.push(`Teacher ${id} (users): ${usersInsertResult.error}`);
-            continue;
-          }
+        const usersMergeResult = await executeQuery(usersMergeQuery, userParams);
+        if (usersMergeResult.error) {
+          errors.push(`Teacher ${id} (users): ${usersMergeResult.error}`);
+          continue;
         }
+
+        // Resolve effective id (same or existing by email) for MB.teachers FK
+        const resolveResult = await executeQuery<{ id: number }>(
+          `SELECT id FROM MB.users WHERE id = @id OR email = @email`,
+          { id, email: emailVal }
+        );
+        const effectiveId = resolveResult.data?.[0]?.id ?? id;
 
         // 2. Upsert MB.teachers
         const teachersMergeQuery = `
           MERGE MB.teachers AS target
-          USING (SELECT @id AS id) AS source ON target.id = source.id
+          USING (SELECT @effectiveId AS id) AS source ON target.id = source.id
           WHEN MATCHED THEN
             UPDATE SET nationalities = @nationalities, languages = @languages, programs = @programs, updated_at = SYSDATETIMEOFFSET()
-          WHEN NOT MATCHED THEN
+          WHEN NOT MATCHED BY TARGET THEN
             INSERT (id, nationalities, languages, programs, created_at, updated_at)
-            VALUES (@id, @nationalities, @languages, @programs, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+            VALUES (@effectiveId, @nationalities, @languages, @programs, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
         `;
 
         const teachersResult = await executeQuery(teachersMergeQuery, {
-          id,
+          effectiveId,
           nationalities,
           languages,
           programs

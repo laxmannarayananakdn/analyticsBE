@@ -22,6 +22,14 @@ router.use(authenticate);
 router.use(requireAdmin);
 
 /**
+ * GET /api/access-groups/available-pages
+ * Must be before /:id so "available-pages" is not captured as id.
+ */
+router.get('/available-pages', (req, res) => {
+  res.json({ items: ADMIN_ITEMS });
+});
+
+/**
  * GET /api/access-groups
  */
 router.get('/', async (req, res) => {
@@ -59,15 +67,6 @@ router.post('/', async (req, res) => {
     }
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
-});
-
-/**
- * GET /api/access-groups/available-pages
- * Returns page items for Group_Page_Access (dashboard, admin:*, etc.)
- * Must be before /:id to avoid "available-pages" being captured as id
- */
-router.get('/available-pages', (req, res) => {
-  res.json({ items: ADMIN_ITEMS });
 });
 
 /**

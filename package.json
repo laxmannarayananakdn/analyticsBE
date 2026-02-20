@@ -9,7 +9,11 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "lint": "eslint src --ext .ts",
-    "migrate:sidebar": "node scripts/migrate_user_sidebar_access_to_groups.js"
+    "migrate:sidebar": "node scripts/migrate_user_sidebar_access_to_groups.js",
+    "scheduler": "tsx scripts/scheduler-daemon.ts",
+    "sync": "tsx scripts/sync-all-schools.ts",
+    "sync:node": "tsx scripts/sync-all-schools.ts --node-ids",
+    "sync:all": "tsx scripts/sync-all-schools.ts --all"
   },
   "dependencies": {
     "@superset-ui/embedded-sdk": "^0.3.0",
@@ -28,7 +32,8 @@
     "multer": "^2.0.2",
     "pg": "^8.18.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
