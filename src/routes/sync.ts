@@ -6,6 +6,7 @@ import { Router, Request, Response } from 'express';
 import { executeQuery } from '../config/database.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { runSync } from '../services/SyncOrchestratorService.js';
+import { getSyncSchedulerTimezone, isSyncSchedulerEnabled } from '../scheduler/SyncScheduler.js';
 
 const router = Router();
 
@@ -13,6 +14,20 @@ const router = Router();
 const activeRunControllers = new Map<number, AbortController>();
 router.use(authenticate);
 router.use(requireAdmin);
+
+/**
+ * GET /api/sync/info
+ * Scheduler configuration (timezone, enabled)
+ */
+router.get('/info', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    scheduler: {
+      enabled: isSyncSchedulerEnabled(),
+      timezone: getSyncSchedulerTimezone(),
+    },
+  });
+});
 
 /**
  * GET /api/sync/runs

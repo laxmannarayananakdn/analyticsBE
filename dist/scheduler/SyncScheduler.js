@@ -37,6 +37,14 @@ async function loadActiveSchedules() {
 function getTimezone() {
     return process.env.CRON_TIMEZONE || 'Asia/Kolkata';
 }
+/** Return the timezone used for cron schedules. */
+export function getSyncSchedulerTimezone() {
+    return getTimezone();
+}
+/** Return whether the scheduler is enabled (from env). */
+export function isSyncSchedulerEnabled() {
+    return process.env.ENABLE_SCHEDULER !== 'false';
+}
 function registerSchedule(schedule) {
     const { cron_expression, id } = schedule;
     const timezone = getTimezone();

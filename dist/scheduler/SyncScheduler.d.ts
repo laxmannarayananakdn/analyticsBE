@@ -6,6 +6,10 @@
  * Set ENABLE_SCHEDULER=false to disable when running the API server.
  * Set CRON_TIMEZONE (e.g. Asia/Kolkata) for cron timezone; default is Asia/Kolkata (IST).
  */
+/** Return the timezone used for cron schedules. */
+export declare function getSyncSchedulerTimezone(): string;
+/** Return whether the scheduler is enabled (from env). */
+export declare function isSyncSchedulerEnabled(): boolean;
 /**
  * Start the sync scheduler. Call this after the server/DB is ready.
  * No-op if ENABLE_SCHEDULER=false.
