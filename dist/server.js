@@ -123,7 +123,8 @@ app.get('/', (req, res) => {
             users: '/api/users',
             departments: '/api/departments',
             nodes: '/api/nodes',
-            sync: '/api/sync'
+            sync: '/api/sync',
+            syncInfo: '/api/sync/info'
         }
     });
 });

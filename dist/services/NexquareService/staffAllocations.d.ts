@@ -8,5 +8,5 @@ import type { BaseNexquareService } from './BaseNexquareService.js';
  * Get staff allocations and save to database
  * Can be added to a class that extends BaseNexquareService
  */
-export declare function getStaffAllocations(this: BaseNexquareService, config: NexquareConfig, schoolId?: string): Promise<any[]>;
+export declare function getStaffAllocations(this: BaseNexquareService, config: NexquareConfig, schoolId?: string, academicYear?: string): Promise<any[]>;
 //# sourceMappingURL=staffAllocations.d.ts.map

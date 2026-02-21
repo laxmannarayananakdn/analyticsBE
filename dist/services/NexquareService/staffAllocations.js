@@ -9,7 +9,7 @@ import { databaseService } from '../DatabaseService.js';
  * Get staff allocations and save to database
  * Can be added to a class that extends BaseNexquareService
  */
-export async function getStaffAllocations(config, schoolId) {
+export async function getStaffAllocations(config, schoolId, academicYear) {
     try {
         const targetSchoolId = schoolId || this.getCurrentSchoolId();
         if (!targetSchoolId) {
@@ -169,8 +169,32 @@ export async function getStaffAllocations(config, schoolId) {
                 }
             }
         }
-        console.log(`   💾 Bulk inserting ${recordsToInsert.length} staff allocation relationship(s) to database...`);
-        const { inserted, error: bulkError } = await databaseService.bulkInsertStaffAllocations(recordsToInsert);
+        // Determine academic year(s) to delete: from param or from data (check one row / distinct values)
+        const yearsToDelete = academicYear != null && academicYear !== ''
+            ? [academicYear]
+            : Array.from(new Set(recordsToInsert.map((r) => r.academic_year ?? null)));
+        // Filter records when syncing for a specific year (API returns all years)
+        const recordsForInsert = academicYear != null && academicYear !== ''
+            ? recordsToInsert.filter((r) => (r.academic_year ?? null) === academicYear)
+            : recordsToInsert;
+        if (recordsForInsert.length === 0) {
+            console.log(`   ℹ️  No staff allocation records to insert for the target year${academicYear ? ` (${academicYear})` : ''}`);
+            return allAllocations;
+        }
+        // Delete existing allocations for school + each academic year before insert (prevent duplicates)
+        if (schoolSourcedId) {
+            for (const year of yearsToDelete) {
+                const { deleted, error: deleteError } = await databaseService.deleteNexquareStaffAllocationsBySchoolAndYear(schoolSourcedId, year);
+                if (deleteError) {
+                    console.warn(`⚠️  Failed to delete existing staff allocations (year: ${year ?? 'null'}): ${deleteError}`);
+                }
+                else if (deleted > 0) {
+                    console.log(`🗑️  Deleted ${deleted} existing staff allocation(s) for school/year ${year ?? 'null'} before sync`);
+                }
+            }
+        }
+        console.log(`   💾 Bulk inserting ${recordsForInsert.length} staff allocation relationship(s) to database...`);
+        const { inserted, error: bulkError } = await databaseService.bulkInsertStaffAllocations(recordsForInsert);
         if (bulkError) {
             console.error(`❌ Bulk insert failed: ${bulkError}`);
             throw new Error(`Bulk insert failed: ${bulkError}`);

@@ -7,7 +7,7 @@
 import { executeQuery } from '../config/database.js';
 import { getConfigsForScope } from './SyncScopeService.js';
 import type { ManageBacConfig, NexquareConfig } from '../middleware/configLoader.js';
-import { ManageBacService, manageBacService } from './ManageBacService.js';
+import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
 
 export interface RunSyncParams {
@@ -399,11 +399,11 @@ async function syncNexquareSchool(
   }
   throwIfAborted(signal);
   if (eps.includes('student-allocations')) {
-    await nexquareService.getStudentAllocations(config, schoolId);
+    await nexquareService.getStudentAllocations(config, schoolId, ay);
   }
   throwIfAborted(signal);
   if (eps.includes('staff-allocations')) {
-    await nexquareService.getStaffAllocations(config, schoolId);
+    await nexquareService.getStaffAllocations(config, schoolId, ay);
   }
   throwIfAborted(signal);
   if (eps.includes('daily-plans')) {

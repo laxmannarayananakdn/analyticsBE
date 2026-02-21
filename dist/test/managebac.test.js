@@ -2,7 +2,7 @@
  * ManageBac Integration Test Script
  * Run with: npx tsx src/test/managebac.test.ts
  */
-import { manageBacService } from '../services/ManageBacService';
+import { manageBacService } from '../services/ManageBacService/index.js';
 import { executeQuery } from '../config/database';
 import dotenv from 'dotenv';
 dotenv.config();

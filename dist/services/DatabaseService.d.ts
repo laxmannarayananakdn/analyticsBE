@@ -758,6 +758,50 @@ export declare class DatabaseService {
         error: string | null;
     }>;
     /**
+     * Delete NEX student allocations by school and academic year before bulk insert.
+     * When academicYear is null/empty, deletes rows where academic_year IS NULL.
+     */
+    deleteNexquareStudentAllocationsBySchoolAndYear(schoolSourcedId: string, academicYear: string | null): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
+     * Delete NEX staff allocations by school and academic year before bulk insert.
+     * When academicYear is null/empty, deletes rows where academic_year IS NULL.
+     */
+    deleteNexquareStaffAllocationsBySchoolAndYear(schoolSourcedId: string, academicYear: string | null): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
+     * Delete NEX daily plans by school and date range before bulk insert.
+     */
+    deleteNexquareDailyPlansByDateRange(schoolSourcedId: string, startDate: string, endDate: string): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
+     * Delete NEX daily attendance by school and date range before bulk insert.
+     */
+    deleteNexquareDailyAttendanceByDateRange(schoolSourcedId: string, startDate: string, endDate: string): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
+     * Delete NEX student assessments by school and academic year before bulk insert.
+     */
+    deleteNexquareStudentAssessmentsByYear(schoolSourcedId: string, academicYear: string): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
+     * Delete RP student assessments by school and academic year before sync from NEX.
+     */
+    deleteRPStudentAssessmentsByYear(schoolId: string, academicYear: string): Promise<{
+        deleted: number;
+        error: string | null;
+    }>;
+    /**
      * Bulk insert daily attendance records using transaction
      * Much faster than row-by-row inserts
      */

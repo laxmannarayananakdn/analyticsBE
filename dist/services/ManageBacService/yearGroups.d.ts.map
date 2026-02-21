@@ -1,0 +1,1 @@
+{"version":3,"file":"yearGroups.d.ts","sourceRoot":"","sources":["../../../src/services/ManageBacService/yearGroups.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAIH,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,0BAA0B,CAAC;AAC1D,OAAO,KAAK,EAAE,oBAAoB,EAAE,MAAM,2BAA2B,CAAC;AAEtE,wBAAsB,aAAa,CACjC,IAAI,EAAE,oBAAoB,EAC1B,MAAM,EAAE,MAAM,EACd,OAAO,CAAC,EAAE,MAAM,GACf,OAAO,CAAC,SAAS,EAAE,CAAC,CA2DtB"}

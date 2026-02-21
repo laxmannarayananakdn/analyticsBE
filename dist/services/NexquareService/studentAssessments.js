@@ -8,6 +8,7 @@ import { executeQuery, getConnection, sql } from '../../config/database.js';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
+import { databaseService } from '../DatabaseService.js';
 /**
  * Get student assessment/grade book data
  * Fetches CSV file from API, parses it, and saves to database
@@ -456,6 +457,16 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
             return [];
         }
         log(`✅ Step 1 complete: Fetched ${allRecords.length} records across all chunks`);
+        // Delete existing NEX assessments for school + academic year before insert (prevent duplicates)
+        if (schoolSourcedId) {
+            const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
+            if (deleteError) {
+                log(`⚠️  Failed to delete existing NEX assessments before sync: ${deleteError}`);
+            }
+            else if (deleted > 0) {
+                log(`🗑️  Deleted ${deleted} existing NEX assessment(s) for school/year before sync`);
+            }
+        }
         // Process records by grade_name to reduce memory usage
         // Group records by grade_name
         log(`📋 Step 2: Saving assessment records to database (NEX.student_assessments)...`);
@@ -488,6 +499,14 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
         log(`✅ Step 2 complete: Saved ${totalInserted} record(s) to NEX.student_assessments`);
         // Sync data to RP.student_assessments after processing completes
         if (schoolSourcedId) {
+            // Delete existing RP assessments for school + academic year before sync (prevent duplicates)
+            const { deleted: rpDeleted, error: rpDeleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
+            if (rpDeleteError) {
+                log(`⚠️  Failed to delete existing RP assessments before sync: ${rpDeleteError}`);
+            }
+            else if (rpDeleted > 0) {
+                log(`🗑️  Deleted ${rpDeleted} existing RP assessment(s) for school/year before sync`);
+            }
             log(`📋 Step 3: Syncing to RP.student_assessments...`);
             try {
                 const rpInserted = await this.syncStudentAssessmentsToRP(schoolSourcedId);

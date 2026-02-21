@@ -170,6 +170,16 @@ export async function getDailyAttendance(config, schoolId, startDate, endDate, c
             }
         }
         console.log(`✅ Found ${allAttendance.length} total daily attendance record(s)`);
+        // Delete existing attendance for school + date range before insert (prevent duplicates)
+        if (schoolSourcedId) {
+            const { deleted, error: deleteError } = await databaseService.deleteNexquareDailyAttendanceByDateRange(schoolSourcedId, defaultStartDate, defaultEndDate);
+            if (deleteError) {
+                console.warn(`⚠️  Failed to delete existing daily attendance before sync: ${deleteError}`);
+            }
+            else if (deleted > 0) {
+                console.log(`🗑️  Deleted ${deleted} existing daily attendance record(s) for date range before sync`);
+            }
+        }
         // Save attendance to database using bulk insert
         console.log('💾 Preparing daily attendance records for bulk insert...');
         // Debug: Log first record structure

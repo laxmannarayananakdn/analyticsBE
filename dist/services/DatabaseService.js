@@ -2773,6 +2773,122 @@ export class DatabaseService {
         }
     }
     /**
+     * Delete NEX student allocations by school and academic year before bulk insert.
+     * When academicYear is null/empty, deletes rows where academic_year IS NULL.
+     */
+    async deleteNexquareStudentAllocationsBySchoolAndYear(schoolSourcedId, academicYear) {
+        if (!schoolSourcedId)
+            return { deleted: 0, error: null };
+        try {
+            const query = academicYear != null && academicYear !== ''
+                ? `DELETE FROM NEX.student_allocations WHERE school_id = @schoolSourcedId AND academic_year = @academicYear; SELECT @@ROWCOUNT AS deleted;`
+                : `DELETE FROM NEX.student_allocations WHERE school_id = @schoolSourcedId AND academic_year IS NULL; SELECT @@ROWCOUNT AS deleted;`;
+            const result = await executeQuery(query, {
+                schoolSourcedId,
+                ...(academicYear != null && academicYear !== '' ? { academicYear } : {}),
+            });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
+     * Delete NEX staff allocations by school and academic year before bulk insert.
+     * When academicYear is null/empty, deletes rows where academic_year IS NULL.
+     */
+    async deleteNexquareStaffAllocationsBySchoolAndYear(schoolSourcedId, academicYear) {
+        if (!schoolSourcedId)
+            return { deleted: 0, error: null };
+        try {
+            const query = academicYear != null && academicYear !== ''
+                ? `DELETE FROM NEX.staff_allocations WHERE school_id = @schoolSourcedId AND academic_year = @academicYear; SELECT @@ROWCOUNT AS deleted;`
+                : `DELETE FROM NEX.staff_allocations WHERE school_id = @schoolSourcedId AND academic_year IS NULL; SELECT @@ROWCOUNT AS deleted;`;
+            const result = await executeQuery(query, {
+                schoolSourcedId,
+                ...(academicYear != null && academicYear !== '' ? { academicYear } : {}),
+            });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
+     * Delete NEX daily plans by school and date range before bulk insert.
+     */
+    async deleteNexquareDailyPlansByDateRange(schoolSourcedId, startDate, endDate) {
+        if (!schoolSourcedId)
+            return { deleted: 0, error: null };
+        try {
+            const result = await executeQuery(`DELETE FROM NEX.daily_plans WHERE school_id = @schoolSourcedId AND plan_date >= @startDate AND plan_date <= @endDate; SELECT @@ROWCOUNT AS deleted;`, { schoolSourcedId, startDate, endDate });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
+     * Delete NEX daily attendance by school and date range before bulk insert.
+     */
+    async deleteNexquareDailyAttendanceByDateRange(schoolSourcedId, startDate, endDate) {
+        if (!schoolSourcedId)
+            return { deleted: 0, error: null };
+        try {
+            const result = await executeQuery(`DELETE FROM NEX.daily_attendance WHERE school_id = @schoolSourcedId AND attendance_date >= @startDate AND attendance_date <= @endDate; SELECT @@ROWCOUNT AS deleted;`, { schoolSourcedId, startDate, endDate });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
+     * Delete NEX student assessments by school and academic year before bulk insert.
+     */
+    async deleteNexquareStudentAssessmentsByYear(schoolSourcedId, academicYear) {
+        if (!schoolSourcedId)
+            return { deleted: 0, error: null };
+        try {
+            const result = await executeQuery(`DELETE FROM NEX.student_assessments WHERE school_id = @schoolSourcedId AND academic_year = @academicYear; SELECT @@ROWCOUNT AS deleted;`, { schoolSourcedId, academicYear });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
+     * Delete RP student assessments by school and academic year before sync from NEX.
+     */
+    async deleteRPStudentAssessmentsByYear(schoolId, academicYear) {
+        if (!schoolId)
+            return { deleted: 0, error: null };
+        try {
+            const result = await executeQuery(`DELETE FROM RP.student_assessments WHERE school_id = @schoolId AND academic_year = @academicYear; SELECT @@ROWCOUNT AS deleted;`, { schoolId, academicYear });
+            if (result.error)
+                return { deleted: 0, error: result.error };
+            const deleted = result.data?.[0]?.deleted ?? 0;
+            return { deleted, error: null };
+        }
+        catch (error) {
+            return { deleted: 0, error: error.message || 'Delete failed' };
+        }
+    }
+    /**
      * Bulk insert daily attendance records using transaction
      * Much faster than row-by-row inserts
      */

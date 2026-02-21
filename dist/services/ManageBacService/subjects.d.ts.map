@@ -1,0 +1,1 @@
+{"version":3,"file":"subjects.d.ts","sourceRoot":"","sources":["../../../src/services/ManageBacService/subjects.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAIH,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,0BAA0B,CAAC;AACxD,OAAO,KAAK,EAAE,oBAAoB,EAAE,MAAM,2BAA2B,CAAC;AAEtE,wBAAsB,WAAW,CAC/B,IAAI,EAAE,oBAAoB,EAC1B,MAAM,EAAE,MAAM,EACd,OAAO,CAAC,EAAE,MAAM,GACf,OAAO,CAAC,OAAO,EAAE,CAAC,CAuGpB"}

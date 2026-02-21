@@ -5,7 +5,7 @@
  */
 import { executeQuery } from '../config/database.js';
 import { getConfigsForScope } from './SyncScopeService.js';
-import { ManageBacService, manageBacService } from './ManageBacService.js';
+import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'students', 'classes', 'year-groups'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
@@ -295,11 +295,11 @@ async function syncNexquareSchool(config, schoolId, options) {
     }
     throwIfAborted(signal);
     if (eps.includes('student-allocations')) {
-        await nexquareService.getStudentAllocations(config, schoolId);
+        await nexquareService.getStudentAllocations(config, schoolId, ay);
     }
     throwIfAborted(signal);
     if (eps.includes('staff-allocations')) {
-        await nexquareService.getStaffAllocations(config, schoolId);
+        await nexquareService.getStaffAllocations(config, schoolId, ay);
     }
     throwIfAborted(signal);
     if (eps.includes('daily-plans')) {

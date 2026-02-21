@@ -91,6 +91,16 @@ export async function getDailyPlans(
 
     console.log(`✅ Found ${allPlans.length} total daily plan(s)`);
 
+    // Delete existing plans for school + date range before insert (prevent duplicates)
+    if (schoolSourcedId) {
+      const { deleted, error: deleteError } = await databaseService.deleteNexquareDailyPlansByDateRange(schoolSourcedId, defaultFromDate, defaultToDate);
+      if (deleteError) {
+        console.warn(`⚠️  Failed to delete existing daily plans before sync: ${deleteError}`);
+      } else if (deleted > 0) {
+        console.log(`🗑️  Deleted ${deleted} existing daily plan(s) for date range before sync`);
+      }
+    }
+
     // Save daily plans to database using bulk insert
     console.log('💾 Preparing daily plans for bulk insert...');
 

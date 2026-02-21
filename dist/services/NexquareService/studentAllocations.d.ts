@@ -23,5 +23,5 @@ export declare function getStudentAllocations(this: BaseNexquareService & {
         id: number;
         sourced_id: string;
     }>>;
-}, config: NexquareConfig, schoolId?: string): Promise<StudentAllocationResponse[]>;
+}, config: NexquareConfig, schoolId?: string, academicYear?: string): Promise<StudentAllocationResponse[]>;
 //# sourceMappingURL=studentAllocations.d.ts.map

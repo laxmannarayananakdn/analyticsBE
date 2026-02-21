@@ -4,7 +4,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { manageBacService } from '../services/ManageBacService.js';
+import { manageBacService } from '../services/ManageBacService/index.js';
 import { databaseService } from '../services/DatabaseService.js';
 import { loadManageBacConfig } from '../middleware/configLoader.js';
 import { executeQuery } from '../config/database.js';
