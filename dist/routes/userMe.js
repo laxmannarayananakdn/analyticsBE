@@ -2,7 +2,7 @@
  * User Query Routes (for authenticated users to query their own access)
  */
 import express from 'express';
-import { getUserSchoolAccess, getUserAccess, getUserDepartments, } from '../services/AccessService.js';
+import { getUserSchoolAccess, getUserAccess, getUserDepartments, getUserAccessibleNodes, } from '../services/AccessService.js';
 import { getUserSidebarAccess } from '../services/SidebarAccessService.js';
 import { getUserByEmail } from '../services/UserService.js';
 import { authenticate } from '../middleware/auth.js';
@@ -46,6 +46,24 @@ router.get('/me/schools', async (req, res) => {
     }
     catch (error) {
         console.error('Get user schools error:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /users/me/nodes
+ * Get nodes the user has access to (from Access Groups only).
+ * Use this when you need "which nodes can this user access" - never uses Node_School.
+ */
+router.get('/me/nodes', async (req, res) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+        const nodes = await getUserAccessibleNodes(req.user.email);
+        res.json(nodes);
+    }
+    catch (error) {
+        console.error('Get user nodes error:', error);
         res.status(500).json({ error: error.message || 'Internal server error' });
     }
 });

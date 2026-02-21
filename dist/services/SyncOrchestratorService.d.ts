@@ -20,10 +20,18 @@ export interface RunSyncParams {
     all?: boolean;
     /** Who triggered: "scheduler" or user email. */
     triggeredBy?: string;
+    /** Pre-created run ID (e.g. from API trigger). If provided, skip insert and use this. */
+    existingRunId?: number;
+    /** AbortSignal for cancellation. If aborted, run exits early with status 'cancelled'. */
+    abortSignal?: AbortSignal;
+    /** Explicit MB config IDs (overrides node/all for MB). */
+    configIdsMb?: number[];
+    /** Explicit NEX config IDs (overrides node/all for NEX). */
+    configIdsNex?: number[];
 }
 export interface RunSyncResult {
     runId: number;
-    status: 'completed' | 'failed' | 'running';
+    status: 'completed' | 'failed' | 'cancelled' | 'running';
     totalSchools: number;
     schoolsSucceeded: number;
     schoolsFailed: number;
@@ -31,7 +39,7 @@ export interface RunSyncResult {
 }
 /**
  * Run sync for the given scope.
- * Processes schools sequentially to avoid ManageBacService singleton conflicts.
+ * All schools run in parallel - each MB school gets its own ManageBacService instance.
  */
 export declare function runSync(params: RunSyncParams): Promise<RunSyncResult>;
 //# sourceMappingURL=SyncOrchestratorService.d.ts.map

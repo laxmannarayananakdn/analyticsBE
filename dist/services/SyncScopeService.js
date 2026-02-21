@@ -6,22 +6,69 @@
 import { executeQuery } from '../config/database.js';
 /**
  * Get school configs for the given scope.
+ * - If `configIdsMb` / `configIdsNex`: return only those configs (overrides node/all for that source).
  * - If `all`: return all active MB and NEX configs.
  * - If `nodeIds`: return configs whose schools are in Node_School for those nodes (and optionally descendants).
  * - Configs must have school_id populated and match Node_School.School_ID for the given source.
  */
 export async function getConfigsForScope(params) {
+    let mb;
+    let nex;
+    if (params.configIdsMb?.length || params.configIdsNex?.length) {
+        const [mbRes, nexRes] = await Promise.all([
+            params.configIdsMb?.length
+                ? getConfigsByIds('mb', params.configIdsMb)
+                : Promise.resolve([]),
+            params.configIdsNex?.length
+                ? getConfigsByIds('nex', params.configIdsNex)
+                : Promise.resolve([]),
+        ]);
+        mb = mbRes;
+        nex = nexRes;
+        return { mb, nex };
+    }
     if (params.all) {
-        return getAllActiveConfigs();
+        const all = await getAllActiveConfigs();
+        mb = all.mb;
+        nex = all.nex;
     }
-    const nodeIds = params.nodeIds;
-    if (!nodeIds || nodeIds.length === 0) {
-        return { mb: [], nex: [] };
+    else {
+        const nodeIds = params.nodeIds;
+        if (!nodeIds || nodeIds.length === 0) {
+            return { mb: [], nex: [] };
+        }
+        const effectiveNodeIds = params.includeDescendants
+            ? await expandNodesWithDescendants(nodeIds)
+            : nodeIds;
+        const nodeResult = await getConfigsForNodes(effectiveNodeIds);
+        mb = nodeResult.mb;
+        nex = nodeResult.nex;
     }
-    const effectiveNodeIds = params.includeDescendants
-        ? await expandNodesWithDescendants(nodeIds)
-        : nodeIds;
-    return getConfigsForNodes(effectiveNodeIds);
+    return { mb, nex };
+}
+/**
+ * Get configs by explicit ID list (for CLI --mb-config-ids / --nex-config-ids).
+ */
+async function getConfigsByIds(source, ids) {
+    if (ids.length === 0)
+        return [];
+    const placeholders = ids.map((_, i) => `@id${i}`).join(', ');
+    const params = {};
+    ids.forEach((id, i) => {
+        params[`id${i}`] = id;
+    });
+    if (source === 'mb') {
+        const result = await executeQuery(`SELECT id, api_token, base_url, school_name, school_id
+       FROM MB.managebac_school_configs
+       WHERE id IN (${placeholders}) AND is_active = 1
+       ORDER BY school_name`, params);
+        return result.error ? [] : (result.data || []);
+    }
+    const result = await executeQuery(`SELECT id, client_id, client_secret, domain_url, school_name, school_id
+     FROM NEX.nexquare_school_configs
+     WHERE id IN (${placeholders}) AND is_active = 1
+     ORDER BY school_name`, params);
+    return result.error ? [] : (result.data || []);
 }
 /**
  * Get all active ManageBac and Nexquare configs.

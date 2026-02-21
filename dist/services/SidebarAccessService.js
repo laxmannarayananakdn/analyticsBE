@@ -14,6 +14,8 @@ export const ADMIN_ITEMS = [
     { id: 'admin:managebac-config', label: 'ManageBac Configuration' },
     { id: 'admin:nexquare-sync', label: 'Nexquare Data Sync' },
     { id: 'admin:managebac-sync', label: 'ManageBac Data Sync' },
+    { id: 'admin:sync-schedules', label: 'Sync Schedules' },
+    { id: 'admin:sync-history', label: 'Sync History' },
     { id: 'admin:rp-config', label: 'RP Configuration' },
     { id: 'admin:users', label: 'User Management' },
     { id: 'admin:access-control', label: 'Access Control' },

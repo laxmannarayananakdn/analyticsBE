@@ -13,6 +13,10 @@ export interface GetConfigsForScopeParams {
     all?: boolean;
     /** Academic year - reserved for future use (e.g. AY-specific config). Not used in scope resolution. */
     academicYear?: string;
+    /** When set, return only these MB config IDs (overrides node/all for MB). */
+    configIdsMb?: number[];
+    /** When set, return only these NEX config IDs (overrides node/all for NEX). */
+    configIdsNex?: number[];
 }
 export interface GetConfigsForScopeResult {
     mb: ManageBacConfig[];
@@ -20,6 +24,7 @@ export interface GetConfigsForScopeResult {
 }
 /**
  * Get school configs for the given scope.
+ * - If `configIdsMb` / `configIdsNex`: return only those configs (overrides node/all for that source).
  * - If `all`: return all active MB and NEX configs.
  * - If `nodeIds`: return configs whose schools are in Node_School for those nodes (and optionally descendants).
  * - Configs must have school_id populated and match Node_School.School_ID for the given source.

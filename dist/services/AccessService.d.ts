@@ -30,6 +30,15 @@ export declare function updateAccess(email: string, nodeId: string, updateReques
  */
 export declare function revokeNodeAccess(email: string, nodeId: string): Promise<void>;
 /**
+ * Get nodes the user has access to (from Access Groups only, including descendant nodes via hierarchy).
+ * Used when you need node access WITHOUT involving Node_School (e.g. node picker, "your nodes").
+ * Each node is returned once with its description.
+ */
+export declare function getUserAccessibleNodes(email: string): Promise<Array<{
+    nodeId: string;
+    nodeDescription: string;
+}>>;
+/**
  * Get node IDs the user has access to (from Access Groups only, including descendant nodes via hierarchy).
  * Used for scope-based report filtering.
  */

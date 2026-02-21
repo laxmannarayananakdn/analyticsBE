@@ -38,6 +38,7 @@ import accessGroupsRoutes from './routes/accessGroups.js';
 import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 import syncRoutes from './routes/sync.js';
+import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
 
 dotenv.config();
 
@@ -174,6 +175,8 @@ async function startServer() {
     console.log('🔌 Testing database connection...');
     await getConnection();
     console.log('✅ Database connection established');
+    // Start sync scheduler (runs cron jobs from admin.sync_schedules). Set ENABLE_SCHEDULER=false to disable.
+    await startSyncScheduler();
   } catch (error) {
     console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
   }
@@ -182,12 +185,14 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  stopSyncScheduler();
   await closeConnection();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('SIGINT received, shutting down gracefully...');
+  stopSyncScheduler();
   await closeConnection();
   process.exit(0);
 });
