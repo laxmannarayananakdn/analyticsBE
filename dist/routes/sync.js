@@ -84,7 +84,7 @@ router.get('/runs/:id', async (req, res) => {
             return res.status(404).json({ error: 'Sync run not found' });
         }
         const schoolsResult = await executeQuery(`SELECT id, sync_run_id, school_id, school_source, config_id, school_name, status,
-              started_at, completed_at, error_message
+              started_at, completed_at, error_message, current_endpoint
        FROM admin.sync_run_schools WHERE sync_run_id = @id ORDER BY id`, { id });
         const run = runResult.data[0];
         run.schools = schoolsResult.error ? [] : (schoolsResult.data || []);
@@ -111,7 +111,7 @@ router.get('/runs/:id/schools', async (req, res) => {
             return res.status(400).json({ error: 'Invalid run ID' });
         }
         const result = await executeQuery(`SELECT id, sync_run_id, school_id, school_source, config_id, school_name, status,
-              started_at, completed_at, error_message
+              started_at, completed_at, error_message, current_endpoint
        FROM admin.sync_run_schools
        WHERE sync_run_id = @id
        ORDER BY id

@@ -265,7 +265,8 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
       }
     } else {
       failed++;
-      errors.push((r.reason as Error)?.message || 'Unknown error');
+      const reason = (r as unknown as PromiseRejectedResult).reason;
+      errors.push((reason as Error)?.message || 'Unknown error');
     }
   }
 
@@ -320,7 +321,7 @@ async function syncManageBacSchool(
     svc.setCurrentSchoolId(config.school_id);
   }
 
-  const run = async (name: string, fn: () => Promise<void>) => {
+  const run = async (name: string, fn: () => Promise<unknown>) => {
     if (onEndpoint) await onEndpoint(name);
     await fn();
   };
@@ -424,7 +425,7 @@ async function syncNexquareSchool(
   const signal = options?.abortSignal;
   const onEndpoint = options?.onEndpointChange;
 
-  const run = async (name: string, fn: () => Promise<void>) => {
+  const run = async (name: string, fn: () => Promise<unknown>) => {
     if (onEndpoint) await onEndpoint(name);
     await fn();
   };

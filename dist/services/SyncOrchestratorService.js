@@ -83,45 +83,69 @@ export async function runSync(params) {
     }
     const startedAt = new Date();
     await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = @startedAt WHERE sync_run_id = @runId`, { startedAt, runId });
-    // Run all schools in parallel
-    const results = await Promise.allSettled(itemsWithIds.map(async ({ item, schoolRunId }) => {
-        throwIfAborted(params.abortSignal);
-        try {
-            if (item.source === 'mb') {
-                const mbService = new ManageBacService();
-                await syncManageBacSchool(item.config, {
-                    academicYear: params.academicYear,
-                    endpoints: endpointsMb,
-                    abortSignal: params.abortSignal,
-                    mbService,
+    const STAGGER_DELAY_MS = 5 * 60 * 1000; // 5 minutes between schools
+    const results = [];
+    let aborted = false;
+    try {
+        for (let i = 0; i < itemsWithIds.length; i++) {
+            const { item, schoolRunId } = itemsWithIds[i];
+            if (i > 0) {
+                console.log(`⏳ Waiting ${STAGGER_DELAY_MS / 60000} min before next school (${i + 1}/${itemsWithIds.length})...`);
+                await new Promise((resolve) => setTimeout(resolve, STAGGER_DELAY_MS));
+            }
+            throwIfAborted(params.abortSignal);
+            const setCurrentEndpoint = async (endpoint) => {
+                const r = await executeQuery(`UPDATE admin.sync_run_schools SET current_endpoint = @endpoint WHERE id = @id`, { endpoint: endpoint ?? null, id: schoolRunId });
+                if (r.error) {
+                    // Ignore if current_endpoint column doesn't exist (run add_current_endpoint_to_sync_run_schools.sql)
+                }
+            };
+            try {
+                if (item.source === 'mb') {
+                    const mbService = new ManageBacService();
+                    await syncManageBacSchool(item.config, {
+                        academicYear: params.academicYear,
+                        endpoints: endpointsMb,
+                        abortSignal: params.abortSignal,
+                        mbService,
+                        onEndpointChange: setCurrentEndpoint,
+                    });
+                }
+                else {
+                    await syncNexquareSchool(item.config, item.schoolId, {
+                        academicYear: params.academicYear,
+                        endpoints: endpointsNex,
+                        abortSignal: params.abortSignal,
+                        onEndpointChange: setCurrentEndpoint,
+                    });
+                }
+                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt: new Date(), id: schoolRunId });
+                results.push({ status: 'fulfilled', value: { success: true, schoolRunId, item } });
+            }
+            catch (err) {
+                if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
+                    throw err;
+                }
+                const errMsg = err?.message || String(err);
+                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`, {
+                    completedAt: new Date(),
+                    errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg,
+                    id: schoolRunId,
                 });
+                results.push({ status: 'fulfilled', value: { success: false, schoolRunId, item, errMsg } });
             }
-            else {
-                await syncNexquareSchool(item.config, item.schoolId, {
-                    academicYear: params.academicYear,
-                    endpoints: endpointsNex,
-                    abortSignal: params.abortSignal,
-                });
-            }
-            await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt WHERE id = @id`, { completedAt: new Date(), id: schoolRunId });
-            return { success: true, schoolRunId, item };
         }
-        catch (err) {
-            if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
-                throw err;
-            }
-            const errMsg = err?.message || String(err);
-            await executeQuery(`UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg WHERE id = @id`, {
-                completedAt: new Date(),
-                errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg,
-                id: schoolRunId,
-            });
-            return { success: false, schoolRunId, item, errMsg };
+    }
+    catch (err) {
+        if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
+            aborted = true;
         }
-    }));
+        else {
+            throw err;
+        }
+    }
     // Check for abort
-    const abortedResult = results.find((r) => r.status === 'rejected' && r.reason?.name === 'AbortError');
-    if (abortedResult) {
+    if (aborted) {
         const fulfilled = results.filter((r) => r.status === 'fulfilled');
         const succeeded = fulfilled.filter((r) => r.value.success).length;
         const failed = fulfilled.filter((r) => !r.value.success).length;
@@ -156,7 +180,8 @@ export async function runSync(params) {
         }
         else {
             failed++;
-            errors.push(r.reason?.message || 'Unknown error');
+            const reason = r.reason;
+            errors.push(reason?.message || 'Unknown error');
         }
     }
     const status = failed > 0 && succeeded === 0 ? 'failed' : 'completed';
@@ -189,41 +214,49 @@ async function syncManageBacSchool(config, options) {
     const baseUrl = config.base_url || undefined;
     const signal = options?.abortSignal;
     const svc = options?.mbService ?? manageBacService;
+    const onEndpoint = options?.onEndpointChange;
     if (config.school_id != null) {
         svc.setCurrentSchoolId(config.school_id);
     }
+    const run = async (name, fn) => {
+        if (onEndpoint)
+            await onEndpoint(name);
+        await fn();
+    };
     throwIfAborted(signal);
     if (eps.includes('school')) {
-        await svc.getSchoolDetails(apiKey, baseUrl);
+        await run('school', () => svc.getSchoolDetails(apiKey, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('academic-years')) {
-        await svc.getAcademicYears(apiKey, undefined, baseUrl);
+        await run('academic-years', () => svc.getAcademicYears(apiKey, undefined, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('grades')) {
-        const academicYearId = await resolveAcademicYearId(svc, apiKey, baseUrl, options?.academicYear);
-        await svc.getGrades(apiKey, academicYearId, baseUrl);
+        await run('grades', async () => {
+            const academicYearId = await resolveAcademicYearId(svc, apiKey, baseUrl, options?.academicYear);
+            await svc.getGrades(apiKey, academicYearId, baseUrl);
+        });
     }
     throwIfAborted(signal);
     if (eps.includes('subjects')) {
-        await svc.getSubjects(apiKey, baseUrl);
+        await run('subjects', () => svc.getSubjects(apiKey, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('teachers')) {
-        await svc.getTeachers(apiKey, {}, baseUrl);
+        await run('teachers', () => svc.getTeachers(apiKey, {}, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('students')) {
-        await svc.getStudents(apiKey, {}, baseUrl);
+        await run('students', () => svc.getStudents(apiKey, {}, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('classes')) {
-        await svc.getClasses(apiKey, baseUrl);
+        await run('classes', () => svc.getClasses(apiKey, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('year-groups')) {
-        await svc.getYearGroups(apiKey, baseUrl);
+        await run('year-groups', () => svc.getYearGroups(apiKey, baseUrl));
     }
 }
 /**
@@ -273,45 +306,51 @@ async function syncNexquareSchool(config, schoolId, options) {
     const { start, end } = getDateRangeFromAcademicYear(options?.academicYear);
     const ay = options?.academicYear || new Date().getFullYear().toString();
     const signal = options?.abortSignal;
+    const onEndpoint = options?.onEndpointChange;
+    const run = async (name, fn) => {
+        if (onEndpoint)
+            await onEndpoint(name);
+        await fn();
+    };
     throwIfAborted(signal);
     if (eps.includes('schools')) {
-        await nexquareService.getSchools(config);
+        await run('schools', () => nexquareService.getSchools(config));
     }
     throwIfAborted(signal);
     if (eps.includes('students')) {
-        await nexquareService.getStudents(config, schoolId);
+        await run('students', () => nexquareService.getStudents(config, schoolId));
     }
     throwIfAborted(signal);
     if (eps.includes('staff')) {
-        await nexquareService.getStaff(config, schoolId);
+        await run('staff', () => nexquareService.getStaff(config, schoolId));
     }
     throwIfAborted(signal);
     if (eps.includes('classes')) {
-        await nexquareService.getClasses(config, schoolId);
+        await run('classes', () => nexquareService.getClasses(config, schoolId));
     }
     throwIfAborted(signal);
     if (eps.includes('allocation-master')) {
-        await nexquareService.getAllocationMaster(config, schoolId);
+        await run('allocation-master', () => nexquareService.getAllocationMaster(config, schoolId));
     }
     throwIfAborted(signal);
     if (eps.includes('student-allocations')) {
-        await nexquareService.getStudentAllocations(config, schoolId, ay);
+        await run('student-allocations', () => nexquareService.getStudentAllocations(config, schoolId, ay));
     }
     throwIfAborted(signal);
     if (eps.includes('staff-allocations')) {
-        await nexquareService.getStaffAllocations(config, schoolId, ay);
+        await run('staff-allocations', () => nexquareService.getStaffAllocations(config, schoolId, ay));
     }
     throwIfAborted(signal);
     if (eps.includes('daily-plans')) {
-        await nexquareService.getDailyPlans(config, schoolId, start, end);
+        await run('daily-plans', () => nexquareService.getDailyPlans(config, schoolId, start, end));
     }
     throwIfAborted(signal);
     if (eps.includes('daily-attendance')) {
-        await nexquareService.getDailyAttendance(config, schoolId, start, end);
+        await run('daily-attendance', () => nexquareService.getDailyAttendance(config, schoolId, start, end));
     }
     throwIfAborted(signal);
     if (eps.includes('student-assessments')) {
-        await nexquareService.getStudentAssessments(config, schoolId, ay);
+        await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay));
     }
 }
 //# sourceMappingURL=SyncOrchestratorService.js.map
