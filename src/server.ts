@@ -167,9 +167,9 @@ async function startServer() {
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 
-  // 10 minutes for long-running data sync operations (large datasets, etc.)
-  server.timeout = 600000;
-  server.keepAliveTimeout = 600000;
+  // 2 hours for long-running data sync (46 schools × 5 min stagger + per-school sync time)
+  server.timeout = 28800000; // 8 hours
+  server.keepAliveTimeout = 28800000;
 
   // Try DB in background so startup is not blocked (CORS and /api/health still work if DB fails)
   try {

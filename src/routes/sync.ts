@@ -102,7 +102,7 @@ router.get('/runs/:id', async (req: Request, res: Response) => {
 
     const schoolsResult = await executeQuery<any>(
       `SELECT id, sync_run_id, school_id, school_source, config_id, school_name, status,
-              started_at, completed_at, error_message
+              started_at, completed_at, error_message, current_endpoint
        FROM admin.sync_run_schools WHERE sync_run_id = @id ORDER BY id`,
       { id }
     );
@@ -136,7 +136,7 @@ router.get('/runs/:id/schools', async (req: Request, res: Response) => {
 
     const result = await executeQuery<any>(
       `SELECT id, sync_run_id, school_id, school_source, config_id, school_name, status,
-              started_at, completed_at, error_message
+              started_at, completed_at, error_message, current_endpoint
        FROM admin.sync_run_schools
        WHERE sync_run_id = @id
        ORDER BY id
