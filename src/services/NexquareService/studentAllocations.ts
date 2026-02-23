@@ -424,15 +424,18 @@ export async function getStudentAllocations(
       }
     }
 
-    // Determine academic year(s) to delete: from param or from data (check one row / distinct values)
-    const yearsToDelete = academicYear != null && academicYear !== ''
-      ? [academicYear]
-      : Array.from(new Set(recordsToInsert.map((r) => r.academic_year ?? null)));
+    // Normalize academic year for comparison (handles "2025 - 2026" vs "2025-2026" etc.)
+    const normalizeYear = (y: string | null | undefined) =>
+      (y ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+    // Always use academic_year from the DATA for delete - ensures we match the exact format in DB
+    const yearsToDelete = Array.from(new Set(recordsToInsert.map((r) => r.academic_year ?? null)));
 
     // Filter records when syncing for a specific year (API returns all years)
+    // Use normalized comparison so "2025-2026" param matches "2025 - 2026" from API
     const recordsForInsert =
       academicYear != null && academicYear !== ''
-        ? recordsToInsert.filter((r) => (r.academic_year ?? null) === academicYear)
+        ? recordsToInsert.filter((r) => normalizeYear(r.academic_year) === normalizeYear(academicYear))
         : recordsToInsert;
 
     if (recordsForInsert.length === 0) {
@@ -441,10 +444,12 @@ export async function getStudentAllocations(
     }
 
     // Delete existing allocations for school + each academic year before insert (prevent duplicates)
-    if (schoolSourcedId) {
+    // Use schoolSourcedId when available; fallback to targetSchoolId (config may use id or sourced_id)
+    const schoolIdForDelete = schoolSourcedId ?? targetSchoolId;
+    if (schoolIdForDelete) {
       for (const year of yearsToDelete) {
         const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAllocationsBySchoolAndYear(
-          schoolSourcedId,
+          schoolIdForDelete,
           year
         );
         if (deleteError) {

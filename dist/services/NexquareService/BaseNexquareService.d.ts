@@ -34,10 +34,10 @@ export declare class BaseNexquareService {
      */
     protected setCurrentSchoolId(schoolId: string | null): void;
     /**
-     * Get school sourced_id from sourced_id
-     * Returns the sourced_id (not database id) for use in school_id columns
+     * Get school sourced_id from sourced_id or numeric id
+     * Returns the sourced_id for use in school_id columns (NEX tables use sourced_id after migration)
      */
-    protected getSchoolSourcedId(schoolSourcedId: string): Promise<string | null>;
+    protected getSchoolSourcedId(schoolIdOrSourcedId: string): Promise<string | null>;
     /**
      * Clear cached token (useful for testing or forced refresh)
      */
