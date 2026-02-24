@@ -88,6 +88,20 @@ function registerSchedule(schedule: SyncScheduleRow): void {
       console.log(`[SyncScheduler ${id}] Firing at ${now} – node ${schedule.node_id}, AY ${schedule.academic_year}`);
 
       try {
+        // Guard: skip if a run for this schedule is already running, pending, or started in last 2 min
+        // (prevents duplicates from dual schedulers with different timezones, or duplicate schedules)
+        const existingRun = await executeQuery<{ id: number }>(
+          `SELECT TOP 1 id FROM admin.sync_runs 
+           WHERE schedule_id = @scheduleId 
+             AND (status IN ('running', 'pending') 
+                  OR started_at >= DATEADD(minute, -2, SYSDATETIMEOFFSET()))`,
+          { scheduleId: id }
+        );
+        if (!existingRun.error && existingRun.data && existingRun.data.length > 0) {
+          console.warn(`[SyncScheduler ${id}] Skipping – run ${existingRun.data[0].id} already in progress or recently started for this schedule`);
+          return;
+        }
+
         const endpointsMb = parseEndpoints(schedule.endpoints_mb);
         const endpointsNex = parseEndpoints(schedule.endpoints_nex);
 
