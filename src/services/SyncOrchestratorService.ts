@@ -46,7 +46,8 @@ export interface RunSyncResult {
   errorSummary?: string;
 }
 
-const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'students', 'classes', 'year-groups'];
+// year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
+const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -145,13 +146,18 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
     itemsWithIds.push({ item, schoolRunId: Number(schoolRunResult.data[0].id) });
   }
 
-  const startedAt = new Date();
-  await executeQuery(
-    `UPDATE admin.sync_run_schools SET status = 'running', started_at = @startedAt WHERE sync_run_id = @runId`,
-    { startedAt, runId }
-  );
+  //const STAGGER_DELAY_MS = 5 * 60 * 1000; // 5 minutes between schools
+  const STAGGER_DELAY_MS = 0 * 60 * 1000; // 0 minutes between schools
 
-  const STAGGER_DELAY_MS = 5 * 60 * 1000; // 5 minutes between schools
+  const updateRunCounts = async () => {
+    await executeQuery(
+      `UPDATE admin.sync_runs SET
+        schools_succeeded = (SELECT COUNT(*) FROM admin.sync_run_schools WHERE sync_run_id = @runId AND status = 'completed'),
+        schools_failed = (SELECT COUNT(*) FROM admin.sync_run_schools WHERE sync_run_id = @runId AND status = 'failed')
+       WHERE id = @runId`,
+      { runId }
+    );
+  };
 
   const results: Array<{ status: 'fulfilled'; value: any }> = [];
   let aborted = false;
@@ -166,6 +172,13 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
     }
 
     throwIfAborted(params.abortSignal);
+
+    // Set started_at when this school actually begins (not when the run started)
+    const schoolStartedAt = new Date();
+    await executeQuery(
+      `UPDATE admin.sync_run_schools SET status = 'running', started_at = @startedAt WHERE id = @id`,
+      { startedAt: schoolStartedAt, id: schoolRunId }
+    );
 
     const setCurrentEndpoint = async (endpoint: string | null) => {
       const r = await executeQuery(
@@ -199,6 +212,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         `UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`,
         { completedAt: new Date(), id: schoolRunId }
       );
+      await updateRunCounts();
       results.push({ status: 'fulfilled', value: { success: true, schoolRunId, item } });
     } catch (err: any) {
       if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
@@ -213,6 +227,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
           id: schoolRunId,
         }
       );
+      await updateRunCounts();
       results.push({ status: 'fulfilled', value: { success: false, schoolRunId, item, errMsg } });
     }
   }
@@ -350,16 +365,16 @@ async function syncManageBacSchool(
     await run('teachers', () => svc.getTeachers(apiKey, {}, baseUrl));
   }
   throwIfAborted(signal);
+  if (eps.includes('year-groups')) {
+    await run('year-groups', () => svc.getYearGroups(apiKey, baseUrl));
+  }
+  throwIfAborted(signal);
   if (eps.includes('students')) {
     await run('students', () => svc.getStudents(apiKey, {}, baseUrl));
   }
   throwIfAborted(signal);
   if (eps.includes('classes')) {
     await run('classes', () => svc.getClasses(apiKey, baseUrl));
-  }
-  throwIfAborted(signal);
-  if (eps.includes('year-groups')) {
-    await run('year-groups', () => svc.getYearGroups(apiKey, baseUrl));
   }
 }
 
