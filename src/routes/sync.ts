@@ -317,7 +317,8 @@ router.put('/schedules/:id', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/sync/schedules/:id
- * Delete a sync schedule
+ * Delete a sync schedule.
+ * Sync runs that referenced this schedule are preserved with schedule_id set to NULL.
  */
 router.delete('/schedules/:id', async (req: Request, res: Response) => {
   try {
@@ -325,6 +326,12 @@ router.delete('/schedules/:id', async (req: Request, res: Response) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid schedule ID' });
     }
+
+    // Nullify schedule_id in sync_runs first (preserves run history, allows schedule delete)
+    await executeQuery(
+      `UPDATE admin.sync_runs SET schedule_id = NULL WHERE schedule_id = @id`,
+      { id }
+    );
 
     const result = await executeQuery(
       `DELETE FROM admin.sync_schedules WHERE id = @id`,
