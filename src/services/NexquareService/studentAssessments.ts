@@ -40,15 +40,17 @@ export async function getStudentAssessments(
     }
 
     const defaultAcademicYear = academicYear || new Date().getFullYear().toString();
+    // Nexquare API expects 4-char year (e.g. "2024"); sync stores "2024-2025"
+    const apiAcademicYear = defaultAcademicYear.substring(0, 4);
     const defaultFileName = fileName || 'assessment-data';
-    
+
     // Get the school sourced_id from sourced_id
     const schoolSourcedId = await (this as any).getSchoolSourcedId(targetSchoolId);
     if (!schoolSourcedId) {
       log(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Assessments will be saved with school_id = NULL.`);
     }
 
-    log(`📋 Step 1: Fetching student assessments from Nexquare API (school: ${targetSchoolId}, academic year: ${defaultAcademicYear})...`);
+    log(`📋 Step 1: Fetching student assessments from Nexquare API (school: ${targetSchoolId}, academic year: ${defaultAcademicYear}, API param: ${apiAcademicYear})...`);
     log(`   Using chunked fetching: ${limit} records per request`);
 
     const endpoint = NEXQUARE_ENDPOINTS.STUDENT_ASSESSMENTS;
@@ -70,7 +72,7 @@ export async function getStudentAssessments(
       // Build query parameters with offset and limit
       const queryParams = new URLSearchParams();
       queryParams.append('schoolIds', targetSchoolId);
-      queryParams.append('academicYear', defaultAcademicYear);
+      queryParams.append('academicYear', apiAcademicYear);
       queryParams.append('fileName', defaultFileName);
       queryParams.append('limit', chunkSize.toString());
       queryParams.append('offset', currentOffset.toString());
