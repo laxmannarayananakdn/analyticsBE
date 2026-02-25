@@ -9,6 +9,7 @@ import { getConfigsForScope } from './SyncScopeService.js';
 import type { ManageBacConfig, NexquareConfig } from '../middleware/configLoader.js';
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
+import { databaseService } from './DatabaseService.js';
 
 export interface RunSyncParams {
   /** Node ID(s) to sync. Required unless all is true. */
@@ -21,6 +22,8 @@ export interface RunSyncParams {
   endpointsMb?: string[] | null;
   /** Nexquare endpoints to run. If null/empty, run all. */
   endpointsNex?: string[] | null;
+  /** When student-assessments runs: if true, sync NEX -> RP.student_assessments. If false, only load NEX. Default true. */
+  loadRpSchema?: boolean;
   /** Include descendant nodes. */
   includeDescendants?: boolean;
   /** Sync all active configs (ignore nodeIds). */
@@ -124,6 +127,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
 
   const endpointsMb = params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL;
   const endpointsNex = params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL;
+  const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
 
   // Pre-create all sync_run_schools rows and mark as running
   type ItemWithId = { item: typeof schoolItems[0]; schoolRunId: number };
@@ -228,6 +232,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
     const { start, end } = getDateRangeFromAcademicYear(params.academicYear);
     const ay = params.academicYear || new Date().getFullYear().toString();
     const signal = params.abortSignal;
+    const rpSchema = loadRpSchema;
 
     const schoolFailed = new Map<number, string>();
 
@@ -269,7 +274,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
       );
 
       try {
-        await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay });
+        await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay, loadRpSchema: rpSchema });
         const completedAt = new Date();
         await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, null);
       } catch (err: any) {
@@ -323,6 +328,48 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
     }
 
     await Promise.all(allTasks);
+
+    // When Load RP schema is checked but Student Assessments is NOT in endpoints:
+    // Delete RP rows for school+year, then sync from NEX.student_assessments to RP.student_assessments
+    if (loadRpSchema && !eps.includes('student-assessments') && trackItems.length > 0) {
+      for (let i = 0; i < trackItems.length; i++) {
+        if (schoolFailed.has(i)) continue;
+        const { item, schoolRunId } = trackItems[i];
+        const schoolId = item.schoolId;
+        if (!schoolId) continue;
+
+        const startedAt = new Date();
+        await executeQuery(
+          `UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt), current_endpoint = @endpoint WHERE id = @id`,
+          { startedAt, endpoint: 'rp-sync', id: schoolRunId }
+        );
+
+        try {
+          const { deleted, error: deleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolId, ay);
+          if (deleteError) {
+            throw new Error(`Delete RP failed: ${deleteError}`);
+          }
+          await nexquareService.syncStudentAssessmentsToRP(schoolId, ay);
+          const completedAt = new Date();
+          await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, null);
+          await executeQuery(
+            `UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`,
+            { completedAt, id: schoolRunId }
+          );
+          await updateRunCounts();
+        } catch (err: any) {
+          const errMsg = err?.message || String(err);
+          const completedAt = new Date();
+          await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, errMsg);
+          schoolFailed.set(i, errMsg);
+          await executeQuery(
+            `UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`,
+            { completedAt, errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg, id: schoolRunId }
+          );
+          await updateRunCounts();
+        }
+      }
+    }
 
     return trackItems.map(({ item, schoolRunId }, i) => {
       const errMsg = schoolFailed.get(i);
@@ -572,9 +619,9 @@ async function runNexquareSingleEndpoint(
   config: NexquareConfig,
   schoolId: string,
   endpointName: string,
-  ctx: { start: string; end: string; ay: string }
+  ctx: { start: string; end: string; ay: string; loadRpSchema?: boolean }
 ): Promise<void> {
-  const { start, end, ay } = ctx;
+  const { start, end, ay, loadRpSchema } = ctx;
   switch (endpointName) {
     case 'schools':
       await nexquareService.getSchools(config);
@@ -604,7 +651,7 @@ async function runNexquareSingleEndpoint(
       await nexquareService.getDailyAttendance(config, schoolId, start, end);
       break;
     case 'student-assessments':
-      await nexquareService.getStudentAssessments(config, schoolId, ay);
+      await nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: loadRpSchema !== false });
       break;
     default:
       throw new Error(`Unknown Nexquare endpoint: ${endpointName}`);
@@ -622,6 +669,7 @@ async function syncNexquareSchool(
   options?: {
     academicYear?: string;
     endpoints?: string[];
+    loadRpSchema?: boolean;
     abortSignal?: AbortSignal;
     onEndpointChange?: (endpoint: string) => Promise<void>;
   }
@@ -631,6 +679,7 @@ async function syncNexquareSchool(
   const ay = options?.academicYear || new Date().getFullYear().toString();
   const signal = options?.abortSignal;
   const onEndpoint = options?.onEndpointChange;
+  const rpSchema = options?.loadRpSchema !== false;
 
   const run = async (name: string, fn: () => Promise<unknown>) => {
     if (onEndpoint) await onEndpoint(name);
@@ -675,6 +724,6 @@ async function syncNexquareSchool(
   }
   throwIfAborted(signal);
   if (eps.includes('student-assessments')) {
-    await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay));
+    await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: rpSchema }));
   }
 }

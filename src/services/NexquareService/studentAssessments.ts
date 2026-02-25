@@ -26,7 +26,8 @@ export async function getStudentAssessments(
   fileName?: string,
   limit: number = 10000,
   offset: number = 0,
-  onLog?: (msg: string) => void
+  onLog?: (msg: string) => void,
+  options?: { loadRpSchema?: boolean }
 ): Promise<any[]> {
   const log = (msg: string) => {
     console.log(msg);
@@ -570,8 +571,9 @@ export async function getStudentAssessments(
     
     log(`✅ Step 2 complete: Saved ${totalInserted} record(s) to NEX.student_assessments`);
 
-    // Sync data to RP.student_assessments after processing completes
-    if (schoolSourcedId) {
+    // Sync data to RP.student_assessments after processing completes (only if loadRpSchema is true)
+    const loadRpSchema = options?.loadRpSchema !== false;
+    if (loadRpSchema && schoolSourcedId) {
       // Delete existing RP assessments for school + academic year before sync (prevent duplicates)
       const { deleted: rpDeleted, error: rpDeleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
       if (rpDeleteError) {
@@ -582,12 +584,14 @@ export async function getStudentAssessments(
 
       log(`📋 Step 3: Syncing to RP.student_assessments...`);
       try {
-        const rpInserted = await (this as any).syncStudentAssessmentsToRP(schoolSourcedId);
+        const rpInserted = await (this as any).syncStudentAssessmentsToRP(schoolSourcedId, defaultAcademicYear);
         log(`✅ Step 3 complete: Synced ${rpInserted} record(s) to RP.student_assessments`);
       } catch (rpError: any) {
         log(`⚠️  Step 3 failed: ${rpError.message}`);
         // Don't throw - allow the main process to complete even if RP sync fails
       }
+    } else if (!loadRpSchema) {
+      log(`ℹ️  Skipping RP sync (load_rp_schema disabled)`);
     } else {
       log(`⚠️  Skipping RP sync - school sourced_id not available`);
     }
@@ -879,14 +883,16 @@ export async function saveAssessmentBatch(
 
 /**
  * Sync student assessments from NEX.student_assessments to RP.student_assessments
- * This function runs after the main processing completes
- * Filters by school_id, grades '10' and '12', and only inserts records that don't already exist
- * 
- * Note: school_id in NEX.student_assessments is NVARCHAR(100) and stores the sourced_id
+ * - If subject mappings exist for (school, ay, grade) with reported_subject: include ONLY those subjects
+ * - If no mappings for (school, ay, grade): load EVERYTHING for that grade
+ * - Component filters (admin.component_filter_config): include/exclude with SQL LIKE
+ * - Term filters (admin.term_filter_config): include/exclude with SQL LIKE
+ * - After sync: deletes from NEX.student_assessments for school+academic_year
  */
 export async function syncStudentAssessmentsToRP(
   this: BaseNexquareService,
-  schoolSourcedId: string
+  schoolSourcedId: string,
+  academicYear?: string
 ): Promise<number> {
   try {
     if (!schoolSourcedId) {
@@ -894,98 +900,111 @@ export async function syncStudentAssessmentsToRP(
       return 0;
     }
 
-    console.log(`   🔍 Syncing assessments for school (sourced_id: ${schoolSourcedId})`);
+    console.log(`   🔍 Syncing assessments for school (sourced_id: ${schoolSourcedId}, academic_year: ${academicYear || 'all'})`);
 
-    // Build the INSERT query to copy from NEX to RP
-    // The query filters by school_id (sourced_id), grades '10' and '12', and only inserts records that don't exist
-    // school_id in NEX.student_assessments is NVARCHAR(100) and stores the sourced_id
-    // Use @@ROWCOUNT to get the number of rows inserted
-    // Note: This query can take up to 10 minutes for large datasets (770+ rows)
-    // The reported_subject is populated from RP.subject_mapping table via LEFT JOIN (can be NULL)
+    const connection = await getConnection();
+
+    // Fetch component filters and term filters (tables created by create_rp_filter_tables.sql)
+    let compFilters: { filter_type: string; pattern: string }[] = [];
+    const compResult = await executeQuery<{ filter_type: string; pattern: string }>(
+      `SELECT filter_type, pattern FROM admin.component_filter_config WHERE school_id = @school_id`,
+      { school_id: schoolSourcedId }
+    );
+    if (compResult.error) {
+      console.log(`   ℹ️  Component filters not available (${compResult.error}) - including all components`);
+    } else {
+      compFilters = compResult.data || [];
+    }
+    const compExcludes = compFilters.filter((f) => f.filter_type === 'exclude').map((f) => f.pattern);
+    const compIncludes = compFilters.filter((f) => f.filter_type === 'include').map((f) => f.pattern);
+
+    let termFilters: { filter_type: string; pattern: string }[] = [];
+    const termResult = await executeQuery<{ filter_type: string; pattern: string }>(
+      `SELECT filter_type, pattern FROM admin.term_filter_config WHERE school_id = @school_id`,
+      { school_id: schoolSourcedId }
+    );
+    if (termResult.error) {
+      console.log(`   ℹ️  Term filters not available (${termResult.error}) - including all terms`);
+    } else {
+      termFilters = termResult.data || [];
+    }
+    const termExcludes = termFilters.filter((f) => f.filter_type === 'exclude').map((f) => f.pattern);
+    const termIncludes = termFilters.filter((f) => f.filter_type === 'include').map((f) => f.pattern);
+
+    // Build component WHERE (Assessment): exclude = NOT LIKE each, include = LIKE any
+    let componentWhere = '';
+    const compParams: Record<string, string> = {};
+    if (compExcludes.length > 0) {
+      componentWhere += compExcludes.map((_, i) => ` sa.component_name NOT LIKE @comp_exclude_${i}`).join(' AND ');
+      compExcludes.forEach((p, i) => { compParams[`comp_exclude_${i}`] = p; });
+    }
+    if (compIncludes.length > 0) {
+      const incClause = compIncludes.map((_, i) => ` sa.component_name LIKE @comp_include_${i}`).join(' OR ');
+      componentWhere += (componentWhere ? ' AND (' : ' (') + incClause + ')';
+      compIncludes.forEach((p, i) => { compParams[`comp_include_${i}`] = p; });
+    }
+    if (componentWhere) componentWhere = ' AND ' + componentWhere;
+
+    // Build term WHERE: exclude = NOT LIKE each, include = LIKE any (only when term filters exist)
+    let termWhere = '';
+    const termParams: Record<string, string> = {};
+    if (termExcludes.length > 0) {
+      termWhere += termExcludes.map((_, i) => ` sa.term_name NOT LIKE @term_exclude_${i}`).join(' AND ');
+      termExcludes.forEach((p, i) => { termParams[`term_exclude_${i}`] = p; });
+    }
+    if (termIncludes.length > 0) {
+      const incClause = termIncludes.map((_, i) => ` sa.term_name LIKE @term_include_${i}`).join(' OR ');
+      termWhere += (termWhere ? ' AND (' : ' (') + incClause + ')';
+      termIncludes.forEach((p, i) => { termParams[`term_include_${i}`] = p; });
+    }
+    if (termWhere) termWhere = ' AND ' + termWhere;
+
+    // Subject mapping: if (school, ay, grade) has mappings with reported_subject -> include only those subjects.
+    // If (school, ay, grade) has no mappings -> load everything. reported_subject = COALESCE(sm.reported_subject, sa.subject_name)
     const syncQuery = `
       INSERT INTO RP.student_assessments (
-        nex_assessment_id,
-        school_id,
-        school_name,
-        region_name,
-        student_name,
-        register_number,
-        student_status,
-        grade_name,
-        section_name,
-        class_name,
-        academic_year,
-        subject_id,
-        subject_name,
-        term_id,
-        term_name,
-        component_name,
-        component_value,
-        max_value,
-        data_type,
-        calculation_method,
-        mark_grade_name,
-        mark_rubric_name,
-        reported_subject,
-        created_at,
-        updated_at
+        nex_assessment_id, school_id, school_name, region_name, student_name, register_number,
+        student_status, grade_name, section_name, class_name, academic_year, subject_id, subject_name,
+        term_id, term_name, component_name, component_value, max_value, data_type, calculation_method,
+        mark_grade_name, mark_rubric_name, reported_subject, created_at, updated_at
       )
-      SELECT 
-        sa.id,
-        sa.school_id,
-        sa.school_name,
-        sa.region_name,
-        sa.student_name,
-        sa.register_number,
-        sa.student_status,
-        sa.grade_name,
-        sa.section_name,
-        sa.class_name,
-        sa.academic_year,
-        sa.subject_id,
-        sa.subject_name,
-        sa.term_id,
-        sa.term_name,
-        sa.component_name,
-        sa.component_value,
-        sa.max_value,
-        sa.data_type,
-        sa.calculation_method,
-        sa.mark_grade_name,
-        sa.mark_rubric_name,
-        sm.reported_subject,
-        sa.created_at,
-        sa.updated_at
+      SELECT sa.id, sa.school_id, sa.school_name, sa.region_name, sa.student_name, sa.register_number,
+        sa.student_status, sa.grade_name, sa.section_name, sa.class_name, sa.academic_year, sa.subject_id, sa.subject_name,
+        sa.term_id, sa.term_name, sa.component_name, sa.component_value, sa.max_value, sa.data_type, sa.calculation_method,
+        sa.mark_grade_name, sa.mark_rubric_name,
+        COALESCE(sm.reported_subject, sa.subject_name) AS reported_subject,
+        sa.created_at, sa.updated_at
       FROM NEX.student_assessments sa
-      INNER JOIN RP.assessment_component_config acc 
-        ON sa.school_id = acc.school_id 
-        AND sa.component_name = acc.component_name
-        AND acc.is_active = 1
-      LEFT JOIN RP.subject_mapping sm
-        ON sa.school_id = sm.school_id
-        AND sa.academic_year = sm.academic_year
-        AND sa.grade_name = sm.grade
-        AND sa.subject_name = sm.subject
-      WHERE NOT EXISTS (
-        SELECT 1 
-        FROM RP.student_assessments rsa
-        WHERE rsa.nex_assessment_id = sa.id
-      )
-      AND sa.grade_name IN ('10', '12')
-      AND sa.school_id = @school_id;
-      
+      LEFT JOIN admin.subject_mapping sm
+        ON sa.school_id = sm.school_id AND sa.academic_year = sm.academic_year
+        AND sa.grade_name = sm.grade AND sa.subject_name = sm.subject
+        AND sm.reported_subject IS NOT NULL AND LTRIM(RTRIM(sm.reported_subject)) != ''
+      WHERE NOT EXISTS (SELECT 1 FROM RP.student_assessments rsa WHERE rsa.nex_assessment_id = sa.id)
+        AND sa.school_id = @school_id
+        ${academicYear ? ' AND sa.academic_year = @academic_year' : ''}
+        AND (
+          (EXISTS (SELECT 1 FROM admin.subject_mapping m WHERE m.school_id = sa.school_id AND m.academic_year = sa.academic_year
+            AND m.grade = sa.grade_name AND m.reported_subject IS NOT NULL AND LTRIM(RTRIM(m.reported_subject)) != '')
+            AND sm.subject IS NOT NULL)
+          OR
+          (NOT EXISTS (SELECT 1 FROM admin.subject_mapping m WHERE m.school_id = sa.school_id AND m.academic_year = sa.academic_year
+            AND m.grade = sa.grade_name AND m.reported_subject IS NOT NULL AND LTRIM(RTRIM(m.reported_subject)) != ''))
+        )
+        ${componentWhere}
+        ${termWhere};
       SELECT @@ROWCOUNT AS rows_affected;
     `;
 
-    // Use a direct connection request with explicit 10-minute timeout for this long-running operation
-    const connection = await getConnection();
     const request = connection.request();
-    (request as { timeout?: number }).timeout = 600000; // 10 minutes
-    
-    // Add parameters
+    (request as { timeout?: number }).timeout = 1800000; // 30 minutes
     request.input('school_id', sql.NVarChar(100), schoolSourcedId);
-    
-    console.log(`   ⏱️  Executing sync query (timeout: 10 minutes)...`);
+    if (academicYear) request.input('academic_year', sql.NVarChar(100), academicYear);
+    Object.entries(compParams).forEach(([k, v]) => request.input(k, sql.NVarChar(500), v));
+    Object.entries(termParams).forEach(([k, v]) => request.input(k, sql.NVarChar(500), v));
+
+    console.log(`   📋 SQL:\n${syncQuery}`);
+    console.log(`   📋 Params: school_id=${schoolSourcedId}, academic_year=${academicYear ?? 'all'}, comp/term filters applied`);
+    console.log(`   ⏱️  Executing sync query (timeout: 30 minutes)...`);
     const startTime = Date.now();
     
     const queryResult = await request.query(syncQuery);
@@ -997,17 +1016,21 @@ export async function syncStudentAssessmentsToRP(
     const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
     
     console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
-    
-    // Update reported_subject for existing records (including newly synced ones)
-    try {
-      console.log(`   🔄 Updating reported_subject for existing records...`);
-      const updateCount = await updateReportedSubjectForSchool.call(this, schoolSourcedId);
-      console.log(`   ✅ Updated ${updateCount} record(s) with reported_subject`);
-    } catch (updateError: any) {
-      console.warn(`   ⚠️  Failed to update reported_subject: ${updateError.message}`);
-      // Don't throw - allow sync to succeed even if reported_subject update fails
+
+    // Delete from NEX.student_assessments for this school+academic_year after RP load
+    if (academicYear) {
+      try {
+        const { deleted: nexDeleted, error: nexDeleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, academicYear);
+        if (nexDeleteError) {
+          console.warn(`   ⚠️  Failed to delete from NEX.student_assessments: ${nexDeleteError}`);
+        } else if (nexDeleted > 0) {
+          console.log(`   🗑️  Deleted ${nexDeleted} record(s) from NEX.student_assessments`);
+        }
+      } catch (nexErr: any) {
+        console.warn(`   ⚠️  Failed to delete from NEX: ${nexErr.message}`);
+      }
     }
-    
+
     return rowsAffected;
   } catch (error: any) {
     console.error(`   ❌ Error syncing to RP.student_assessments:`, error);
@@ -1017,7 +1040,7 @@ export async function syncStudentAssessmentsToRP(
 
 /**
  * Update reported_subject in RP.student_assessments for a specific school
- * This function updates existing records with the correct reported_subject from RP.subject_mapping
+ * This function updates existing records with the correct reported_subject from admin.subject_mapping
  * 
  * @param schoolSourcedId - School sourced_id to filter updates
  * @returns Number of records updated
@@ -1038,7 +1061,7 @@ export async function updateReportedSubjectForSchool(
       SET rsa.reported_subject = sm.reported_subject,
           rsa.updated_at = SYSDATETIMEOFFSET()
       FROM RP.student_assessments rsa
-      INNER JOIN RP.subject_mapping sm
+      INNER JOIN admin.subject_mapping sm
           ON rsa.school_id = sm.school_id
           AND rsa.academic_year = sm.academic_year
           AND rsa.grade_name = sm.grade
@@ -1054,10 +1077,13 @@ export async function updateReportedSubjectForSchool(
 
     const connection = await getConnection();
     const request = connection.request();
-    (request as { timeout?: number }).timeout = 600000; // 10 minutes
-    
+    (request as { timeout?: number }).timeout = 1800000; // 30 minutes
+
     request.input('school_id', sql.NVarChar(100), schoolSourcedId);
-    
+
+    console.log(`   📋 SQL (update reported_subject):\n${updateQuery}`);
+    console.log(`   📋 Params: school_id=${schoolSourcedId}`);
+
     const queryResult = await request.query(updateQuery);
     const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
     
