@@ -140,14 +140,22 @@ export async function runSync(params) {
         const { start, end } = getDateRangeFromAcademicYear(params.academicYear);
         const ay = params.academicYear || new Date().getFullYear().toString();
         const signal = params.abortSignal;
-        const completed = new Map();
         const schoolFailed = new Map();
         const key = (i, j) => `${i},${j}`;
+        // Pre-create deferred promises for each (school, endpoint). Each resolves when that task completes.
+        // This ensures getCompleted(i,j) returns a promise that actually waits - not Promise.resolve().
+        const deferred = new Map();
+        for (let i = 0; i < trackItems.length; i++) {
+            for (let j = 0; j < eps.length; j++) {
+                let resolve;
+                const promise = new Promise((r) => { resolve = r; });
+                deferred.set(key(i, j), { resolve, promise });
+            }
+        }
         const getCompleted = (i, j) => {
             if (i < 0 || j < 0)
                 return Promise.resolve();
-            const k = key(i, j);
-            return completed.get(k) ?? Promise.resolve();
+            return deferred.get(key(i, j))?.promise ?? Promise.resolve();
         };
         const runEndpoint = async (schoolIndex, endpointIndex) => {
             throwIfAborted(signal);
@@ -187,14 +195,17 @@ export async function runSync(params) {
                 getCompleted(schoolIndex - 1, endpointIndex),
                 getCompleted(schoolIndex, endpointIndex - 1),
             ]);
+            const def = deferred.get(key(schoolIndex, endpointIndex));
             if (schoolFailed.has(schoolIndex)) {
-                completed.set(key(schoolIndex, endpointIndex), Promise.resolve());
+                def?.resolve();
                 return;
             }
-            const p = runEndpoint(schoolIndex, endpointIndex);
-            const completedPromise = p.catch(() => { });
-            completed.set(key(schoolIndex, endpointIndex), completedPromise);
-            await completedPromise;
+            try {
+                await runEndpoint(schoolIndex, endpointIndex);
+            }
+            finally {
+                def?.resolve();
+            }
         };
         const allTasks = [];
         for (let i = 0; i < trackItems.length; i++) {
