@@ -39,7 +39,7 @@ export interface RunSyncResult {
 }
 /**
  * Run sync for the given scope.
- * All schools run in parallel - each MB school gets its own ManageBacService instance.
+ * MB and Nex tracks run in parallel; within each track, schools process serially.
  */
 export declare function runSync(params: RunSyncParams): Promise<RunSyncResult>;
 //# sourceMappingURL=SyncOrchestratorService.d.ts.map

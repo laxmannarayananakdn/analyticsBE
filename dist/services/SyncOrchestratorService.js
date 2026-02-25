@@ -7,7 +7,8 @@ import { executeQuery } from '../config/database.js';
 import { getConfigsForScope } from './SyncScopeService.js';
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
-const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'students', 'classes', 'year-groups'];
+// year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
+const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
 function throwIfAborted(signal) {
     if (signal?.aborted)
@@ -15,7 +16,7 @@ function throwIfAborted(signal) {
 }
 /**
  * Run sync for the given scope.
- * All schools run in parallel - each MB school gets its own ManageBacService instance.
+ * MB and Nex tracks run in parallel; within each track, schools process serially.
  */
 export async function runSync(params) {
     const triggeredBy = params.triggeredBy || 'scheduler';
@@ -81,46 +82,42 @@ export async function runSync(params) {
             continue;
         itemsWithIds.push({ item, schoolRunId: Number(schoolRunResult.data[0].id) });
     }
-    const startedAt = new Date();
-    await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = @startedAt WHERE sync_run_id = @runId`, { startedAt, runId });
-    const STAGGER_DELAY_MS = 5 * 60 * 1000; // 5 minutes between schools
-    const results = [];
-    let aborted = false;
-    try {
-        for (let i = 0; i < itemsWithIds.length; i++) {
-            const { item, schoolRunId } = itemsWithIds[i];
-            if (i > 0) {
-                console.log(`⏳ Waiting ${STAGGER_DELAY_MS / 60000} min before next school (${i + 1}/${itemsWithIds.length})...`);
-                await new Promise((resolve) => setTimeout(resolve, STAGGER_DELAY_MS));
-            }
+    const updateRunCounts = async () => {
+        await executeQuery(`UPDATE admin.sync_runs SET
+        schools_succeeded = (SELECT COUNT(*) FROM admin.sync_run_schools WHERE sync_run_id = @runId AND status = 'completed'),
+        schools_failed = (SELECT COUNT(*) FROM admin.sync_run_schools WHERE sync_run_id = @runId AND status = 'failed')
+       WHERE id = @runId`, { runId });
+    };
+    // Split into MB and Nex tracks - both start at the same time
+    // MB: schools process serially (one school at a time)
+    // Nex: pipeline mode - school N can start endpoint E as soon as school N-1 finishes E and school N finishes E-1
+    const mbItemsWithIds = itemsWithIds.filter((x) => x.item.source === 'mb');
+    const nexItemsWithIds = itemsWithIds.filter((x) => x.item.source === 'nex');
+    const runMbTrackSerially = async (trackItems) => {
+        const trackResults = [];
+        for (let i = 0; i < trackItems.length; i++) {
             throwIfAborted(params.abortSignal);
+            const { item, schoolRunId } = trackItems[i];
+            const schoolStartedAt = new Date();
+            await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = @startedAt WHERE id = @id`, { startedAt: schoolStartedAt, id: schoolRunId });
             const setCurrentEndpoint = async (endpoint) => {
                 const r = await executeQuery(`UPDATE admin.sync_run_schools SET current_endpoint = @endpoint WHERE id = @id`, { endpoint: endpoint ?? null, id: schoolRunId });
                 if (r.error) {
-                    // Ignore if current_endpoint column doesn't exist (run add_current_endpoint_to_sync_run_schools.sql)
+                    // Ignore if current_endpoint column doesn't exist
                 }
             };
             try {
-                if (item.source === 'mb') {
-                    const mbService = new ManageBacService();
-                    await syncManageBacSchool(item.config, {
-                        academicYear: params.academicYear,
-                        endpoints: endpointsMb,
-                        abortSignal: params.abortSignal,
-                        mbService,
-                        onEndpointChange: setCurrentEndpoint,
-                    });
-                }
-                else {
-                    await syncNexquareSchool(item.config, item.schoolId, {
-                        academicYear: params.academicYear,
-                        endpoints: endpointsNex,
-                        abortSignal: params.abortSignal,
-                        onEndpointChange: setCurrentEndpoint,
-                    });
-                }
+                const mbService = new ManageBacService();
+                await syncManageBacSchool(item.config, {
+                    academicYear: params.academicYear,
+                    endpoints: endpointsMb,
+                    abortSignal: params.abortSignal,
+                    mbService,
+                    onEndpointChange: setCurrentEndpoint,
+                });
                 await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt: new Date(), id: schoolRunId });
-                results.push({ status: 'fulfilled', value: { success: true, schoolRunId, item } });
+                await updateRunCounts();
+                trackResults.push({ status: 'fulfilled', value: { success: true, schoolRunId, item } });
             }
             catch (err) {
                 if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
@@ -132,9 +129,120 @@ export async function runSync(params) {
                     errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg,
                     id: schoolRunId,
                 });
-                results.push({ status: 'fulfilled', value: { success: false, schoolRunId, item, errMsg } });
+                await updateRunCounts();
+                trackResults.push({ status: 'fulfilled', value: { success: false, schoolRunId, item, errMsg } });
             }
         }
+        return trackResults;
+    };
+    const runNexPipeline = async (trackItems) => {
+        const eps = endpointsNex.filter((e) => NEX_ENDPOINTS_ALL.includes(e));
+        const { start, end } = getDateRangeFromAcademicYear(params.academicYear);
+        const ay = params.academicYear || new Date().getFullYear().toString();
+        const signal = params.abortSignal;
+        const completed = new Map();
+        const schoolFailed = new Map();
+        const key = (i, j) => `${i},${j}`;
+        const getCompleted = (i, j) => {
+            if (i < 0 || j < 0)
+                return Promise.resolve();
+            const k = key(i, j);
+            return completed.get(k) ?? Promise.resolve();
+        };
+        const runEndpoint = async (schoolIndex, endpointIndex) => {
+            throwIfAborted(signal);
+            if (schoolFailed.has(schoolIndex))
+                return;
+            const { item, schoolRunId } = trackItems[schoolIndex];
+            const config = item.config;
+            const schoolId = item.schoolId;
+            const endpointName = eps[endpointIndex];
+            const startedAt = new Date();
+            await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt) WHERE id = @id`, { startedAt, id: schoolRunId });
+            await executeQuery(`UPDATE admin.sync_run_schools SET current_endpoint = @endpoint WHERE id = @id`, { endpoint: endpointName, id: schoolRunId });
+            try {
+                await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay });
+                const completedAt = new Date();
+                await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, null);
+            }
+            catch (err) {
+                if (err?.name === 'AbortError' || signal?.aborted) {
+                    throw err;
+                }
+                const errMsg = err?.message || String(err);
+                const completedAt = new Date();
+                await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, errMsg);
+                schoolFailed.set(schoolIndex, errMsg);
+                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`, { completedAt, errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg, id: schoolRunId });
+                await updateRunCounts();
+                return;
+            }
+            if (endpointIndex === eps.length - 1) {
+                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt: new Date(), id: schoolRunId });
+                await updateRunCounts();
+            }
+        };
+        const runTask = async (schoolIndex, endpointIndex) => {
+            await Promise.all([
+                getCompleted(schoolIndex - 1, endpointIndex),
+                getCompleted(schoolIndex, endpointIndex - 1),
+            ]);
+            if (schoolFailed.has(schoolIndex)) {
+                completed.set(key(schoolIndex, endpointIndex), Promise.resolve());
+                return;
+            }
+            const p = runEndpoint(schoolIndex, endpointIndex);
+            const completedPromise = p.catch(() => { });
+            completed.set(key(schoolIndex, endpointIndex), completedPromise);
+            await completedPromise;
+        };
+        const allTasks = [];
+        for (let i = 0; i < trackItems.length; i++) {
+            for (let j = 0; j < eps.length; j++) {
+                allTasks.push(runTask(i, j));
+            }
+        }
+        await Promise.all(allTasks);
+        return trackItems.map(({ item, schoolRunId }, i) => {
+            const errMsg = schoolFailed.get(i);
+            return {
+                status: 'fulfilled',
+                value: errMsg
+                    ? { success: false, schoolRunId, item, errMsg }
+                    : { success: true, schoolRunId, item },
+            };
+        });
+    };
+    const appendEndpointCompleted = async (schoolRunId, endpoint, startedAt, completedAt, error) => {
+        const result = await executeQuery(`SELECT endpoints_completed FROM admin.sync_run_schools WHERE id = @id`, { id: schoolRunId });
+        const existing = result.data?.[0]?.endpoints_completed;
+        let arr = [];
+        if (existing) {
+            try {
+                arr = JSON.parse(existing);
+            }
+            catch {
+                /* ignore */
+            }
+        }
+        const entry = {
+            endpoint,
+            started_at: startedAt.toISOString(),
+            completed_at: completedAt.toISOString(),
+        };
+        if (error)
+            entry.error = error.length > 500 ? error.substring(0, 500) : error;
+        arr.push(entry);
+        await executeQuery(`UPDATE admin.sync_run_schools SET endpoints_completed = @json WHERE id = @id`, { json: JSON.stringify(arr), id: schoolRunId });
+    };
+    const results = [];
+    let aborted = false;
+    try {
+        const [mbResults, nexResults] = await Promise.all([
+            mbItemsWithIds.length > 0 ? runMbTrackSerially(mbItemsWithIds) : Promise.resolve([]),
+            nexItemsWithIds.length > 0 ? runNexPipeline(nexItemsWithIds) : Promise.resolve([]),
+        ]);
+        results.push(...mbResults, ...nexResults);
     }
     catch (err) {
         if (err?.name === 'AbortError' || params.abortSignal?.aborted) {
@@ -247,16 +355,16 @@ async function syncManageBacSchool(config, options) {
         await run('teachers', () => svc.getTeachers(apiKey, {}, baseUrl));
     }
     throwIfAborted(signal);
+    if (eps.includes('year-groups')) {
+        await run('year-groups', () => svc.getYearGroups(apiKey, baseUrl));
+    }
+    throwIfAborted(signal);
     if (eps.includes('students')) {
         await run('students', () => svc.getStudents(apiKey, {}, baseUrl));
     }
     throwIfAborted(signal);
     if (eps.includes('classes')) {
         await run('classes', () => svc.getClasses(apiKey, baseUrl));
-    }
-    throwIfAborted(signal);
-    if (eps.includes('year-groups')) {
-        await run('year-groups', () => svc.getYearGroups(apiKey, baseUrl));
     }
 }
 /**
@@ -297,7 +405,47 @@ function getDateRangeFromAcademicYear(academicYear) {
     return { start, end };
 }
 /**
- * Sync one Nexquare school.
+ * Run a single Nexquare endpoint for one school. Used by pipeline sync.
+ */
+async function runNexquareSingleEndpoint(config, schoolId, endpointName, ctx) {
+    const { start, end, ay } = ctx;
+    switch (endpointName) {
+        case 'schools':
+            await nexquareService.getSchools(config);
+            break;
+        case 'students':
+            await nexquareService.getStudents(config, schoolId);
+            break;
+        case 'staff':
+            await nexquareService.getStaff(config, schoolId);
+            break;
+        case 'classes':
+            await nexquareService.getClasses(config, schoolId);
+            break;
+        case 'allocation-master':
+            await nexquareService.getAllocationMaster(config, schoolId);
+            break;
+        case 'student-allocations':
+            await nexquareService.getStudentAllocations(config, schoolId, ay);
+            break;
+        case 'staff-allocations':
+            await nexquareService.getStaffAllocations(config, schoolId, ay);
+            break;
+        case 'daily-plans':
+            await nexquareService.getDailyPlans(config, schoolId, start, end);
+            break;
+        case 'daily-attendance':
+            await nexquareService.getDailyAttendance(config, schoolId, start, end);
+            break;
+        case 'student-assessments':
+            await nexquareService.getStudentAssessments(config, schoolId, ay);
+            break;
+        default:
+            throw new Error(`Unknown Nexquare endpoint: ${endpointName}`);
+    }
+}
+/**
+ * Sync one Nexquare school (used for MB track; Nex uses pipeline).
  * Pass schoolId explicitly - safe for parallel NEX schools (different configs).
  * Checks abortSignal before each endpoint for immediate cancel.
  */
