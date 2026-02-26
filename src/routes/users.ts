@@ -14,6 +14,8 @@ import { resetPassword } from '../services/AuthService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import {
   syncUserToSuperset,
+  syncSupersetUserActiveStatus,
+  getSupersetRoleIdsForUser,
   isSupersetUserSyncEnabled,
 } from '../services/SupersetUserService.js';
 
@@ -70,7 +72,8 @@ router.post('/', async (req, res) => {
     }
     
     if (isSupersetUserSyncEnabled()) {
-      await syncUserToSuperset(email, displayName || null, roleIds);
+      const passwordHash = result.user.Auth_Type === 'Password' ? result.user.Password_Hash : null;
+      await syncUserToSuperset(email, displayName || null, roleIds, true, passwordHash);
     }
     
     const response: any = {
@@ -128,8 +131,8 @@ router.get('/:email', async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
-    res.json({
+
+    const response: Record<string, unknown> = {
       email: user.Email,
       displayName: user.Display_Name,
       authType: user.Auth_Type,
@@ -138,7 +141,17 @@ router.get('/:email', async (req, res) => {
       createdDate: user.Created_Date,
       modifiedDate: user.Modified_Date,
       lastLogin: user.Last_Login,
-    });
+    };
+
+    if (isSupersetUserSyncEnabled()) {
+      try {
+        response.supersetRoleIds = await getSupersetRoleIdsForUser(email);
+      } catch {
+        response.supersetRoleIds = [];
+      }
+    }
+
+    res.json(response);
   } catch (error: any) {
     console.error('Get user error:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -157,13 +170,48 @@ router.put('/:email', async (req, res) => {
     }
 
     const { email } = req.params;
-    const { displayName, isActive, authType } = req.body;
+    const { displayName, isActive, authType, supersetRoleIds } = req.body;
 
     if (authType !== undefined && authType !== 'AppRegistration' && authType !== 'Password') {
       return res.status(400).json({ error: 'authType must be AppRegistration or Password' });
     }
 
     const result = await updateUser(email, { displayName, isActive, authType });
+
+    const roleIds = Array.isArray(supersetRoleIds)
+      ? supersetRoleIds.filter((r: unknown) => typeof r === 'number').map(Number)
+      : null;
+
+    // Sync Superset roles when supersetRoleIds was provided
+    if (roleIds !== null && isSupersetUserSyncEnabled()) {
+      try {
+        const passwordHash = result.user.Auth_Type === 'Password' ? result.user.Password_Hash : null;
+        await syncUserToSuperset(
+          email,
+          result.user.Display_Name,
+          roleIds,
+          result.user.Is_Active,
+          passwordHash
+        );
+      } catch (supersetErr: any) {
+        console.error('Superset sync on user update (roles):', supersetErr);
+      }
+    }
+    // Sync active status to Superset when isActive was updated (and roles weren't already synced)
+    else if (isActive !== undefined && isSupersetUserSyncEnabled()) {
+      try {
+        const passwordHash = result.user.Auth_Type === 'Password' ? result.user.Password_Hash : null;
+        await syncSupersetUserActiveStatus(
+          email,
+          result.user.Is_Active,
+          result.user.Display_Name,
+          passwordHash
+        );
+      } catch (supersetErr: any) {
+        console.error('Superset sync on user update:', supersetErr);
+        // Don't fail the request - user was updated in app DB
+      }
+    }
 
     const response: Record<string, unknown> = {
       user: {
@@ -196,7 +244,18 @@ router.patch('/:email/deactivate', async (req, res) => {
   try {
     const { email } = req.params;
     const user = await deactivateUser(email);
-    
+
+    // Sync deactivation to Superset
+    if (isSupersetUserSyncEnabled()) {
+      try {
+        const passwordHash = user.Auth_Type === 'Password' ? user.Password_Hash : null;
+        await syncSupersetUserActiveStatus(email, false, user.Display_Name, passwordHash);
+      } catch (supersetErr: any) {
+        console.error('Superset sync on user deactivate:', supersetErr);
+        // Don't fail the request - user was deactivated in app DB
+      }
+    }
+
     res.json({
       email: user.Email,
       displayName: user.Display_Name,
@@ -227,6 +286,19 @@ router.post('/:email/reset-password', async (req, res) => {
     
     if (result.error) {
       return res.status(400).json({ error: result.error });
+    }
+
+    // Sync new password to Superset so user can log in with the reset password
+    if (isSupersetUserSyncEnabled()) {
+      try {
+        const user = await getUserByEmail(email);
+        if (user?.Auth_Type === 'Password' && user.Password_Hash) {
+          const roleIds = await getSupersetRoleIdsForUser(email);
+          await syncUserToSuperset(email, user.Display_Name, roleIds, user.Is_Active, user.Password_Hash);
+        }
+      } catch (supersetErr: any) {
+        console.error('Superset sync on password reset:', supersetErr);
+      }
     }
     
     res.json({

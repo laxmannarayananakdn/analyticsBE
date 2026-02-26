@@ -3,8 +3,13 @@
  */
 
 import express from 'express';
-import { authenticateUser, authenticateUserWithOAuth, changePassword, setPassword } from '../services/AuthService.js';
+import { authenticateUser, authenticateUserWithOAuth, changePassword, setPassword, getUserByEmail } from '../services/AuthService.js';
 import { getTenantConfigByDomainPublic } from '../services/MicrosoftTenantService.js';
+import {
+  syncUserToSuperset,
+  getSupersetRoleIdsForUser,
+  isSupersetUserSyncEnabled,
+} from '../services/SupersetUserService.js';
 import type { ChangePasswordRequest } from '../types/auth.js';
 import { loginRateLimiter, tenantConfigLookupRateLimiter } from '../middleware/rateLimiter.js';
 import { authenticate } from '../middleware/auth.js';
@@ -144,6 +149,17 @@ router.post('/set-password', loginRateLimiter, async (req, res) => {
     if (!result.success) {
       return res.status(400).json({ error: result.error });
     }
+    if (isSupersetUserSyncEnabled()) {
+      try {
+        const user = await getUserByEmail(email);
+        if (user?.Auth_Type === 'Password' && user.Password_Hash) {
+          const roleIds = await getSupersetRoleIdsForUser(email);
+          await syncUserToSuperset(email, user.Display_Name, roleIds, user.Is_Active, user.Password_Hash);
+        }
+      } catch (supersetErr: any) {
+        console.error('Superset sync on set-password:', supersetErr);
+      }
+    }
     res.json({ message: 'Password set successfully. You can now log in.' });
   } catch (error: any) {
     console.error('Set password error:', error);
@@ -179,7 +195,17 @@ router.post('/change-password', authenticate, async (req, res) => {
     if (!result.success) {
       return res.status(400).json({ error: result.error });
     }
-    
+    if (isSupersetUserSyncEnabled()) {
+      try {
+        const user = await getUserByEmail(req.user!.email);
+        if (user?.Auth_Type === 'Password' && user.Password_Hash) {
+          const roleIds = await getSupersetRoleIdsForUser(req.user!.email);
+          await syncUserToSuperset(req.user!.email, user.Display_Name, roleIds, user.Is_Active, user.Password_Hash);
+        }
+      } catch (supersetErr: any) {
+        console.error('Superset sync on change-password:', supersetErr);
+      }
+    }
     res.json({ message: 'Password changed successfully' });
   } catch (error: any) {
     console.error('Change password error:', error);
