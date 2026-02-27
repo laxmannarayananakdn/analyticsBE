@@ -559,7 +559,7 @@ export async function getStudentAssessments(
       log(`   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
       
       try {
-        const gradeInserted = await (this as any).saveAssessmentBatch(gradeRecords, schoolSourcedId);
+        const gradeInserted = await (this as any).saveAssessmentBatch(gradeRecords, schoolSourcedId, defaultAcademicYear);
         totalInserted += gradeInserted;
         log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
         
@@ -584,7 +584,7 @@ export async function getStudentAssessments(
         log(`🗑️  Deleted ${rpDeleted} existing RP assessment(s) for school/year before sync`);
       }
 
-      log(`📋 Step 3: Syncing to RP.student_assessments...`);
+      log(`📋 Step 3: Syncing to RP.student_assessments (school: ${targetSchoolId}, sourced_id: ${schoolSourcedId}, academic_year: ${defaultAcademicYear})...`);
       try {
         const rpInserted = await (this as any).syncStudentAssessmentsToRP(schoolSourcedId, defaultAcademicYear);
         log(`✅ Step 3 complete: Synced ${rpInserted} record(s) to RP.student_assessments`);
@@ -618,7 +618,9 @@ export async function getStudentAssessments(
 export async function saveAssessmentBatch(
   this: BaseNexquareService,
   records: any[],
-  schoolSourcedId: string | null
+  schoolSourcedId: string | null,
+  /** Schedule academic year (e.g. "2024 - 2025"). Used when Excel Academic Year missing or for consistency with RP sync. */
+  academicYearParam?: string
 ): Promise<number> {
   if (records.length === 0) {
     return 0;
@@ -626,9 +628,8 @@ export async function saveAssessmentBatch(
 
   console.log(`   💾 Starting bulk insert for ${records.length} record(s) using temporary table approach...`);
 
-  // Build a map of Excel School ID -> School sourced_id
-  // The Excel file has "School ID" which could be sourced_id or another identifier
-  // We need to map it to the sourced_id for the school_id column
+  // Build a map of Excel School ID -> school_id (NEX.schools.sourced_id only)
+  // Standard: school_id = NEX.schools.sourced_id everywhere
   console.log(`   🔍 Building school ID lookup map...`);
   const uniqueSchoolIds = new Set<string>();
   records.forEach(record => {
@@ -640,55 +641,21 @@ export async function saveAssessmentBatch(
 
   const schoolIdMap = new Map<string, string | null>();
   for (const excelSchoolId of uniqueSchoolIds) {
-    // Try multiple lookup strategies to find the sourced_id:
-    // 1. Check if it's already the sourced_id
-    // 2. Try to find by identifier (then get sourced_id)
-    // 3. Try to find by database id (then get sourced_id)
-    let sourcedId: string | null = null;
-    
-    // First, try as sourced_id directly
-    const queryBySourcedId = `
-      SELECT sourced_id FROM NEX.schools WHERE sourced_id = @sourced_id;
-    `;
-    const resultBySourcedId = await executeQuery<{ sourced_id: string }>(queryBySourcedId, { sourced_id: excelSchoolId });
-    if (!resultBySourcedId.error && resultBySourcedId.data && resultBySourcedId.data.length > 0) {
-      sourcedId = resultBySourcedId.data[0].sourced_id;
+    let schoolIdForDb: string | null = null;
+    const result = await executeQuery<{ sourced_id: string }>(
+      `SELECT sourced_id FROM NEX.schools WHERE sourced_id = @sourced_id`,
+      { sourced_id: excelSchoolId }
+    );
+    if (!result.error && result.data && result.data.length > 0) {
+      schoolIdForDb = result.data[0].sourced_id;
     }
-    
-    // If not found, try by identifier
-    if (!sourcedId) {
-      const queryByIdentifier = `
-        SELECT sourced_id FROM NEX.schools WHERE identifier = @identifier;
-      `;
-      const resultByIdentifier = await executeQuery<{ sourced_id: string }>(queryByIdentifier, { identifier: excelSchoolId });
-      if (!resultByIdentifier.error && resultByIdentifier.data && resultByIdentifier.data.length > 0) {
-        sourcedId = resultByIdentifier.data[0].sourced_id;
+    if (!schoolIdForDb) {
+      schoolIdForDb = schoolSourcedId;
+      if (!schoolIdForDb) {
+        console.warn(`   ⚠️  School ID "${excelSchoolId}" from Excel not found in NEX.schools (sourced_id). Will use NULL.`);
       }
     }
-    
-    // If still not found, try by database id (if it's numeric)
-    if (!sourcedId) {
-      const numericId = parseInt(excelSchoolId);
-      if (!isNaN(numericId)) {
-        const queryById = `
-          SELECT sourced_id FROM NEX.schools WHERE id = @id;
-        `;
-        const resultById = await executeQuery<{ sourced_id: string }>(queryById, { id: numericId });
-        if (!resultById.error && resultById.data && resultById.data.length > 0) {
-          sourcedId = resultById.data[0].sourced_id;
-        }
-      }
-    }
-    
-    // If still not found, use the provided schoolSourcedId as fallback, or null
-    if (!sourcedId) {
-      sourcedId = schoolSourcedId;
-      if (!sourcedId) {
-        console.warn(`   ⚠️  School ID "${excelSchoolId}" from Excel not found in database. Will use NULL.`);
-      }
-    }
-    
-    schoolIdMap.set(excelSchoolId, sourcedId);
+    schoolIdMap.set(excelSchoolId, schoolIdForDb);
   }
 
   console.log(`   ✅ Built lookup map for ${schoolIdMap.size} unique school(s)`);
@@ -734,7 +701,7 @@ export async function saveAssessmentBatch(
       grade_name: getValue(record, 'Grade Name'),
       section_name: getValue(record, 'Section Name'),
       class_name: getValue(record, 'Class Name'),
-      academic_year: getValue(record, 'Academic Year'),
+      academic_year: academicYearParam || getValue(record, 'Academic Year'),
       subject_id: getValue(record, 'Subject ID'),
       subject_name: getValue(record, 'Subject Name'),
       term_id: getValue(record, 'Term ID'),
@@ -885,11 +852,15 @@ export async function saveAssessmentBatch(
 
 /**
  * Sync student assessments from NEX.student_assessments to RP.student_assessments
- * - If subject mappings exist for (school, ay, grade) with reported_subject: include ONLY those subjects
- * - If no mappings for (school, ay, grade): load EVERYTHING for that grade
- * - Component filters (admin.component_filter_config): include/exclude with SQL LIKE
- * - Term filters (admin.term_filter_config): include/exclude with SQL LIKE
- * - After sync: deletes from NEX.student_assessments for school+academic_year
+ *
+ * Two-path logic:
+ * - Path A (Internal): Component + term filters (SQL LIKE). For grades with subject mapping,
+ *   only mapped subjects; for grades without mapping, all subjects. Captures internal exam rows.
+ * - Path B (External): For grades where subject mapping exists, pull rows where subject is in
+ *   mapping (no component/term filter). Captures external exam rows with non-standard component names.
+ *
+ * Results from both paths are combined with UNION (dedupes). After sync: deletes from
+ * NEX.student_assessments for school+academic_year.
  */
 export async function syncStudentAssessmentsToRP(
   this: BaseNexquareService,
@@ -961,15 +932,9 @@ export async function syncStudentAssessmentsToRP(
     }
     if (termWhere) termWhere = ' AND ' + termWhere;
 
-    // Subject mapping: if (school, ay, grade) has mappings with reported_subject -> include only those subjects.
-    // If (school, ay, grade) has no mappings -> load everything. reported_subject = COALESCE(sm.reported_subject, sa.subject_name)
-    const syncQuery = `
-      INSERT INTO RP.student_assessments (
-        nex_assessment_id, school_id, school_name, region_name, student_name, register_number,
-        student_status, grade_name, section_name, class_name, academic_year, subject_id, subject_name,
-        term_id, term_name, component_name, component_value, max_value, data_type, calculation_method,
-        mark_grade_name, mark_rubric_name, reported_subject, created_at, updated_at
-      )
+    // Path A (Internal): component + term filters; subject logic as before
+    // Path B (External): grades with subject mapping - include mapped subjects only, no component/term filter
+    const pathA = `
       SELECT sa.id, sa.school_id, sa.school_name, sa.region_name, sa.student_name, sa.register_number,
         sa.student_status, sa.grade_name, sa.section_name, sa.class_name, sa.academic_year, sa.subject_id, sa.subject_name,
         sa.term_id, sa.term_name, sa.component_name, sa.component_value, sa.max_value, sa.data_type, sa.calculation_method,
@@ -993,7 +958,36 @@ export async function syncStudentAssessmentsToRP(
             AND m.grade = sa.grade_name AND m.reported_subject IS NOT NULL AND LTRIM(RTRIM(m.reported_subject)) != ''))
         )
         ${componentWhere}
-        ${termWhere};
+        ${termWhere}
+    `;
+
+    const pathB = `
+      SELECT sa.id, sa.school_id, sa.school_name, sa.region_name, sa.student_name, sa.register_number,
+        sa.student_status, sa.grade_name, sa.section_name, sa.class_name, sa.academic_year, sa.subject_id, sa.subject_name,
+        sa.term_id, sa.term_name, sa.component_name, sa.component_value, sa.max_value, sa.data_type, sa.calculation_method,
+        sa.mark_grade_name, sa.mark_rubric_name,
+        sm.reported_subject,
+        sa.created_at, sa.updated_at
+      FROM NEX.student_assessments sa
+      INNER JOIN admin.subject_mapping sm
+        ON sa.school_id = sm.school_id AND sa.academic_year = sm.academic_year
+        AND sa.grade_name = sm.grade AND sa.subject_name = sm.subject
+        AND sm.reported_subject IS NOT NULL AND LTRIM(RTRIM(sm.reported_subject)) != ''
+      WHERE NOT EXISTS (SELECT 1 FROM RP.student_assessments rsa WHERE rsa.nex_assessment_id = sa.id)
+        AND sa.school_id = @school_id
+        ${academicYear ? ' AND sa.academic_year = @academic_year' : ''}
+    `;
+
+    const syncQuery = `
+      INSERT INTO RP.student_assessments (
+        nex_assessment_id, school_id, school_name, region_name, student_name, register_number,
+        student_status, grade_name, section_name, class_name, academic_year, subject_id, subject_name,
+        term_id, term_name, component_name, component_value, max_value, data_type, calculation_method,
+        mark_grade_name, mark_rubric_name, reported_subject, created_at, updated_at
+      )
+      (${pathA})
+      UNION
+      (${pathB});
       SELECT @@ROWCOUNT AS rows_affected;
     `;
 
@@ -1005,7 +999,7 @@ export async function syncStudentAssessmentsToRP(
     Object.entries(termParams).forEach(([k, v]) => request.input(k, sql.NVarChar(500), v));
 
     console.log(`   📋 SQL:\n${syncQuery}`);
-    console.log(`   📋 Params: school_id=${schoolSourcedId}, academic_year=${academicYear ?? 'all'}, comp/term filters applied`);
+    console.log(`   📋 Params: school_id=${schoolSourcedId}, academic_year=${academicYear ?? 'all'}, Path A (comp/term) + Path B (subject-mapped grades)`);
     console.log(`   ⏱️  Executing sync query (timeout: 30 minutes)...`);
     const startTime = Date.now();
     

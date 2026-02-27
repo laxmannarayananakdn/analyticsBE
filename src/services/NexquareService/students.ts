@@ -19,7 +19,9 @@ export async function getStudents(
   schoolId?: string,
   filter?: string,
   fetchMode: number = 1,
-  onLog?: (msg: string) => void
+  onLog?: (msg: string) => void,
+  /** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+  academicYearParam?: string
 ): Promise<NexquareUser[]> {
   const log = (msg: string) => {
     console.log(msg);
@@ -163,7 +165,7 @@ export async function getStudents(
           user_type: student.userType || 'student',
           status: student.status || null,
           date_last_modified: dateLastModified,
-          academic_year: studentData.academicYear ? String(studentData.academicYear) : null,
+          academic_year: academicYearParam ? String(academicYearParam) : (studentData.academicYear ? String(studentData.academicYear) : null),
           metadata: metadataJson,
           current_grade: studentData.currentGrade || null,
           current_class: studentData.currentClass || studentData.currentClassName || null,

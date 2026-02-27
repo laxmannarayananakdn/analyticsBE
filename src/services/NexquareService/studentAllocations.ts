@@ -22,7 +22,8 @@ export async function getStudentAllocations(
   this: BaseNexquareService & { bulkGetStudentIds: (ids: string[]) => Promise<Map<string, { id: number; sourced_id: string }>>; bulkGetGroupIds: (ids: string[]) => Promise<Map<string, { id: number; sourced_id: string }>> },
   config: NexquareConfig,
   schoolId?: string,
-  academicYear?: string
+  /** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+  academicYearParam?: string
 ): Promise<StudentAllocationResponse[]> {
   try {
     const targetSchoolId = schoolId || this.getCurrentSchoolId();
@@ -315,7 +316,7 @@ export async function getStudentAllocations(
     for (const allocation of allAllocations) {
       const data = allocation as any;
       const studentSourcedId = data.sourcedId || data.studentSourcedId;
-      const academicYear = data.academicYear || null;
+      const academicYear = academicYearParam || data.academicYear || null;
 
       if (!studentSourcedId) {
         continue;
