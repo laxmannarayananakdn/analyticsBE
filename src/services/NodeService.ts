@@ -43,12 +43,14 @@ function isTruthy(v: boolean | number | undefined): boolean {
   return v === true || v === 1;
 }
 
-function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number }): NodeTree {
+function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number; Is_Central_Office?: boolean | number; Country_Code?: string | null }): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
     isHeadOffice: isTruthy(node.Is_Head_Office),
     isSchoolNode: isTruthy(node.Is_School_Node),
+    isCentralOffice: isTruthy(node.Is_Central_Office),
+    countryCode: node.Country_Code ?? null,
     parentNodeId: node.Parent_Node_ID,
     children: [],
   };
@@ -57,12 +59,14 @@ function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number })
 /**
  * Transform database node to API format (flat)
  */
-function transformNode(node: Node & { Is_School_Node?: boolean | number }): NodeTree {
+function transformNode(node: Node & { Is_School_Node?: boolean | number; Is_Central_Office?: boolean | number; Country_Code?: string | null }): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
     isHeadOffice: isTruthy(node.Is_Head_Office),
     isSchoolNode: isTruthy(node.Is_School_Node),
+    isCentralOffice: isTruthy(node.Is_Central_Office),
+    countryCode: node.Country_Code ?? null,
     parentNodeId: node.Parent_Node_ID,
   };
 }
@@ -132,7 +136,7 @@ export async function getNodesTree(): Promise<NodeTree[]> {
  * Create node
  */
 export async function createNode(createRequest: CreateNodeRequest): Promise<NodeTree> {
-  const { nodeId, nodeDescription, isHeadOffice, isSchoolNode, parentNodeId, createdBy } = createRequest;
+  const { nodeId, nodeDescription, isHeadOffice, isSchoolNode, isCentralOffice, countryCode, parentNodeId, createdBy } = createRequest;
   
   // Check if node already exists
   const existing = await getNodeById(nodeId);
@@ -159,16 +163,18 @@ export async function createNode(createRequest: CreateNodeRequest): Promise<Node
     }
   }
   
-  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
+  const result = await executeQuery<Node & { Is_School_Node?: boolean | number; Is_Central_Office?: boolean | number; Country_Code?: string | null }>(
     `INSERT INTO admin.Node 
-     (Node_ID, Node_Description, Is_Head_Office, Is_School_Node, Parent_Node_ID, Created_By)
-     VALUES (@nodeId, @nodeDescription, @isHeadOffice, @isSchoolNode, @parentNodeId, @createdBy);
+     (Node_ID, Node_Description, Is_Head_Office, Is_School_Node, Is_Central_Office, Country_Code, Parent_Node_ID, Created_By)
+     VALUES (@nodeId, @nodeDescription, @isHeadOffice, @isSchoolNode, @isCentralOffice, @countryCode, @parentNodeId, @createdBy);
      SELECT * FROM admin.Node WHERE Node_ID = @nodeId`,
     {
       nodeId,
       nodeDescription,
       isHeadOffice: isHeadOffice ? 1 : 0,
       isSchoolNode: isSchoolNode ? 1 : 0,
+      isCentralOffice: isCentralOffice ? 1 : 0,
+      countryCode: countryCode || null,
       parentNodeId: parentNodeId || null,
       createdBy,
     }
@@ -216,6 +222,16 @@ export async function updateNode(
   if (updateRequest.isSchoolNode !== undefined) {
     updates.push('Is_School_Node = @isSchoolNode');
     params.isSchoolNode = updateRequest.isSchoolNode ? 1 : 0;
+  }
+
+  if (updateRequest.isCentralOffice !== undefined) {
+    updates.push('Is_Central_Office = @isCentralOffice');
+    params.isCentralOffice = updateRequest.isCentralOffice ? 1 : 0;
+  }
+
+  if (updateRequest.countryCode !== undefined) {
+    updates.push('Country_Code = @countryCode');
+    params.countryCode = updateRequest.countryCode || null;
   }
   
   if (updateRequest.parentNodeId !== undefined) {

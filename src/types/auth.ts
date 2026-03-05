@@ -33,6 +33,8 @@ export interface Node {
   Is_Head_Office: boolean | number;
   Parent_Node_ID: string | null;
   Is_School_Node?: boolean | number;
+  Is_Central_Office?: boolean | number;
+  Country_Code?: string | null;
   Created_Date: Date;
   Modified_Date: Date;
   Created_By: string | null;
@@ -122,6 +124,8 @@ export interface CreateNodeRequest {
   nodeDescription: string;
   isHeadOffice?: boolean;
   isSchoolNode?: boolean;
+  isCentralOffice?: boolean;
+  countryCode?: string | null;
   parentNodeId?: string | null;
   createdBy: string;
 }
@@ -130,6 +134,8 @@ export interface UpdateNodeRequest {
   nodeDescription?: string;
   isHeadOffice?: boolean;
   isSchoolNode?: boolean;
+  isCentralOffice?: boolean;
+  countryCode?: string | null;
   parentNodeId?: string | null;
 }
 
@@ -154,6 +160,8 @@ export interface NodeTree {
   nodeDescription: string;
   isHeadOffice: boolean;
   isSchoolNode?: boolean;
+  isCentralOffice?: boolean;
+  countryCode?: string | null;
   parentNodeId: string | null;
   children?: NodeTree[];
 }
