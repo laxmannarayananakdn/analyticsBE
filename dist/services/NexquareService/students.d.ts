@@ -9,5 +9,7 @@ import type { BaseNexquareService } from './BaseNexquareService.js';
  * Get students with pagination and save to database
  * Can be added to a class that extends BaseNexquareService
  */
-export declare function getStudents(this: BaseNexquareService, config: NexquareConfig, schoolId?: string, filter?: string, fetchMode?: number, onLog?: (msg: string) => void): Promise<NexquareUser[]>;
+export declare function getStudents(this: BaseNexquareService, config: NexquareConfig, schoolId?: string, filter?: string, fetchMode?: number, onLog?: (msg: string) => void, 
+/** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+academicYearParam?: string): Promise<NexquareUser[]>;
 //# sourceMappingURL=students.d.ts.map

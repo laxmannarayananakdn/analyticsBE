@@ -13,7 +13,9 @@ import { databaseService } from '../DatabaseService.js';
  *
  * NOTE: Requires bulkGetStudentIds and bulkGetGroupIds helper methods
  */
-export async function getStudentAllocations(config, schoolId, academicYear) {
+export async function getStudentAllocations(config, schoolId, 
+/** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+academicYearParam) {
     try {
         const targetSchoolId = schoolId || this.getCurrentSchoolId();
         if (!targetSchoolId) {
@@ -255,7 +257,7 @@ export async function getStudentAllocations(config, schoolId, academicYear) {
         for (const allocation of allAllocations) {
             const data = allocation;
             const studentSourcedId = data.sourcedId || data.studentSourcedId;
-            const academicYear = data.academicYear || null;
+            const academicYear = academicYearParam || data.academicYear || null;
             if (!studentSourcedId) {
                 continue;
             }

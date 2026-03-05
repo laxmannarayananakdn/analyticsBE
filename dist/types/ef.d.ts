@@ -111,4 +111,45 @@ export interface CEMSubjectLevelAnalysis {
     TDA_Gender_Adj_Residual: number | null;
     TDA_Gender_Adj_Std_Residual: number | null;
 }
+export interface HREmployeeData {
+    Year?: number;
+    Quarter?: string;
+    Month?: string;
+    Country?: string;
+    Country_City?: string;
+    Entity?: string;
+    Emp_ID?: string;
+    Position_Category?: string;
+    Attrition?: string;
+    FTE?: number;
+    Date_of_Birth?: string;
+    Date_of_Hire?: string;
+    Sect?: string;
+    Staff_Nationality?: string;
+    Gender?: string;
+    Teaching_Level?: string;
+    Teaching_Subject_Category?: string;
+    Qualification?: string;
+    Date_of_Separation?: string;
+    reason_for_leaving?: string;
+    Aging?: number;
+    Age_Grouping?: string;
+    Longevity?: number;
+    Longevity_Grouping?: string;
+    Reason_type?: string;
+    Reporting_Year?: string;
+    recruitment?: string;
+    separation?: string;
+    Staff_Category?: string;
+    Contract_type?: string;
+}
+export interface HRBudgetVsActual {
+    Year?: string;
+    Quarter?: string;
+    Country?: string;
+    Category?: string;
+    Budget?: number;
+    Actual?: number;
+    Key?: string;
+}
 //# sourceMappingURL=ef.d.ts.map

@@ -1,6 +1,6 @@
 /**
  * RP Configuration Routes
- * Routes for managing RP.subject_mapping and RP.assessment_component_config tables
+ * Routes for managing admin.subject_mapping, admin.assessment_component_config, admin.component_filter_config, admin.term_filter_config
  */
 import { Router } from 'express';
 import { executeQuery, getConnection, sql } from '../config/database.js';
@@ -10,11 +10,11 @@ const router = Router();
 // =============================================
 /**
  * GET /api/rp-config/subject-mapping
- * Get subject mappings filtered by school_id and academic_year
+ * Get subject mappings filtered by school_id, academic_year, grade
  */
 router.get('/subject-mapping', async (req, res) => {
     try {
-        const { school_id, academic_year } = req.query;
+        const { school_id, academic_year, grade } = req.query;
         let query = `
       SELECT 
         id,
@@ -25,7 +25,7 @@ router.get('/subject-mapping', async (req, res) => {
         reported_subject,
         created_at,
         updated_at
-      FROM RP.subject_mapping
+      FROM admin.subject_mapping
       WHERE 1=1
     `;
         const params = {};
@@ -36,6 +36,10 @@ router.get('/subject-mapping', async (req, res) => {
         if (academic_year) {
             query += ` AND academic_year = @academic_year`;
             params.academic_year = academic_year;
+        }
+        if (grade) {
+            query += ` AND grade = @grade`;
+            params.grade = grade;
         }
         query += ` ORDER BY grade, subject`;
         const result = await executeQuery(query, params);
@@ -83,7 +87,7 @@ router.post('/subject-mapping', async (req, res) => {
                     if (id) {
                         // Update existing
                         const updateQuery = `
-              UPDATE RP.subject_mapping
+              UPDATE admin.subject_mapping
               SET 
                 school_id = @school_id,
                 academic_year = @academic_year,
@@ -106,7 +110,7 @@ router.post('/subject-mapping', async (req, res) => {
                     else {
                         // Insert new (using MERGE to handle duplicates)
                         const mergeQuery = `
-              MERGE RP.subject_mapping AS target
+              MERGE admin.subject_mapping AS target
               USING (SELECT 
                 @school_id AS school_id,
                 @academic_year AS academic_year,
@@ -171,7 +175,7 @@ router.delete('/subject-mapping/:id', async (req, res) => {
         if (isNaN(id)) {
             return res.status(400).json({ error: 'Invalid mapping ID' });
         }
-        const query = `DELETE FROM RP.subject_mapping WHERE id = @id`;
+        const query = `DELETE FROM admin.subject_mapping WHERE id = @id`;
         const result = await executeQuery(query, { id });
         if (result.error) {
             return res.status(500).json({ error: result.error });
@@ -206,7 +210,7 @@ router.get('/assessment-component-config', async (req, res) => {
         is_active,
         created_at,
         updated_at
-      FROM RP.assessment_component_config
+      FROM admin.assessment_component_config
       WHERE 1=1
     `;
         const params = {};
@@ -260,7 +264,7 @@ router.post('/assessment-component-config', async (req, res) => {
                     if (id) {
                         // Update existing
                         const updateQuery = `
-              UPDATE RP.assessment_component_config
+              UPDATE admin.assessment_component_config
               SET 
                 school_id = @school_id,
                 component_name = @component_name,
@@ -279,7 +283,7 @@ router.post('/assessment-component-config', async (req, res) => {
                     else {
                         // Insert new (using MERGE to handle duplicates)
                         const mergeQuery = `
-              MERGE RP.assessment_component_config AS target
+              MERGE admin.assessment_component_config AS target
               USING (SELECT 
                 @school_id AS school_id,
                 @component_name AS component_name
@@ -338,7 +342,7 @@ router.delete('/assessment-component-config/:id', async (req, res) => {
         if (isNaN(id)) {
             return res.status(400).json({ error: 'Invalid config ID' });
         }
-        const query = `DELETE FROM RP.assessment_component_config WHERE id = @id`;
+        const query = `DELETE FROM admin.assessment_component_config WHERE id = @id`;
         const result = await executeQuery(query, { id });
         if (result.error) {
             return res.status(500).json({ error: result.error });
@@ -389,10 +393,8 @@ router.get('/schools', async (req, res) => {
 });
 /**
  * GET /api/rp-config/academic-years
- * Get a unified list of academic years for dropdown from:
- * - NEX.student_allocations (Student Allocations)
- * - RP.student_assessments (years where we already have assessment data)
- * Optional query: school_id - filter years for that school only.
+ * Get academic years from RP Config tables only (subject_mapping).
+ * Optional: school_id - filter years for that school.
  */
 router.get('/academic-years', async (req, res) => {
     try {
@@ -403,17 +405,10 @@ router.get('/academic-years', async (req, res) => {
             params.school_id = school_id;
         }
         const query = `
-      SELECT DISTINCT academic_year FROM (
-        SELECT academic_year
-        FROM NEX.student_allocations
-        WHERE academic_year IS NOT NULL
-        ${schoolFilter}
-        UNION
-        SELECT academic_year
-        FROM RP.student_assessments
-        WHERE academic_year IS NOT NULL
-        ${schoolFilter}
-      ) AS combined
+      SELECT DISTINCT academic_year
+      FROM admin.subject_mapping
+      WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
+      ${schoolFilter}
       ORDER BY academic_year DESC
     `;
         const result = await executeQuery(query, params);
@@ -433,25 +428,88 @@ router.get('/academic-years', async (req, res) => {
     }
 });
 /**
- * GET /api/rp-config/subjects
- * Get list of subject names for dropdown (from NEX.subjects - populated by Student Allocations).
- * Query: school_id (required) - subjects for that school.
+ * GET /api/rp-config/grades
+ * Get grades from admin.subject_mapping for school + academic year.
  */
-router.get('/subjects', async (req, res) => {
+router.get('/grades', async (req, res) => {
     try {
-        const { school_id } = req.query;
+        const { school_id, academic_year } = req.query;
         if (!school_id || typeof school_id !== 'string') {
             return res.status(400).json({ error: 'school_id is required' });
         }
+        const params = { school_id };
+        let academicFilter = '';
+        if (academic_year && typeof academic_year === 'string') {
+            academicFilter = ' AND academic_year = @academic_year';
+            params.academic_year = academic_year;
+        }
         const query = `
-      SELECT DISTINCT subject_name AS subject
-      FROM NEX.subjects
+      SELECT DISTINCT grade
+      FROM admin.subject_mapping
       WHERE school_id = @school_id
-        AND subject_name IS NOT NULL
-        AND LTRIM(RTRIM(ISNULL(subject_name, ''))) != ''
-      ORDER BY subject_name
+        AND grade IS NOT NULL AND LTRIM(RTRIM(grade)) != ''
+        ${academicFilter}
+      ORDER BY grade
     `;
-        const result = await executeQuery(query, { school_id });
+        const result = await executeQuery(query, params);
+        if (result.error) {
+            return res.status(500).json({ error: result.error });
+        }
+        res.json({
+            success: true,
+            data: result.data?.map((row) => row.grade) || []
+        });
+    }
+    catch (error) {
+        console.error('Error fetching grades:', error);
+        res.status(500).json({
+            error: error.message || 'Internal server error'
+        });
+    }
+});
+/**
+ * GET /api/rp-config/subjects
+ * Get subject names for dropdown. From admin.subject_mapping + NEX.student_assessments (assessment file).
+ */
+router.get('/subjects', async (req, res) => {
+    try {
+        const { school_id, academic_year, grade } = req.query;
+        if (!school_id || typeof school_id !== 'string') {
+            return res.status(400).json({ error: 'school_id is required' });
+        }
+        const params = { school_id };
+        let ayFilter = '';
+        let gradeFilter = '';
+        let fromAssessments = '';
+        if (academic_year && typeof academic_year === 'string') {
+            ayFilter = ' AND academic_year = @academic_year';
+            params.academic_year = academic_year;
+        }
+        if (grade && typeof grade === 'string') {
+            gradeFilter = ' AND grade = @grade';
+            params.grade = grade;
+        }
+        if (academic_year && typeof academic_year === 'string') {
+            fromAssessments = `
+        UNION
+        SELECT DISTINCT subject_name AS subject
+        FROM NEX.student_assessments
+        WHERE school_id = @school_id AND academic_year = @academic_year
+          AND subject_name IS NOT NULL AND LTRIM(RTRIM(ISNULL(subject_name, ''))) != ''
+      `;
+        }
+        const query = `
+      SELECT DISTINCT subject FROM (
+        SELECT subject FROM admin.subject_mapping
+        WHERE school_id = @school_id
+          AND subject IS NOT NULL AND LTRIM(RTRIM(ISNULL(subject, ''))) != ''
+          ${ayFilter}
+          ${gradeFilter}
+        ${fromAssessments}
+      ) AS combined
+      ORDER BY subject
+    `;
+        const result = await executeQuery(query, params);
         if (result.error) {
             return res.status(500).json({ error: result.error });
         }
@@ -465,6 +523,206 @@ router.get('/subjects', async (req, res) => {
         res.status(500).json({
             error: error.message || 'Internal server error'
         });
+    }
+});
+// =============================================
+// COMPONENT FILTER CONFIG ROUTES
+// =============================================
+/**
+ * GET /api/rp-config/component-filters
+ */
+router.get('/component-filters', async (req, res) => {
+    try {
+        const { school_id } = req.query;
+        if (!school_id || typeof school_id !== 'string') {
+            return res.status(400).json({ error: 'school_id is required' });
+        }
+        const query = `
+      SELECT id, school_id, filter_type, pattern, display_order, created_at, updated_at
+      FROM admin.component_filter_config
+      WHERE school_id = @school_id
+      ORDER BY display_order, filter_type, id
+    `;
+        const result = await executeQuery(query, { school_id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: result.data || [] });
+    }
+    catch (error) {
+        console.error('Error fetching component filters:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * POST /api/rp-config/component-filters
+ */
+router.post('/component-filters', async (req, res) => {
+    try {
+        const { filters } = req.body;
+        if (!Array.isArray(filters) || filters.length === 0) {
+            return res.status(400).json({ error: 'filters array is required' });
+        }
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        let successCount = 0;
+        let errorCount = 0;
+        const errors = [];
+        for (const f of filters) {
+            const { id, school_id, filter_type, pattern } = f;
+            if (!school_id || !filter_type || !pattern) {
+                errorCount++;
+                errors.push(`Missing required fields: ${JSON.stringify(f)}`);
+                continue;
+            }
+            if (!['include', 'exclude'].includes(filter_type)) {
+                errorCount++;
+                errors.push(`Invalid filter_type: ${filter_type}`);
+                continue;
+            }
+            try {
+                const request = transaction.request();
+                request.input('school_id', sql.NVarChar(200), school_id);
+                request.input('filter_type', sql.NVarChar(20), filter_type);
+                request.input('pattern', sql.NVarChar(500), pattern);
+                if (id) {
+                    request.input('id', sql.BigInt, id);
+                    await request.query(`UPDATE admin.component_filter_config SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET() WHERE id=@id AND school_id=@school_id`);
+                }
+                else {
+                    await request.query(`INSERT INTO admin.component_filter_config (school_id, filter_type, pattern) VALUES (@school_id, @filter_type, @pattern)`);
+                }
+                successCount++;
+            }
+            catch (err) {
+                errorCount++;
+                errors.push(err.message);
+            }
+        }
+        await transaction.commit();
+        res.json({ success: true, successCount, errorCount, errors: errors.length ? errors : undefined });
+    }
+    catch (error) {
+        console.error('Error saving component filters:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * DELETE /api/rp-config/component-filters/:id
+ */
+router.delete('/component-filters/:id', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id))
+            return res.status(400).json({ error: 'Invalid ID' });
+        const result = await executeQuery('DELETE FROM admin.component_filter_config WHERE id = @id', { id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, message: 'Deleted' });
+    }
+    catch (error) {
+        console.error('Error deleting component filter:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+// =============================================
+// TERM FILTER CONFIG ROUTES
+// =============================================
+/**
+ * GET /api/rp-config/term-filters
+ */
+router.get('/term-filters', async (req, res) => {
+    try {
+        const { school_id } = req.query;
+        if (!school_id || typeof school_id !== 'string') {
+            return res.status(400).json({ error: 'school_id is required' });
+        }
+        const query = `
+      SELECT id, school_id, filter_type, pattern, display_order, created_at, updated_at
+      FROM admin.term_filter_config
+      WHERE school_id = @school_id
+      ORDER BY display_order, filter_type, id
+    `;
+        const result = await executeQuery(query, { school_id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: result.data || [] });
+    }
+    catch (error) {
+        console.error('Error fetching term filters:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * POST /api/rp-config/term-filters
+ */
+router.post('/term-filters', async (req, res) => {
+    try {
+        const { filters } = req.body;
+        if (!Array.isArray(filters) || filters.length === 0) {
+            return res.status(400).json({ error: 'filters array is required' });
+        }
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        let successCount = 0;
+        let errorCount = 0;
+        const errors = [];
+        for (const f of filters) {
+            const { id, school_id, filter_type, pattern } = f;
+            if (!school_id || !filter_type || !pattern) {
+                errorCount++;
+                errors.push(`Missing required fields: ${JSON.stringify(f)}`);
+                continue;
+            }
+            if (!['include', 'exclude'].includes(filter_type)) {
+                errorCount++;
+                errors.push(`Invalid filter_type: ${filter_type}`);
+                continue;
+            }
+            try {
+                const request = transaction.request();
+                request.input('school_id', sql.NVarChar(200), school_id);
+                request.input('filter_type', sql.NVarChar(20), filter_type);
+                request.input('pattern', sql.NVarChar(500), pattern);
+                if (id) {
+                    request.input('id', sql.BigInt, id);
+                    await request.query(`UPDATE admin.term_filter_config SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET() WHERE id=@id AND school_id=@school_id`);
+                }
+                else {
+                    await request.query(`INSERT INTO admin.term_filter_config (school_id, filter_type, pattern) VALUES (@school_id, @filter_type, @pattern)`);
+                }
+                successCount++;
+            }
+            catch (err) {
+                errorCount++;
+                errors.push(err.message);
+            }
+        }
+        await transaction.commit();
+        res.json({ success: true, successCount, errorCount, errors: errors.length ? errors : undefined });
+    }
+    catch (error) {
+        console.error('Error saving term filters:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * DELETE /api/rp-config/term-filters/:id
+ */
+router.delete('/term-filters/:id', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id))
+            return res.status(400).json({ error: 'Invalid ID' });
+        const result = await executeQuery('DELETE FROM admin.term_filter_config WHERE id = @id', { id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, message: 'Deleted' });
+    }
+    catch (error) {
+        console.error('Error deleting term filter:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
     }
 });
 export default router;

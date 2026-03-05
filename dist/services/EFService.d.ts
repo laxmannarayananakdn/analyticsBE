@@ -2,7 +2,7 @@
  * EF Service
  * Handles all database operations for External Files Upload System
  */
-import { FileType, Upload, UploadStatus, IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef.js';
+import { FileType, Upload, UploadStatus, IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis, HREmployeeData, HRBudgetVsActual } from '../types/ef.js';
 export declare class EFService {
     /**
      * Get all active file types
@@ -33,6 +33,29 @@ export declare class EFService {
      * Insert CEM Subject Level Analysis records using bulk insert
      */
     insertCEMSubjectLevelAnalysis(uploadId: number, fileName: string, uploadedBy: string, records: CEMSubjectLevelAnalysis[]): Promise<number>;
+    /**
+     * Delete all rows from EF.HR_EmployeeData (for overwrite before new upload)
+     */
+    deleteAllHREmployeeData(): Promise<void>;
+    /**
+     * Delete all rows from EF.HR_BudgetVsActual (for overwrite before new upload)
+     */
+    deleteAllHRBudgetVsActual(): Promise<void>;
+    /**
+     * Insert HR Employee Data records using bulk insert
+     */
+    insertHREmployeeData(uploadId: number, fileName: string, uploadedBy: string, records: HREmployeeData[]): Promise<number>;
+    /**
+     * Insert HR Budget vs Actual records using bulk insert
+     */
+    insertHRBudgetVsActual(uploadId: number, fileName: string, uploadedBy: string, records: HRBudgetVsActual[]): Promise<number>;
+    /**
+     * Promote HR upload to RP schema (copy EF data to RP, full replace)
+     */
+    promoteUploadToRP(uploadId: number): Promise<{
+        rowCount: number;
+        fileType: string;
+    }>;
     /**
      * Get upload by ID
      */

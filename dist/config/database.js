@@ -13,7 +13,7 @@ const config = {
         encrypt: true, // Required for Azure
         trustServerCertificate: false,
         enableArithAbort: true,
-        requestTimeout: 600000, // 10 minutes for long-running queries (e.g., large RP sync operations)
+        requestTimeout: 1800000, // 30 minutes for long-running queries (e.g., large RP sync operations)
         connectionTimeout: 30000
     },
     pool: {

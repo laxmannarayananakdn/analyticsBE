@@ -6,7 +6,14 @@ import { Router, Request, Response } from 'express';
 import * as path from 'path';
 import { efService } from '../services/EFService.js';
 import { fileParserFactory } from '../services/parsers/index.js';
-import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../types/ef.js';
+import {
+  IBExternalExam,
+  MSNAVFinancialAid,
+  CEMPredictionReport,
+  CEMSubjectLevelAnalysis,
+  HREmployeeData,
+  HRBudgetVsActual
+} from '../types/ef.js';
 import {
   validateFileSize,
   validateFileExtension,
@@ -263,17 +270,31 @@ router.post('/upload', (req, res, next) => {
     ) => Promise<number>;
 
     const insertRegistry: Record<string, InsertFunction> = {
-      'IB_EXTERNAL_EXAMS': async (id, name, by, recs) => 
+      'IB_EXTERNAL_EXAMS': async (id, name, by, recs) =>
         await efService.insertIBExternalExams(id, name, by, recs as IBExternalExam[]),
-      'MSNAV_FINANCIAL_AID': async (id, name, by, recs) => 
+      'MSNAV_FINANCIAL_AID': async (id, name, by, recs) =>
         await efService.insertMSNAVFinancialAid(id, name, by, recs as MSNAVFinancialAid[]),
-      'CEM_INITIAL': async (id, name, by, recs) => 
+      'CEM_INITIAL': async (id, name, by, recs) =>
         await efService.insertCEMPredictionReport(id, name, by, recs as CEMPredictionReport[]),
-      'CEM_FINAL': async (id, name, by, recs) => 
-        await efService.insertCEMSubjectLevelAnalysis(id, name, by, recs as CEMSubjectLevelAnalysis[])
+      'CEM_FINAL': async (id, name, by, recs) =>
+        await efService.insertCEMSubjectLevelAnalysis(id, name, by, recs as CEMSubjectLevelAnalysis[]),
+      'HR_EMPLOYEE_DATA': async (id, name, by, recs) =>
+        await efService.insertHREmployeeData(id, name, by, recs as HREmployeeData[]),
+      'HR_BUDGET_VS_ACTUAL': async (id, name, by, recs) =>
+        await efService.insertHRBudgetVsActual(id, name, by, recs as HRBudgetVsActual[])
     };
 
     const fileTypeUpper = fileTypeCode.toUpperCase();
+
+    // HR types: overwrite previous data before insert
+    const hrFileTypes = ['HR_EMPLOYEE_DATA', 'HR_BUDGET_VS_ACTUAL'];
+    if (hrFileTypes.includes(fileTypeUpper)) {
+      if (fileTypeUpper === 'HR_EMPLOYEE_DATA') {
+        await efService.deleteAllHREmployeeData();
+      } else {
+        await efService.deleteAllHRBudgetVsActual();
+      }
+    }
     const insertFunction = insertRegistry[fileTypeUpper];
 
     if (!insertFunction) {
@@ -539,6 +560,60 @@ router.post('/uploads/:id/retry', async (req: Request, res: Response) => {
         message: error.message,
         step: 'UNKNOWN'
       }]
+    });
+  }
+});
+
+/**
+ * POST /api/ef/uploads/:id/promote-to-rp
+ * Promote completed HR upload to RP schema (copy EF data to RP, full replace)
+ */
+router.post('/uploads/:id/promote-to-rp', async (req: Request, res: Response) => {
+  try {
+    const uploadId = parseInt(req.params.id, 10);
+
+    if (isNaN(uploadId)) {
+      return res.status(400).json({
+        error: 'Invalid upload ID',
+        message: 'Upload ID must be a valid number'
+      });
+    }
+
+    console.log(`📤 Promoting upload ${uploadId} to RP schema`);
+
+    const result = await efService.promoteUploadToRP(uploadId);
+
+    console.log(`✅ Promoted ${result.rowCount} records to RP.${result.fileType === 'HR_EMPLOYEE_DATA' ? 'hr_employee_data' : 'hr_budget_vs_actual'}`);
+
+    res.json({
+      success: true,
+      message: `Successfully promoted ${result.rowCount} records to RP schema`,
+      rowCount: result.rowCount,
+      fileType: result.fileType
+    });
+  } catch (error: any) {
+    console.error('❌ Error promoting to RP:', error);
+    if (error.message?.includes('not found')) {
+      return res.status(404).json({
+        error: 'Upload not found',
+        message: error.message
+      });
+    }
+    if (error.message?.includes('Only completed')) {
+      return res.status(400).json({
+        error: 'Invalid state',
+        message: error.message
+      });
+    }
+    if (error.message?.includes('Only HR_')) {
+      return res.status(400).json({
+        error: 'Invalid file type',
+        message: error.message
+      });
+    }
+    res.status(500).json({
+      error: 'Failed to promote to RP',
+      message: error.message
     });
   }
 });

@@ -15,18 +15,20 @@ export declare class NexquareService extends BaseNexquareService {
     authenticate: (config: import("../../middleware/configLoader.js").NexquareConfig) => Promise<boolean>;
     getSchools: (config: import("../../middleware/configLoader.js").NexquareConfig, filter?: string | undefined) => Promise<import("../../types/nexquare.js").NexquareSchool[]>;
     verifySchoolAccess: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId: string) => Promise<boolean>;
-    getStudents: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, filter?: string | undefined, fetchMode?: number | undefined, onLog?: ((msg: string) => void) | undefined) => Promise<import("../../types/nexquare.js").NexquareUser[]>;
+    getStudents: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, filter?: string | undefined, fetchMode?: number | undefined, onLog?: ((msg: string) => void) | undefined, academicYearParam?: string | undefined) => Promise<import("../../types/nexquare.js").NexquareUser[]>;
     getStaff: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, filter?: string | undefined, onLog?: ((msg: string) => void) | undefined) => Promise<import("../../types/nexquare.js").NexquareUser[]>;
     getClasses: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, onLog?: ((msg: string) => void) | undefined) => Promise<import("../../types/nexquare.js").NexquareClass[]>;
     getAllocationMaster: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined) => Promise<any[]>;
-    getStudentAllocations: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, academicYear?: string | undefined) => Promise<import("../../types/nexquare.js").StudentAllocationResponse[]>;
+    getStudentAllocations: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, academicYearParam?: string | undefined) => Promise<import("../../types/nexquare.js").StudentAllocationResponse[]>;
     getStaffAllocations: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, academicYear?: string | undefined) => Promise<any[]>;
     getDailyPlans: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, fromDate?: string | undefined, toDate?: string | undefined, subject?: string | undefined, classId?: string | undefined, cohort?: string | undefined, teacher?: string | undefined, location?: string | undefined) => Promise<any[]>;
     getDailyAttendance: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, startDate?: string | undefined, endDate?: string | undefined, categoryRequired?: boolean | undefined, rangeType?: number | undefined, studentSourcedId?: string | undefined) => Promise<any[]>;
     getLessonAttendance: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, startDate?: string | undefined, endDate?: string | undefined, categoryRequired?: boolean | undefined, rangeType?: number | undefined, studentSourcedId?: string | undefined) => Promise<any[]>;
-    getStudentAssessments: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, academicYear?: string | undefined, fileName?: string | undefined, limit?: number | undefined, offset?: number | undefined, onLog?: ((msg: string) => void) | undefined) => Promise<any[]>;
-    saveAssessmentBatch: (records: any[], schoolSourcedId: string | null) => Promise<number>;
-    syncStudentAssessmentsToRP: (schoolSourcedId: string) => Promise<number>;
+    getStudentAssessments: (config: import("../../middleware/configLoader.js").NexquareConfig, schoolId?: string | undefined, academicYear?: string | undefined, fileName?: string | undefined, limit?: number | undefined, offset?: number | undefined, onLog?: ((msg: string) => void) | undefined, options?: {
+        loadRpSchema?: boolean;
+    } | undefined) => Promise<any[]>;
+    saveAssessmentBatch: (records: any[], schoolSourcedId: string | null, academicYearParam?: string | undefined) => Promise<number>;
+    syncStudentAssessmentsToRP: (schoolSourcedId: string, academicYear?: string | undefined) => Promise<number>;
     updateReportedSubjectForSchool: (schoolSourcedId: string) => Promise<number>;
     bulkGetStudentIds: (studentIdentifiers: string[]) => Promise<Map<string, {
         id: number;

@@ -79,10 +79,25 @@ router.post('/embed-token', authenticate, async (req: Request, res: Response) =>
     if (isSupersetAccessCheckEnabled()) {
       const accessResult = await checkSupersetDashboardAccess(user.email, dashboardIdString);
       if (!accessResult.allowed) {
+        console.warn(
+          `🚫 Superset access denied: ${user.email} → dashboard ${dashboardIdString}, reason: ${accessResult.reason}`
+        );
+        const reasonMsg =
+          accessResult.reason === 'user_not_found'
+            ? 'User not found in Superset.'
+            : accessResult.reason === 'embedded_dashboard_not_found'
+              ? 'Embedded dashboard UUID not found. Enable embedding in Superset: Dashboard → ⋮ → Embed dashboard.'
+              : accessResult.reason === 'dashboard_not_found'
+                ? 'Dashboard not found in Superset.'
+                : accessResult.reason === 'no_dashboard_access'
+                  ? 'User roles do not match dashboard roles. Add your role (EducationReporting, HRReporting, or Gamma) to the dashboard in Superset.'
+                  : 'Access denied.';
         return res.status(403).json({
           error: `User ${user.email} does not have access to this dashboard.`,
           code: 'SUPERSET_ACCESS_DENIED',
           userEmail: user.email,
+          reason: accessResult.reason,
+          hint: reasonMsg,
         });
       }
     }

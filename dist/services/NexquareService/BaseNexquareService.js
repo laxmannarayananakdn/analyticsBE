@@ -199,37 +199,21 @@ export class BaseNexquareService {
         this.currentSchoolId = schoolId;
     }
     /**
-     * Get school sourced_id from sourced_id or numeric id
-     * Returns the sourced_id for use in school_id columns (NEX tables use sourced_id after migration)
+     * Validate school exists in NEX.schools by sourced_id and return it.
+     * Standard: nexquare_school_config.school_id = NEX.schools.sourced_id.
+     * All NEX/RP tables use school_id = this value.
      */
-    async getSchoolSourcedId(schoolIdOrSourcedId) {
+    async getSchoolSourcedId(schoolId) {
         try {
-            // First try as sourced_id
-            const queryBySourcedId = `
-        SELECT sourced_id FROM NEX.schools WHERE sourced_id = @sourced_id;
-      `;
-            const result = await executeQuery(queryBySourcedId, {
-                sourced_id: schoolIdOrSourcedId,
-            });
+            const result = await executeQuery(`SELECT sourced_id FROM NEX.schools WHERE sourced_id = @sourced_id`, { sourced_id: schoolId });
             if (!result.error && result.data && result.data.length > 0) {
                 return result.data[0].sourced_id;
             }
-            // Fallback: try as numeric id (config may store school id)
-            const numericId = parseInt(schoolIdOrSourcedId, 10);
-            if (!isNaN(numericId)) {
-                const queryById = `
-          SELECT sourced_id FROM NEX.schools WHERE id = @id;
-        `;
-                const resultById = await executeQuery(queryById, { id: numericId });
-                if (!resultById.error && resultById.data && resultById.data.length > 0) {
-                    return resultById.data[0].sourced_id;
-                }
-            }
-            console.warn(`⚠️  School "${schoolIdOrSourcedId}" not found in NEX.schools (tried sourced_id and id)`);
+            console.warn(`⚠️  School "${schoolId}" not found in NEX.schools (sourced_id)`);
             return null;
         }
         catch (error) {
-            console.error(`Error getting school sourced_id for ${schoolIdOrSourcedId}:`, error);
+            console.error(`Error validating school ${schoolId}:`, error);
             return null;
         }
     }

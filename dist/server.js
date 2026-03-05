@@ -6,6 +6,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import { getConnection, closeConnection } from './config/database.js';
+import { closeRefreshPool } from './services/RefreshService.js';
 // Import routes
 import healthRoutes from './routes/health.js';
 import schoolsRoutes from './routes/schools.js';
@@ -168,12 +169,14 @@ async function startServer() {
 process.on('SIGTERM', async () => {
     console.log('SIGTERM received, shutting down gracefully...');
     stopSyncScheduler();
+    await closeRefreshPool();
     await closeConnection();
     process.exit(0);
 });
 process.on('SIGINT', async () => {
     console.log('SIGINT received, shutting down gracefully...');
     stopSyncScheduler();
+    await closeRefreshPool();
     await closeConnection();
     process.exit(0);
 });

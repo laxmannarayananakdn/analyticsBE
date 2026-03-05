@@ -7,7 +7,16 @@ import { IBExternalExamParser } from './IBExternalExamParser.js';
 import { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser.js';
 import { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
 import { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
-import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis } from '../../types/ef.js';
+import { HREmployeeDataParser } from './HREmployeeDataParser.js';
+import { HRBudgetVsActualParser } from './HRBudgetVsActualParser.js';
+import {
+  IBExternalExam,
+  MSNAVFinancialAid,
+  CEMPredictionReport,
+  CEMSubjectLevelAnalysis,
+  HREmployeeData,
+  HRBudgetVsActual
+} from '../../types/ef.js';
 import { ValidationResult } from '../../types/errors.js';
 
 export type ParseResult<T> = ValidationResult<T>;
@@ -17,17 +26,21 @@ export class FileParserFactory {
   private msnavParser: MSNAVFinancialAidParser;
   private cemPredictionParser: CEMPredictionReportParser;
   private cemSubjectParser: CEMSubjectLevelAnalysisParser;
+  private hrEmployeeParser: HREmployeeDataParser;
+  private hrBudgetParser: HRBudgetVsActualParser;
 
   constructor() {
     this.ibParser = new IBExternalExamParser();
     this.msnavParser = new MSNAVFinancialAidParser();
     this.cemPredictionParser = new CEMPredictionReportParser();
     this.cemSubjectParser = new CEMSubjectLevelAnalysisParser();
+    this.hrEmployeeParser = new HREmployeeDataParser();
+    this.hrBudgetParser = new HRBudgetVsActualParser();
   }
 
   /**
    * Parse file based on file type code
-   * @param fileTypeCode - The file type code (e.g., 'IB_EXTERNAL_EXAMS', 'MSNAV_FINANCIAL_AID', 'CEM_INITIAL', 'CEM_FINAL')
+   * @param fileTypeCode - The file type code (e.g., 'IB_EXTERNAL_EXAMS', 'MSNAV_FINANCIAL_AID', 'CEM_INITIAL', 'CEM_FINAL', 'HR_EMPLOYEE_DATA', 'HR_BUDGET_VS_ACTUAL')
    * @param fileBuffer - The file buffer to parse
    * @param skipInvalidRows - Whether to skip invalid rows or fail on first error
    * @returns Validation result with data or errors
@@ -36,7 +49,16 @@ export class FileParserFactory {
     fileTypeCode: string,
     fileBuffer: Buffer,
     skipInvalidRows: boolean = false
-  ): Promise<ParseResult<IBExternalExam | MSNAVFinancialAid | CEMPredictionReport | CEMSubjectLevelAnalysis>> {
+  ): Promise<
+    ParseResult<
+      | IBExternalExam
+      | MSNAVFinancialAid
+      | CEMPredictionReport
+      | CEMSubjectLevelAnalysis
+      | HREmployeeData
+      | HRBudgetVsActual
+    >
+  > {
     try {
       switch (fileTypeCode.toUpperCase()) {
         case 'IB_EXTERNAL_EXAMS':
@@ -51,12 +73,18 @@ export class FileParserFactory {
         case 'CEM_FINAL':
           return await this.cemSubjectParser.parseCEMSubjectLevelAnalysis(fileBuffer, skipInvalidRows);
 
+        case 'HR_EMPLOYEE_DATA':
+          return await this.hrEmployeeParser.parseHREmployeeData(fileBuffer, skipInvalidRows);
+
+        case 'HR_BUDGET_VS_ACTUAL':
+          return await this.hrBudgetParser.parseHRBudgetVsActual(fileBuffer, skipInvalidRows);
+
         default:
           return {
             valid: false,
             errors: [{
               code: 'UNSUPPORTED_FILE_TYPE',
-              message: `Unsupported file type: ${fileTypeCode}. Supported types: IB_EXTERNAL_EXAMS, MSNAV_FINANCIAL_AID, CEM_INITIAL, CEM_FINAL`,
+              message: `Unsupported file type: ${fileTypeCode}. Supported types: IB_EXTERNAL_EXAMS, MSNAV_FINANCIAL_AID, CEM_INITIAL, CEM_FINAL, HR_EMPLOYEE_DATA, HR_BUDGET_VS_ACTUAL`,
               step: 'PARSE'
             }],
             skippedRows: 0,
@@ -116,6 +144,26 @@ export class FileParserFactory {
   ): Promise<ParseResult<CEMSubjectLevelAnalysis>> {
     return await this.cemSubjectParser.parseCEMSubjectLevelAnalysis(fileBuffer, skipInvalidRows);
   }
+
+  /**
+   * Parse HR Employee Data file
+   */
+  async parseHREmployeeData(
+    fileBuffer: Buffer,
+    skipInvalidRows: boolean = false
+  ): Promise<ParseResult<HREmployeeData>> {
+    return await this.hrEmployeeParser.parseHREmployeeData(fileBuffer, skipInvalidRows);
+  }
+
+  /**
+   * Parse HR Budget vs Actual file
+   */
+  async parseHRBudgetVsActual(
+    fileBuffer: Buffer,
+    skipInvalidRows: boolean = false
+  ): Promise<ParseResult<HRBudgetVsActual>> {
+    return await this.hrBudgetParser.parseHRBudgetVsActual(fileBuffer, skipInvalidRows);
+  }
 }
 
 // Export singleton instance
@@ -126,4 +174,6 @@ export { IBExternalExamParser } from './IBExternalExamParser.js';
 export { MSNAVFinancialAidParser } from './MSNAVFinancialAidParser.js';
 export { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
 export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
+export { HREmployeeDataParser } from './HREmployeeDataParser.js';
+export { HRBudgetVsActualParser } from './HRBudgetVsActualParser.js';
 

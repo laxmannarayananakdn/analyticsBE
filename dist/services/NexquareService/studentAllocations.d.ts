@@ -23,5 +23,7 @@ export declare function getStudentAllocations(this: BaseNexquareService & {
         id: number;
         sourced_id: string;
     }>>;
-}, config: NexquareConfig, schoolId?: string, academicYear?: string): Promise<StudentAllocationResponse[]>;
+}, config: NexquareConfig, schoolId?: string, 
+/** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+academicYearParam?: string): Promise<StudentAllocationResponse[]>;
 //# sourceMappingURL=studentAllocations.d.ts.map

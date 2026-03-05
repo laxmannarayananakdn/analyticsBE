@@ -14,6 +14,8 @@ export interface RunSyncParams {
     endpointsMb?: string[] | null;
     /** Nexquare endpoints to run. If null/empty, run all. */
     endpointsNex?: string[] | null;
+    /** When student-assessments runs: if true, sync NEX -> RP.student_assessments. If false, only load NEX. Default true. */
+    loadRpSchema?: boolean;
     /** Include descendant nodes. */
     includeDescendants?: boolean;
     /** Sync all active configs (ignore nodeIds). */

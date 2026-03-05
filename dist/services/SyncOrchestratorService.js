@@ -7,6 +7,8 @@ import { executeQuery } from '../config/database.js';
 import { getConfigsForScope } from './SyncScopeService.js';
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
+import { databaseService } from './DatabaseService.js';
+import { triggerRefresh } from './RefreshService.js';
 // year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
@@ -67,6 +69,7 @@ export async function runSync(params) {
     await executeQuery(`UPDATE admin.sync_runs SET total_schools = @total WHERE id = @runId`, { total: totalSchools, runId });
     const endpointsMb = params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL;
     const endpointsNex = params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL;
+    const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
     const itemsWithIds = [];
     for (const item of schoolItems) {
         const schoolRunResult = await executeQuery(`INSERT INTO admin.sync_run_schools (sync_run_id, school_id, school_source, config_id, school_name, status)
@@ -136,10 +139,15 @@ export async function runSync(params) {
         return trackResults;
     };
     const runNexPipeline = async (trackItems) => {
-        const eps = endpointsNex.filter((e) => NEX_ENDPOINTS_ALL.includes(e));
+        const filtered = endpointsNex.filter((e) => NEX_ENDPOINTS_ALL.includes(e));
+        // Enforce canonical order: schools → students → staff → ... → student-assessments.
+        // RP refresh needs NEX.students, NEX.student_allocations, etc. before student-assessments.
+        const orderMap = new Map(NEX_ENDPOINTS_ALL.map((e, i) => [e, i]));
+        const eps = [...filtered].sort((a, b) => (orderMap.get(a) ?? 999) - (orderMap.get(b) ?? 999));
         const { start, end } = getDateRangeFromAcademicYear(params.academicYear);
         const ay = params.academicYear || new Date().getFullYear().toString();
         const signal = params.abortSignal;
+        const rpSchema = loadRpSchema;
         const schoolFailed = new Map();
         const key = (i, j) => `${i},${j}`;
         // Pre-create deferred promises for each (school, endpoint). Each resolves when that task completes.
@@ -169,9 +177,17 @@ export async function runSync(params) {
             await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt) WHERE id = @id`, { startedAt, id: schoolRunId });
             await executeQuery(`UPDATE admin.sync_run_schools SET current_endpoint = @endpoint WHERE id = @id`, { endpoint: endpointName, id: schoolRunId });
             try {
-                await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay });
+                await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay, loadRpSchema: rpSchema });
                 const completedAt = new Date();
                 await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, null);
+                // When loadRpSchema and student-assessments just completed: trigger RP refresh (fire-and-forget)
+                if (endpointName === 'student-assessments' && rpSchema) {
+                    triggerRefresh({
+                        school_id: schoolId,
+                        academic_year: ay,
+                        triggered_by: triggeredBy,
+                    }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
+                }
             }
             catch (err) {
                 if (err?.name === 'AbortError' || signal?.aborted) {
@@ -214,6 +230,45 @@ export async function runSync(params) {
             }
         }
         await Promise.all(allTasks);
+        // When Load RP schema is checked but Student Assessments is NOT in endpoints:
+        // Delete RP rows for school+year, then sync from NEX.student_assessments to RP.student_assessments
+        if (loadRpSchema && !eps.includes('student-assessments') && trackItems.length > 0) {
+            for (let i = 0; i < trackItems.length; i++) {
+                if (schoolFailed.has(i))
+                    continue;
+                const { item, schoolRunId } = trackItems[i];
+                const schoolId = item.schoolId;
+                if (!schoolId)
+                    continue;
+                const startedAt = new Date();
+                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt), current_endpoint = @endpoint WHERE id = @id`, { startedAt, endpoint: 'rp-sync', id: schoolRunId });
+                try {
+                    const { deleted, error: deleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolId, ay);
+                    if (deleteError) {
+                        throw new Error(`Delete RP failed: ${deleteError}`);
+                    }
+                    await nexquareService.syncStudentAssessmentsToRP(schoolId, ay);
+                    const completedAt = new Date();
+                    await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, null);
+                    await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt, id: schoolRunId });
+                    await updateRunCounts();
+                    // Trigger RP refresh (fire-and-forget)
+                    triggerRefresh({
+                        school_id: schoolId,
+                        academic_year: ay,
+                        triggered_by: triggeredBy,
+                    }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
+                }
+                catch (err) {
+                    const errMsg = err?.message || String(err);
+                    const completedAt = new Date();
+                    await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, errMsg);
+                    schoolFailed.set(i, errMsg);
+                    await executeQuery(`UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`, { completedAt, errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg, id: schoolRunId });
+                    await updateRunCounts();
+                }
+            }
+        }
         return trackItems.map(({ item, schoolRunId }, i) => {
             const errMsg = schoolFailed.get(i);
             return {
@@ -419,13 +474,13 @@ function getDateRangeFromAcademicYear(academicYear) {
  * Run a single Nexquare endpoint for one school. Used by pipeline sync.
  */
 async function runNexquareSingleEndpoint(config, schoolId, endpointName, ctx) {
-    const { start, end, ay } = ctx;
+    const { start, end, ay, loadRpSchema } = ctx;
     switch (endpointName) {
         case 'schools':
             await nexquareService.getSchools(config);
             break;
         case 'students':
-            await nexquareService.getStudents(config, schoolId);
+            await nexquareService.getStudents(config, schoolId, undefined, undefined, undefined, ay);
             break;
         case 'staff':
             await nexquareService.getStaff(config, schoolId);
@@ -449,7 +504,7 @@ async function runNexquareSingleEndpoint(config, schoolId, endpointName, ctx) {
             await nexquareService.getDailyAttendance(config, schoolId, start, end);
             break;
         case 'student-assessments':
-            await nexquareService.getStudentAssessments(config, schoolId, ay);
+            await nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: loadRpSchema !== false });
             break;
         default:
             throw new Error(`Unknown Nexquare endpoint: ${endpointName}`);
@@ -466,6 +521,7 @@ async function syncNexquareSchool(config, schoolId, options) {
     const ay = options?.academicYear || new Date().getFullYear().toString();
     const signal = options?.abortSignal;
     const onEndpoint = options?.onEndpointChange;
+    const rpSchema = options?.loadRpSchema !== false;
     const run = async (name, fn) => {
         if (onEndpoint)
             await onEndpoint(name);
@@ -477,7 +533,7 @@ async function syncNexquareSchool(config, schoolId, options) {
     }
     throwIfAborted(signal);
     if (eps.includes('students')) {
-        await run('students', () => nexquareService.getStudents(config, schoolId));
+        await run('students', () => nexquareService.getStudents(config, schoolId, undefined, undefined, undefined, ay));
     }
     throwIfAborted(signal);
     if (eps.includes('staff')) {
@@ -509,7 +565,7 @@ async function syncNexquareSchool(config, schoolId, options) {
     }
     throwIfAborted(signal);
     if (eps.includes('student-assessments')) {
-        await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay));
+        await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: rpSchema }));
     }
 }
 //# sourceMappingURL=SyncOrchestratorService.js.map

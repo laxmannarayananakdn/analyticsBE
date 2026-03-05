@@ -10,7 +10,7 @@ const { Pool } = pg;
 
 export interface SupersetAccessCheckResult {
   allowed: boolean;
-  reason?: string; // "user_not_found" | "no_dashboard_access"
+  reason?: string; // "user_not_found" | "dashboard_not_found" | "embedded_dashboard_not_found" | "no_dashboard_access"
 }
 
 /** RLS rule for guest token - matches Superset's expected format */
@@ -61,10 +61,10 @@ function getPool(): pg.Pool | null {
 
 /**
  * Check if a user (identified by email) exists in Superset and has access to the dashboard.
- * Uses Superset's ab_user, ab_user_role, dashboard_roles tables.
+ * Uses Superset's embedded_dashboards, ab_user, ab_user_role, dashboard_roles tables.
  *
  * @param userEmail - User's email (must match ab_user.username or ab_user.email)
- * @param dashboardId - Dashboard UUID (from Superset embed UI) or numeric id
+ * @param dashboardId - Embedded dashboard UUID (from embedded_dashboards.uuid) or numeric dashboard id
  * @returns Result indicating if access is allowed
  */
 export async function checkSupersetDashboardAccess(
@@ -92,22 +92,33 @@ export async function checkSupersetDashboardAccess(
 
     const userId = userResult.rows[0].id;
 
-    // 2. Resolve dashboard - support UUID (string) or numeric id
+    // 2. Resolve dashboard - UUID is from embedded_dashboards table, not dashboards
+    // Config stores embedded dashboard UUID → look up dashboard_id in embedded_dashboards
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       dashboardId
     );
-    const dashboardResult = await db.query(
-      isUuid
-        ? `SELECT id FROM dashboards WHERE uuid = $1::uuid LIMIT 1`
-        : `SELECT id FROM dashboards WHERE id = $1::int LIMIT 1`,
-      [dashboardId]
-    );
 
-    if (dashboardResult.rows.length === 0) {
-      return { allowed: false, reason: 'dashboard_not_found' };
+    let dashboardDbId: number;
+
+    if (isUuid) {
+      const embeddedResult = await db.query(
+        `SELECT dashboard_id FROM embedded_dashboards WHERE uuid = $1::uuid LIMIT 1`,
+        [dashboardId]
+      );
+      if (embeddedResult.rows.length === 0) {
+        return { allowed: false, reason: 'embedded_dashboard_not_found' };
+      }
+      dashboardDbId = embeddedResult.rows[0].dashboard_id;
+    } else {
+      const dashboardResult = await db.query(
+        `SELECT id FROM dashboards WHERE id = $1::int LIMIT 1`,
+        [dashboardId]
+      );
+      if (dashboardResult.rows.length === 0) {
+        return { allowed: false, reason: 'dashboard_not_found' };
+      }
+      dashboardDbId = dashboardResult.rows[0].id;
     }
-
-    const dashboardDbId = dashboardResult.rows[0].id;
 
     // 3. Check dashboard access:
     // - If dashboard has no roles (dashboard_roles empty): allow (public dashboard)

@@ -8,7 +8,9 @@ import { databaseService } from '../DatabaseService.js';
  * Get students with pagination and save to database
  * Can be added to a class that extends BaseNexquareService
  */
-export async function getStudents(config, schoolId, filter, fetchMode = 1, onLog) {
+export async function getStudents(config, schoolId, filter, fetchMode = 1, onLog, 
+/** Fallback when API does not return academicYear. Same format as Sync Schedules (e.g. "2024 - 2025"). */
+academicYearParam) {
     const log = (msg) => {
         console.log(msg);
         onLog?.(msg);
@@ -99,7 +101,7 @@ export async function getStudents(config, schoolId, filter, fetchMode = 1, onLog
                     user_type: student.userType || 'student',
                     status: student.status || null,
                     date_last_modified: dateLastModified,
-                    academic_year: studentData.academicYear ? String(studentData.academicYear) : null,
+                    academic_year: academicYearParam ? String(academicYearParam) : (studentData.academicYear ? String(studentData.academicYear) : null),
                     metadata: metadataJson,
                     current_grade: studentData.currentGrade || null,
                     current_class: studentData.currentClass || studentData.currentClassName || null,

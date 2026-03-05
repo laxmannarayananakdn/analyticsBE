@@ -24,7 +24,8 @@ function parseEndpoints(json) {
     }
 }
 async function loadActiveSchedules() {
-    const result = await executeQuery(`SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, include_descendants
+    const result = await executeQuery(`SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
+            ISNULL(load_rp_schema, 1) AS load_rp_schema, include_descendants
      FROM admin.sync_schedules
      WHERE is_active = 1
      ORDER BY id`);
@@ -80,6 +81,7 @@ function registerSchedule(schedule) {
                 scheduleId: schedule.id,
                 endpointsMb: endpointsMb ?? undefined,
                 endpointsNex: endpointsNex ?? undefined,
+                loadRpSchema: !!(schedule.load_rp_schema ?? true),
                 includeDescendants: !!(schedule.include_descendants),
                 triggeredBy: 'scheduler',
             });

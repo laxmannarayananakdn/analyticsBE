@@ -11,7 +11,9 @@ import {
   IBExternalExam,
   MSNAVFinancialAid,
   CEMPredictionReport,
-  CEMSubjectLevelAnalysis
+  CEMSubjectLevelAnalysis,
+  HREmployeeData,
+  HRBudgetVsActual
 } from '../types/ef.js';
 
 export class EFService {
@@ -654,6 +656,341 @@ export class EFService {
   }
 
   /**
+   * Delete all rows from EF.HR_EmployeeData (for overwrite before new upload)
+   */
+  async deleteAllHREmployeeData(): Promise<void> {
+    const query = `DELETE FROM EF.HR_EmployeeData;`;
+    const result = await executeQuery(query);
+    if (result.error) {
+      throw new Error(`Failed to delete HR Employee Data: ${result.error}`);
+    }
+  }
+
+  /**
+   * Delete all rows from EF.HR_BudgetVsActual (for overwrite before new upload)
+   */
+  async deleteAllHRBudgetVsActual(): Promise<void> {
+    const query = `DELETE FROM EF.HR_BudgetVsActual;`;
+    const result = await executeQuery(query);
+    if (result.error) {
+      throw new Error(`Failed to delete HR Budget vs Actual: ${result.error}`);
+    }
+  }
+
+  /**
+   * Insert HR Employee Data records using bulk insert
+   */
+  async insertHREmployeeData(
+    uploadId: number,
+    fileName: string,
+    uploadedBy: string,
+    records: HREmployeeData[]
+  ): Promise<number> {
+    if (records.length === 0) {
+      return 0;
+    }
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+
+    try {
+      await transaction.begin();
+
+      // Use bulk insert with batching for better performance
+      // Batch size limited to 50 to stay within SQL Server's 2100 parameter limit
+      // (50 records * 29 parameters = 1450 parameters)
+      const batchSize = 50;
+      let totalInserted = 0;
+
+      for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+
+        // Build values for batch insert
+        const values = batch.map((record, index) => {
+          const baseIndex = i + index;
+          return `(
+            @uploadId,
+            @fileName,
+            @uploadedBy,
+            SYSDATETIMEOFFSET(),
+            @year${baseIndex},
+            @quarter${baseIndex},
+            @month${baseIndex},
+            @country${baseIndex},
+            @countryCity${baseIndex},
+            @entity${baseIndex},
+            @empId${baseIndex},
+            @positionCategory${baseIndex},
+            @attrition${baseIndex},
+            @fte${baseIndex},
+            @dateOfBirth${baseIndex},
+            @dateOfHire${baseIndex},
+            @sect${baseIndex},
+            @staffNationality${baseIndex},
+            @gender${baseIndex},
+            @teachingLevel${baseIndex},
+            @teachingSubjectCategory${baseIndex},
+            @qualification${baseIndex},
+            @dateOfSeparation${baseIndex},
+            @reasonForLeaving${baseIndex},
+            @aging${baseIndex},
+            @ageGrouping${baseIndex},
+            @longevity${baseIndex},
+            @longevityGrouping${baseIndex},
+            @reasonType${baseIndex},
+            @reportingYear${baseIndex},
+            @recruitment${baseIndex},
+            @separation${baseIndex},
+            @staffCategory${baseIndex},
+            @contractType${baseIndex}
+          )`;
+        }).join(',');
+
+        const batchQuery = `
+          INSERT INTO EF.HR_EmployeeData (
+            upload_id,
+            file_name,
+            uploaded_by,
+            uploaded_at,
+            [Year],
+            [Quarter],
+            [Month],
+            [Country],
+            [Country_City],
+            [Entity],
+            [Emp_ID],
+            [Position_Category],
+            [Attrition],
+            [FTE],
+            [Date_of_Birth],
+            [Date_of_Hire],
+            [Sect],
+            [Staff_Nationality],
+            [Gender],
+            [Teaching_Level],
+            [Teaching_Subject_Category],
+            [Qualification],
+            [Date_of_Separation],
+            [reason_for_leaving],
+            [Aging],
+            [Age_Grouping],
+            [Longevity],
+            [Longevity_Grouping],
+            [Reason_type],
+            [Reporting_Year],
+            [recruitment],
+            [separation],
+            [Staff_Category],
+            [Contract_type]
+          ) VALUES ${values};
+        `;
+
+        const request = transaction.request();
+        request.input('uploadId', sql.BigInt, uploadId);
+        request.input('fileName', sql.NVarChar, fileName);
+        request.input('uploadedBy', sql.NVarChar, uploadedBy);
+
+        // Add parameters for each record in the batch
+        batch.forEach((record, index) => {
+          const baseIndex = i + index;
+          request.input(`year${baseIndex}`, sql.Int, record.Year ?? null);
+          request.input(`quarter${baseIndex}`, sql.NVarChar(50), record.Quarter ?? null);
+          request.input(`month${baseIndex}`, sql.NVarChar(50), record.Month ?? null);
+          request.input(`country${baseIndex}`, sql.NVarChar(100), record.Country ?? null);
+          request.input(`countryCity${baseIndex}`, sql.NVarChar(200), record.Country_City ?? null);
+          request.input(`entity${baseIndex}`, sql.NVarChar(100), record.Entity ?? null);
+          request.input(`empId${baseIndex}`, sql.NVarChar(100), record.Emp_ID ?? null);
+          request.input(`positionCategory${baseIndex}`, sql.NVarChar(200), record.Position_Category ?? null);
+          request.input(`attrition${baseIndex}`, sql.NVarChar(50), record.Attrition ?? null);
+          request.input(`fte${baseIndex}`, sql.Decimal(10, 2), record.FTE ?? null);
+          request.input(`dateOfBirth${baseIndex}`, sql.NVarChar(50), record.Date_of_Birth ?? null);
+          request.input(`dateOfHire${baseIndex}`, sql.NVarChar(100), record.Date_of_Hire ?? null);
+          request.input(`sect${baseIndex}`, sql.NVarChar(100), record.Sect ?? null);
+          request.input(`staffNationality${baseIndex}`, sql.NVarChar(100), record.Staff_Nationality ?? null);
+          request.input(`gender${baseIndex}`, sql.NVarChar(50), record.Gender ?? null);
+          request.input(`teachingLevel${baseIndex}`, sql.NVarChar(200), record.Teaching_Level ?? null);
+          request.input(`teachingSubjectCategory${baseIndex}`, sql.NVarChar(200), record.Teaching_Subject_Category ?? null);
+          request.input(`qualification${baseIndex}`, sql.NVarChar(200), record.Qualification ?? null);
+          request.input(`dateOfSeparation${baseIndex}`, sql.NVarChar(100), record.Date_of_Separation ?? null);
+          request.input(`reasonForLeaving${baseIndex}`, sql.NVarChar(500), record.reason_for_leaving ?? null);
+          request.input(`aging${baseIndex}`, sql.Int, record.Aging ?? null);
+          request.input(`ageGrouping${baseIndex}`, sql.NVarChar(50), record.Age_Grouping ?? null);
+          request.input(`longevity${baseIndex}`, sql.Int, record.Longevity ?? null);
+          request.input(`longevityGrouping${baseIndex}`, sql.NVarChar(50), record.Longevity_Grouping ?? null);
+          request.input(`reasonType${baseIndex}`, sql.NVarChar(200), record.Reason_type ?? null);
+          request.input(`reportingYear${baseIndex}`, sql.NVarChar(50), record.Reporting_Year ?? null);
+          request.input(`recruitment${baseIndex}`, sql.NVarChar(200), record.recruitment ?? null);
+          request.input(`separation${baseIndex}`, sql.NVarChar(200), record.separation ?? null);
+          request.input(`staffCategory${baseIndex}`, sql.NVarChar(100), record.Staff_Category ?? null);
+          request.input(`contractType${baseIndex}`, sql.NVarChar(200), record.Contract_type ?? null);
+        });
+
+        await request.query(batchQuery);
+        totalInserted += batch.length;
+      }
+
+      await transaction.commit();
+      return totalInserted;
+    } catch (error: any) {
+      await transaction.rollback();
+      throw new Error(`Failed to insert HR Employee Data: ${error.message || error}`);
+    }
+  }
+
+  /**
+   * Insert HR Budget vs Actual records using bulk insert
+   */
+  async insertHRBudgetVsActual(
+    uploadId: number,
+    fileName: string,
+    uploadedBy: string,
+    records: HRBudgetVsActual[]
+  ): Promise<number> {
+    if (records.length === 0) {
+      return 0;
+    }
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+
+    try {
+      await transaction.begin();
+
+      // Use bulk insert with batching for better performance
+      // Batch size limited to 100 to stay within SQL Server's 2100 parameter limit
+      // (100 records * 10 parameters = 1000 parameters)
+      const batchSize = 100;
+      let totalInserted = 0;
+
+      for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+
+        // Build values for batch insert
+        const values = batch.map((record, index) => {
+          const baseIndex = i + index;
+          return `(
+            @uploadId,
+            @fileName,
+            @uploadedBy,
+            SYSDATETIMEOFFSET(),
+            @year${baseIndex},
+            @quarter${baseIndex},
+            @country${baseIndex},
+            @category${baseIndex},
+            @budget${baseIndex},
+            @actual${baseIndex},
+            @recordKey${baseIndex}
+          )`;
+        }).join(',');
+
+        const batchQuery = `
+          INSERT INTO EF.HR_BudgetVsActual (
+            upload_id,
+            file_name,
+            uploaded_by,
+            uploaded_at,
+            [Year],
+            [Quarter],
+            [Country],
+            [Category],
+            [Budget],
+            [Actual],
+            [Key]
+          ) VALUES ${values};
+        `;
+
+        const request = transaction.request();
+        request.input('uploadId', sql.BigInt, uploadId);
+        request.input('fileName', sql.NVarChar, fileName);
+        request.input('uploadedBy', sql.NVarChar, uploadedBy);
+
+        // Add parameters for each record in the batch
+        batch.forEach((record, index) => {
+          const baseIndex = i + index;
+          request.input(`year${baseIndex}`, sql.NVarChar(20), record.Year ?? null);
+          request.input(`quarter${baseIndex}`, sql.NVarChar(50), record.Quarter ?? null);
+          request.input(`country${baseIndex}`, sql.NVarChar(100), record.Country ?? null);
+          request.input(`category${baseIndex}`, sql.NVarChar(200), record.Category ?? null);
+          request.input(`budget${baseIndex}`, sql.Decimal(18, 2), record.Budget ?? null);
+          request.input(`actual${baseIndex}`, sql.Decimal(18, 2), record.Actual ?? null);
+          request.input(`recordKey${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
+        });
+
+        await request.query(batchQuery);
+        totalInserted += batch.length;
+      }
+
+      await transaction.commit();
+      return totalInserted;
+    } catch (error: any) {
+      await transaction.rollback();
+      throw new Error(`Failed to insert HR Budget vs Actual: ${error.message || error}`);
+    }
+  }
+
+  /**
+   * Promote HR upload to RP schema (copy EF data to RP, full replace)
+   */
+  async promoteUploadToRP(uploadId: number): Promise<{ rowCount: number; fileType: string }> {
+    const upload = await this.getUploadById(uploadId);
+    if (!upload) throw new Error('Upload not found');
+    if (upload.status !== 'COMPLETED') throw new Error('Only completed uploads can be promoted');
+
+    const fileTypes = await this.getActiveFileTypes();
+    const fileType = fileTypes.find((ft) => ft.id === upload.file_type_id);
+    if (!fileType) throw new Error('File type not found');
+
+    const code = fileType.type_code.toUpperCase();
+    if (code !== 'HR_EMPLOYEE_DATA' && code !== 'HR_BUDGET_VS_ACTUAL') {
+      throw new Error('Only HR_EMPLOYEE_DATA and HR_BUDGET_VS_ACTUAL can be promoted to RP');
+    }
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+
+    try {
+      await transaction.begin();
+      let rowCount = 0;
+
+      if (code === 'HR_EMPLOYEE_DATA') {
+        await transaction.request().query('DELETE FROM RP.hr_employee_data;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.hr_employee_data (
+            country,[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+            [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
+            [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
+            [recruitment],[separation],[Staff_Category],[Contract_type]
+          )
+          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+            [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
+            [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
+            [recruitment],[separation],[Staff_Category],[Contract_type]
+          FROM EF.HR_EmployeeData WHERE upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      } else {
+        await transaction.request().query('DELETE FROM RP.hr_budget_vs_actual;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.hr_budget_vs_actual (country,[Year],[Quarter],[Category],[Budget],[Actual],[Key])
+          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Category],[Budget],[Actual],[Key]
+          FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      }
+
+      await transaction.commit();
+      return { rowCount, fileType: code };
+    } catch (error: any) {
+      await transaction.rollback();
+      throw new Error(`Failed to promote to RP: ${error.message || error}`);
+    }
+  }
+
+  /**
    * Get upload by ID
    */
   async getUploadById(uploadId: number): Promise<Upload | null> {
@@ -913,6 +1250,29 @@ export class EFService {
         FROM EF.CEM_SubjectLevelAnalysis
         WHERE upload_id = @uploadId;
       `;
+    } else if (fileType.type_code === 'HR_EMPLOYEE_DATA') {
+      dataQuery = `
+        SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
+          [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+          [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
+          [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
+          [recruitment],[separation],[Staff_Category],[Contract_type]
+        FROM EF.HR_EmployeeData
+        WHERE upload_id = @uploadId
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+      countQuery = `SELECT COUNT(*) as total FROM EF.HR_EmployeeData WHERE upload_id = @uploadId;`;
+    } else if (fileType.type_code === 'HR_BUDGET_VS_ACTUAL') {
+      dataQuery = `
+        SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
+          [Year],[Quarter],[Country],[Category],[Budget],[Actual],[Key]
+        FROM EF.HR_BudgetVsActual
+        WHERE upload_id = @uploadId
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+      countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId;`;
     } else {
       throw new Error(`Unsupported file type: ${fileType.type_code}`);
     }
@@ -977,7 +1337,9 @@ export class EFService {
       'IB_ExternalExams',
       'MSNAV_FinancialAid',
       'CEM_PredictionReport',
-      'CEM_SubjectLevelAnalysis'
+      'CEM_SubjectLevelAnalysis',
+      'HR_EmployeeData',
+      'HR_BudgetVsActual'
     ];
 
     if (!allowedTables.includes(targetTable)) {
