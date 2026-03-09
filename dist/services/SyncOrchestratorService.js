@@ -10,7 +10,8 @@ import { nexquareService } from './NexquareService/index.js';
 import { databaseService } from './DatabaseService.js';
 import { triggerRefresh } from './RefreshService.js';
 // year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
-const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes'];
+// memberships must run before term-grades: term grades use MB.class_memberships to find classes
+const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes', 'memberships', 'term-grades'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
 function throwIfAborted(signal) {
     if (signal?.aborted)
@@ -431,6 +432,14 @@ async function syncManageBacSchool(config, options) {
     throwIfAborted(signal);
     if (eps.includes('classes')) {
         await run('classes', () => svc.getClasses(apiKey, baseUrl));
+    }
+    throwIfAborted(signal);
+    if (eps.includes('memberships')) {
+        await run('memberships', () => svc.syncMembershipsForSchool(apiKey, baseUrl));
+    }
+    throwIfAborted(signal);
+    if (eps.includes('term-grades')) {
+        await run('term-grades', () => svc.syncAllTermGrades(apiKey, baseUrl));
     }
 }
 /**

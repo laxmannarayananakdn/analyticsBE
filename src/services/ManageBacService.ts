@@ -649,8 +649,9 @@ export class ManageBacService {
       );
       if (needsEnrichment && allStudents.length > 0) {
         log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
-        const BATCH_SIZE = 150;
-        const DELAY_BETWEEN_BATCHES_MS = 60000;
+        const BATCH_SIZE = 25;
+        const DELAY_BETWEEN_REQUESTS_MS = 500;
+        const DELAY_BETWEEN_BATCHES_MS = 15000;
         const enriched: any[] = [];
         const totalBatches = Math.ceil(allStudents.length / BATCH_SIZE);
         for (let i = 0; i < allStudents.length; i += BATCH_SIZE) {
@@ -661,17 +662,17 @@ export class ManageBacService {
           const chunk = allStudents.slice(i, i + BATCH_SIZE);
           const batchNum = Math.floor(i / BATCH_SIZE) + 1;
           log(`   📥 Enriching batch ${batchNum}/${totalBatches} (${chunk.length} students)...`);
-          const results = await Promise.all(
-            chunk.map(async (s: any) => {
-              try {
-                const res = await this.makeRequest<any>(`/students/${s.id}`, apiKey, {}, baseUrl);
-                const full = res.data?.student ?? res.data ?? s;
-                return full;
-              } catch {
-                return s;
-              }
-            })
-          );
+          const results: any[] = [];
+          for (const s of chunk) {
+            try {
+              const res = await this.makeRequest<any>(`/students/${s.id}`, apiKey, {}, baseUrl);
+              const full = res.data?.student ?? res.data ?? s;
+              results.push(full);
+            } catch {
+              results.push(s);
+            }
+            await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS_MS));
+          }
           enriched.push(...results);
           const done = Math.min(i + BATCH_SIZE, allStudents.length);
           log(`   ✅ Enriched ${done}/${allStudents.length} students`);
@@ -686,6 +687,22 @@ export class ManageBacService {
       if (effectiveSchoolId && allStudents.length > 0) {
         log(`📋 Step ${saveStepNum}: Saving ${allStudents.length} students to database (MB.students)...`);
         const studentsForDb = allStudents.map((s: any) => this.mapManageBacStudentToDb(s));
+
+        // Sanitize year_group_id: students may reference year groups not in MB.year_groups
+        // (e.g. archived year groups not returned by the year-groups API) - FK would fail
+        const yearGroups = await databaseService.getYearGroupsForSchool(effectiveSchoolId);
+        const validYearGroupIds = new Set(yearGroups.map((yg) => Number(yg.id)));
+        let nulledCount = 0;
+        for (const s of studentsForDb) {
+          if (s.year_group_id != null && !validYearGroupIds.has(s.year_group_id)) {
+            s.year_group_id = null;
+            nulledCount++;
+          }
+        }
+        if (nulledCount > 0) {
+          log(`   ⚠️ ${nulledCount} student(s) had year_group_id not in MB.year_groups; set to null to avoid FK violation`);
+        }
+
         const { error } = await databaseService.bulkUpsertManageBacStudents(studentsForDb, (cur, tot, batchNum, totalBatches) => {
           log(`   📊 Batch ${batchNum}/${totalBatches}: ${cur}/${tot} students (${Math.round((cur / tot) * 100)}%)`);
         });
@@ -1692,6 +1709,7 @@ export class ManageBacService {
         if (altGroups?.length) {
           console.log(`ℹ️ Mapped grade (${programCode}, ${grade.grade_number}) to year groups via alternative program code (${altProgramCode})`);
           for (const group of altGroups) {
+            await new Promise(r => setTimeout(r, 400));
             const studentIds = await this.fetchYearGroupStudentIds(apiKey, group.id);
             if (!studentIds.length) {
               continue;
@@ -1720,6 +1738,7 @@ export class ManageBacService {
       }
 
       for (const group of groups) {
+        await new Promise(r => setTimeout(r, 400));
         const studentIds = await this.fetchYearGroupStudentIds(apiKey, group.id);
         if (!studentIds.length) {
           console.log(`    ℹ️ No students reported for year group ${group.name}`);
@@ -1758,6 +1777,9 @@ export class ManageBacService {
     let totalRelationshipErrors = 0;
 
     for (let i = 0; i < studentIdArray.length; i += batchSize) {
+      if (i > 0) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
       const batch = studentIdArray.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
       const totalBatches = Math.ceil(studentIdArray.length / batchSize);
@@ -1864,6 +1886,7 @@ export class ManageBacService {
         const studentResponse = await this.makeRequest<any>(`/students/${studentId}`, apiKey);
         const studentData = studentResponse.data?.student || studentResponse.data;
         if (!studentData) {
+          await new Promise(r => setTimeout(r, 450));
           continue;
         }
 
@@ -1903,6 +1926,7 @@ export class ManageBacService {
       } catch (error: any) {
         console.warn(`    ⚠️ Failed to fetch student ${studentId}:`, error.message);
       }
+      await new Promise(r => setTimeout(r, 450));
     }
 
     return studentsForDb;

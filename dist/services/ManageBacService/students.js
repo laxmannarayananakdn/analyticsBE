@@ -88,8 +88,9 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
             !(s.program ?? s.program));
         if (needsEnrichment && allStudents.length > 0) {
             log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
-            const BATCH_SIZE = 150;
-            const DELAY_BETWEEN_BATCHES_MS = 60000;
+            const BATCH_SIZE = 25;
+            const DELAY_BETWEEN_REQUESTS_MS = 500;
+            const DELAY_BETWEEN_BATCHES_MS = 15000;
             const enriched = [];
             const totalBatches = Math.ceil(allStudents.length / BATCH_SIZE);
             for (let i = 0; i < allStudents.length; i += BATCH_SIZE) {
@@ -100,16 +101,18 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
                 const chunk = allStudents.slice(i, i + BATCH_SIZE);
                 const batchNum = Math.floor(i / BATCH_SIZE) + 1;
                 log(`   📥 Enriching batch ${batchNum}/${totalBatches} (${chunk.length} students)...`);
-                const results = await Promise.all(chunk.map(async (s) => {
+                const results = [];
+                for (const s of chunk) {
                     try {
                         const res = await this.makeRequest(`/students/${s.id}`, apiKey, {}, baseUrl);
                         const full = res.data?.student ?? res.data ?? s;
-                        return full;
+                        results.push(full);
                     }
                     catch {
-                        return s;
+                        results.push(s);
                     }
-                }));
+                    await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS_MS));
+                }
                 enriched.push(...results);
                 const done = Math.min(i + BATCH_SIZE, allStudents.length);
                 log(`   ✅ Enriched ${done}/${allStudents.length} students`);
@@ -123,6 +126,20 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
         if (effectiveSchoolId && allStudents.length > 0) {
             log(`📋 Step ${saveStepNum}: Saving ${allStudents.length} students to database (MB.students)...`);
             const studentsForDb = allStudents.map((s) => mapManageBacStudentToDb(s));
+            // Sanitize year_group_id: students may reference year groups not in MB.year_groups
+            // (e.g. archived year groups not returned by the year-groups API) - FK would fail
+            const yearGroups = await databaseService.getYearGroupsForSchool(effectiveSchoolId);
+            const validYearGroupIds = new Set(yearGroups.map((yg) => Number(yg.id)));
+            let nulledCount = 0;
+            for (const s of studentsForDb) {
+                if (s.year_group_id != null && !validYearGroupIds.has(s.year_group_id)) {
+                    s.year_group_id = null;
+                    nulledCount++;
+                }
+            }
+            if (nulledCount > 0) {
+                log(`   ⚠️ ${nulledCount} student(s) had year_group_id not in MB.year_groups; set to null to avoid FK violation`);
+            }
             const { error } = await databaseService.bulkUpsertManageBacStudents(studentsForDb, (cur, tot, batchNum, totalBatches) => {
                 log(`   📊 Batch ${batchNum}/${totalBatches}: ${cur}/${tot} students (${Math.round((cur / tot) * 100)}%)`);
             });
@@ -210,6 +227,7 @@ async function syncStudentsByGradesAndYearGroups(apiKey) {
             }
         }
         for (const group of groups) {
+            await new Promise(r => setTimeout(r, 400)); // Throttle year-group requests
             const studentIds = await fetchYearGroupStudentIds.call(this, apiKey, group.id);
             if (!studentIds.length)
                 continue;
@@ -235,6 +253,9 @@ async function syncStudentsByGradesAndYearGroups(apiKey) {
     let totalRelationshipsCreated = 0;
     let totalRelationshipErrors = 0;
     for (let i = 0; i < studentIdArray.length; i += batchSize) {
+        if (i > 0) {
+            await new Promise(r => setTimeout(r, 3000)); // 3s between batches to avoid rate limits
+        }
         const batch = studentIdArray.slice(i, i + batchSize);
         const batchNum = Math.floor(i / batchSize) + 1;
         const totalBatches = Math.ceil(studentIdArray.length / batchSize);
@@ -304,8 +325,10 @@ async function fetchStudentDetailsBatch(apiKey, studentIds, placement) {
         try {
             const studentResponse = await this.makeRequest(`/students/${studentId}`, apiKey);
             const studentData = studentResponse.data?.student || studentResponse.data;
-            if (!studentData)
+            if (!studentData) {
+                await new Promise(r => setTimeout(r, 450));
                 continue;
+            }
             const placementInfo = placement.get(studentId);
             studentsForDb.push({
                 id: typeof studentData.id === 'string' ? parseInt(studentData.id, 10) : studentData.id,
@@ -343,6 +366,7 @@ async function fetchStudentDetailsBatch(apiKey, studentIds, placement) {
         catch (error) {
             console.warn(`    ⚠️ Failed to fetch student ${studentId}:`, error.message);
         }
+        await new Promise(r => setTimeout(r, 450)); // Throttle between requests to avoid rate limits
     }
     return studentsForDb;
 }

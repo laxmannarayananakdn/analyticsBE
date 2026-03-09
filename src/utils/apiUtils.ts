@@ -60,11 +60,26 @@ export const delay = (ms: number): Promise<void> => {
   return new Promise(resolve => setTimeout(resolve, ms));
 };
 
+export interface RetryOptions {
+  maxAttempts?: number;
+  delayMs?: number;
+  /** When error is HTTP 429 (rate limit), wait this long before retry. Default 90s. */
+  rateLimitDelayMs?: number;
+}
+
 export const retryOperation = async <T>(
   operation: () => Promise<T>,
-  maxAttempts: number = 3,
+  maxAttemptsOrOptions: number | RetryOptions = 3,
   delayMs: number = 1000
 ): Promise<T> => {
+  const opts: RetryOptions =
+    typeof maxAttemptsOrOptions === 'object'
+      ? maxAttemptsOrOptions
+      : { maxAttempts: maxAttemptsOrOptions, delayMs };
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const baseDelayMs = opts.delayMs ?? delayMs;
+  const rateLimitDelayMs = opts.rateLimitDelayMs ?? 90_000; // 90s for 429
+
   let lastError: Error;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -72,12 +87,17 @@ export const retryOperation = async <T>(
       return await operation();
     } catch (error) {
       lastError = error as Error;
-      
+
       if (attempt === maxAttempts) {
         break;
       }
 
-      await delay(delayMs * Math.pow(2, attempt - 1));
+      const is429 = (lastError?.message ?? '').includes('429');
+      const waitMs = is429 ? rateLimitDelayMs : baseDelayMs * Math.pow(2, attempt - 1);
+      if (is429) {
+        console.log(`   ⏳ Rate limited (429); waiting ${rateLimitDelayMs / 1000}s before retry ${attempt + 1}/${maxAttempts}...`);
+      }
+      await delay(waitMs);
     }
   }
 

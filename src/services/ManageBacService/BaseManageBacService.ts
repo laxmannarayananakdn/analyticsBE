@@ -4,7 +4,7 @@
  */
 
 import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../../config/managebac.js';
-import { retryOperation, validateApiResponse, handleApiError } from '../../utils/apiUtils.js';
+import { retryOperation, delay, validateApiResponse, handleApiError } from '../../utils/apiUtils.js';
 import type { AcademicYear, AcademicTerm } from '../../types/managebac.js';
 import type { ApiResponse } from '../../types/managebac.js';
 
@@ -50,16 +50,19 @@ export class BaseManageBacService {
     };
 
     try {
-      const response = await retryOperation(async () => {
-        const res = await fetch(url, requestOptions);
+      const response = await retryOperation(
+        async () => {
+          const res = await fetch(url, requestOptions);
 
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`HTTP ${res.status}: ${res.statusText}. Response: ${errorText.substring(0, 200)}`);
-        }
+          if (!res.ok) {
+            const errorText = await res.text();
+            throw new Error(`HTTP ${res.status}: ${res.statusText}. Response: ${errorText.substring(0, 200)}`);
+          }
 
-        return await res.json();
-      }, 3);
+          return await res.json();
+        },
+        { maxAttempts: 5, delayMs: 2000, rateLimitDelayMs: 90_000 }
+      );
 
       return response;
     } catch (error) {
@@ -85,6 +88,9 @@ export class BaseManageBacService {
     const perPage = 250;
 
     do {
+      if (page > 1) {
+        await delay(800); // Throttle between pages to avoid rate limits
+      }
       const params = new URLSearchParams({ ...existingParams, page: String(page), per_page: String(perPage) });
       const endpoint = `${endpointBase}?${params.toString()}`;
       const rawResponse = await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl);

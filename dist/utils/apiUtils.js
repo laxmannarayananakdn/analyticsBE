@@ -49,7 +49,13 @@ export const validateApiResponse = (response) => {
 export const delay = (ms) => {
     return new Promise(resolve => setTimeout(resolve, ms));
 };
-export const retryOperation = async (operation, maxAttempts = 3, delayMs = 1000) => {
+export const retryOperation = async (operation, maxAttemptsOrOptions = 3, delayMs = 1000) => {
+    const opts = typeof maxAttemptsOrOptions === 'object'
+        ? maxAttemptsOrOptions
+        : { maxAttempts: maxAttemptsOrOptions, delayMs };
+    const maxAttempts = opts.maxAttempts ?? 3;
+    const baseDelayMs = opts.delayMs ?? delayMs;
+    const rateLimitDelayMs = opts.rateLimitDelayMs ?? 90_000; // 90s for 429
     let lastError;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
@@ -60,7 +66,12 @@ export const retryOperation = async (operation, maxAttempts = 3, delayMs = 1000)
             if (attempt === maxAttempts) {
                 break;
             }
-            await delay(delayMs * Math.pow(2, attempt - 1));
+            const is429 = (lastError?.message ?? '').includes('429');
+            const waitMs = is429 ? rateLimitDelayMs : baseDelayMs * Math.pow(2, attempt - 1);
+            if (is429) {
+                console.log(`   ⏳ Rate limited (429); waiting ${rateLimitDelayMs / 1000}s before retry ${attempt + 1}/${maxAttempts}...`);
+            }
+            await delay(waitMs);
         }
     }
     throw lastError;

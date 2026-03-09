@@ -10,7 +10,7 @@ function normalizeHeader(h) {
         .trim()
         .replace(/\s+/g, '_')
         .replace(/\//g, '_')
-        .replace(/__/g, '_');
+        .replace(/_+/g, '_'); // collapse multiple underscores (e.g. "Country / City" -> "country_city")
 }
 function toDbColumn(header) {
     const n = normalizeHeader(header).toLowerCase();

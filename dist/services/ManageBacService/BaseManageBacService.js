@@ -3,7 +3,7 @@
  * Provides shared utilities for API requests, pagination, and URL building
  */
 import { getManageBacHeaders, MANAGEBAC_CONFIG } from '../../config/managebac.js';
-import { retryOperation, validateApiResponse, handleApiError } from '../../utils/apiUtils.js';
+import { retryOperation, delay, validateApiResponse, handleApiError } from '../../utils/apiUtils.js';
 export class BaseManageBacService {
     currentSchoolId = null;
     studentsSyncedFromYearGroups = false;
@@ -39,7 +39,7 @@ export class BaseManageBacService {
                     throw new Error(`HTTP ${res.status}: ${res.statusText}. Response: ${errorText.substring(0, 200)}`);
                 }
                 return await res.json();
-            }, 3);
+            }, { maxAttempts: 5, delayMs: 2000, rateLimitDelayMs: 90_000 });
             return response;
         }
         catch (error) {
@@ -56,6 +56,9 @@ export class BaseManageBacService {
         let totalPages = 1;
         const perPage = 250;
         do {
+            if (page > 1) {
+                await delay(800); // Throttle between pages to avoid rate limits
+            }
             const params = new URLSearchParams({ ...existingParams, page: String(page), per_page: String(perPage) });
             const endpoint = `${endpointBase}?${params.toString()}`;
             const rawResponse = await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl);

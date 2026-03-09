@@ -14,10 +14,10 @@ export interface SupersetRlsRule {
 }
 /**
  * Check if a user (identified by email) exists in Superset and has access to the dashboard.
- * Uses Superset's ab_user, ab_user_role, dashboard_roles tables.
+ * Uses Superset's embedded_dashboards, ab_user, ab_user_role, dashboard_roles tables.
  *
  * @param userEmail - User's email (must match ab_user.username or ab_user.email)
- * @param dashboardId - Dashboard UUID (from Superset embed UI) or numeric id
+ * @param dashboardId - Embedded dashboard UUID (from embedded_dashboards.uuid) or numeric dashboard id
  * @returns Result indicating if access is allowed
  */
 export declare function checkSupersetDashboardAccess(userEmail: string, dashboardId: string): Promise<SupersetAccessCheckResult>;

@@ -17,7 +17,7 @@ router.post('/', async (req, res) => {
         if (!req.user) {
             return res.status(401).json({ error: 'Authentication required' });
         }
-        const { nodeId, nodeDescription, isHeadOffice, isSchoolNode, parentNodeId } = req.body;
+        const { nodeId, nodeDescription, isHeadOffice, isSchoolNode, isCentralOffice, countryCode, parentNodeId } = req.body;
         if (!nodeId || !nodeDescription) {
             return res.status(400).json({ error: 'nodeId and nodeDescription are required' });
         }
@@ -26,6 +26,8 @@ router.post('/', async (req, res) => {
             nodeDescription,
             isHeadOffice,
             isSchoolNode,
+            isCentralOffice,
+            countryCode: countryCode || null,
             parentNodeId: parentNodeId || null,
             createdBy: req.user.email,
         });
@@ -91,11 +93,13 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { nodeDescription, isHeadOffice, isSchoolNode, parentNodeId } = req.body;
+        const { nodeDescription, isHeadOffice, isSchoolNode, isCentralOffice, countryCode, parentNodeId } = req.body;
         const node = await updateNode(id, {
             nodeDescription,
             isHeadOffice,
             isSchoolNode,
+            isCentralOffice,
+            countryCode: countryCode !== undefined ? (countryCode || null) : undefined,
             parentNodeId: parentNodeId !== undefined ? (parentNodeId || null) : undefined,
         });
         res.json(node);

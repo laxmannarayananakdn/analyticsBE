@@ -6,10 +6,39 @@
 import { databaseService } from '../DatabaseService.js';
 import type { BaseManageBacService } from './BaseManageBacService.js';
 
+/**
+ * Sync class memberships for all year groups in the current school.
+ * Required before term-grades sync (term grades use MB.class_memberships to find classes).
+ */
+export async function syncMembershipsForSchool(
+  this: BaseManageBacService,
+  apiKey: string,
+  baseUrl?: string
+): Promise<void> {
+  const schoolId = (this as any).currentSchoolId;
+  if (!schoolId) {
+    console.error('❌ No school context available for memberships sync');
+    return;
+  }
+
+  const yearGroups = await databaseService.getYearGroupsForSchool(schoolId);
+  if (!yearGroups.length) {
+    console.log('ℹ️ No year groups found; run year-groups sync first');
+    return;
+  }
+
+  console.log(`\n📚 Syncing memberships for ${yearGroups.length} year group(s)...`);
+  for (const yg of yearGroups) {
+    await syncClassMembershipsForYearGroup.call(this, apiKey, yg.id, baseUrl);
+  }
+  console.log('✅ Memberships sync complete for school');
+}
+
 export async function syncClassMembershipsForYearGroup(
   this: BaseManageBacService,
   apiKey: string,
-  yearGroupId: number
+  yearGroupId: number,
+  baseUrl?: string
 ): Promise<void> {
   if (!(this as any).currentSchoolId) {
     console.error('❌ No school context available');
@@ -36,7 +65,7 @@ export async function syncClassMembershipsForYearGroup(
     console.log(`  👤 Student ${i + 1}/${students.length}: ${student.first_name} ${student.last_name} (ID: ${student.id})`);
 
     try {
-      const membershipResponse = await (this as any).getMemberships(apiKey, [student.id], undefined, undefined, undefined, undefined);
+      const membershipResponse = await (this as any).getMemberships(apiKey, [student.id], undefined, undefined, baseUrl, undefined);
       let memberships: any[] = [];
 
       if (membershipResponse?.memberships) {
@@ -70,7 +99,7 @@ export async function syncClassMembershipsForYearGroup(
           console.log(`    📖 Fetching class ${classId}...`);
 
           try {
-            const classData = await (this as any).getClassById(apiKey, classId);
+            const classData = await (this as any).getClassById(apiKey, classId, baseUrl);
             if (!classData) {
               console.warn(`      ⚠️ Class ${classId} not found, skipping membership`);
               continue;

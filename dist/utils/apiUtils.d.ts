@@ -19,7 +19,13 @@ export declare const validateApiResponse: <T>(response: any) => {
     errors?: string[];
 };
 export declare const delay: (ms: number) => Promise<void>;
-export declare const retryOperation: <T>(operation: () => Promise<T>, maxAttempts?: number, delayMs?: number) => Promise<T>;
+export interface RetryOptions {
+    maxAttempts?: number;
+    delayMs?: number;
+    /** When error is HTTP 429 (rate limit), wait this long before retry. Default 90s. */
+    rateLimitDelayMs?: number;
+}
+export declare const retryOperation: <T>(operation: () => Promise<T>, maxAttemptsOrOptions?: number | RetryOptions, delayMs?: number) => Promise<T>;
 export declare const formatApiDate: (date: string | Date) => string;
 export declare const isValidEmail: (email: string) => boolean;
 //# sourceMappingURL=apiUtils.d.ts.map

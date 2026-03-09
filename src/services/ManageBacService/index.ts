@@ -22,7 +22,7 @@ import { getYearGroups } from './yearGroups.js';
 import { getYearGroupStudents, getAllYearGroupStudents } from './yearGroupStudents.js';
 import { getMemberships } from './memberships.js';
 import { getTermGrades, syncAllTermGrades, syncTermGradesForYearGroup } from './termGrades.js';
-import { syncClassMembershipsForYearGroup } from './classMemberships.js';
+import { syncClassMembershipsForYearGroup, syncMembershipsForSchool } from './classMemberships.js';
 
 /**
  * ManageBacService class (modular)
@@ -69,6 +69,7 @@ export class ManageBacService extends BaseManageBacService {
 
   // Sync operations
   syncClassMembershipsForYearGroup = syncClassMembershipsForYearGroup.bind(this);
+  syncMembershipsForSchool = syncMembershipsForSchool.bind(this);
 }
 
 /**

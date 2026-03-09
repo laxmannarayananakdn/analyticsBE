@@ -3,7 +3,28 @@
  * Handles syncing class memberships for year groups from ManageBac API
  */
 import { databaseService } from '../DatabaseService.js';
-export async function syncClassMembershipsForYearGroup(apiKey, yearGroupId) {
+/**
+ * Sync class memberships for all year groups in the current school.
+ * Required before term-grades sync (term grades use MB.class_memberships to find classes).
+ */
+export async function syncMembershipsForSchool(apiKey, baseUrl) {
+    const schoolId = this.currentSchoolId;
+    if (!schoolId) {
+        console.error('❌ No school context available for memberships sync');
+        return;
+    }
+    const yearGroups = await databaseService.getYearGroupsForSchool(schoolId);
+    if (!yearGroups.length) {
+        console.log('ℹ️ No year groups found; run year-groups sync first');
+        return;
+    }
+    console.log(`\n📚 Syncing memberships for ${yearGroups.length} year group(s)...`);
+    for (const yg of yearGroups) {
+        await syncClassMembershipsForYearGroup.call(this, apiKey, yg.id, baseUrl);
+    }
+    console.log('✅ Memberships sync complete for school');
+}
+export async function syncClassMembershipsForYearGroup(apiKey, yearGroupId, baseUrl) {
     if (!this.currentSchoolId) {
         console.error('❌ No school context available');
         return;
@@ -23,7 +44,7 @@ export async function syncClassMembershipsForYearGroup(apiKey, yearGroupId) {
         const student = students[i];
         console.log(`  👤 Student ${i + 1}/${students.length}: ${student.first_name} ${student.last_name} (ID: ${student.id})`);
         try {
-            const membershipResponse = await this.getMemberships(apiKey, [student.id], undefined, undefined, undefined, undefined);
+            const membershipResponse = await this.getMemberships(apiKey, [student.id], undefined, undefined, baseUrl, undefined);
             let memberships = [];
             if (membershipResponse?.memberships) {
                 memberships = Array.isArray(membershipResponse.memberships) ? membershipResponse.memberships : [];
@@ -51,7 +72,7 @@ export async function syncClassMembershipsForYearGroup(apiKey, yearGroupId) {
                 if (!fetchedClassIds.has(classId)) {
                     console.log(`    📖 Fetching class ${classId}...`);
                     try {
-                        const classData = await this.getClassById(apiKey, classId);
+                        const classData = await this.getClassById(apiKey, classId, baseUrl);
                         if (!classData) {
                             console.warn(`      ⚠️ Class ${classId} not found, skipping membership`);
                             continue;
