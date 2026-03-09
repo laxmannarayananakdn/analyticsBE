@@ -776,10 +776,35 @@ export class ManageBacService {
       );
 
       // Save to database if available
-      if (this.currentSchoolId && classes.length > 0) {
+      let schoolId = this.currentSchoolId;
+      if (!schoolId && classes.length > 0) {
+        const school = await this.getSchoolDetails(apiKey, baseUrl);
+        schoolId = school?.id ?? this.currentSchoolId;
+      }
+      if (schoolId && classes.length > 0) {
         console.log('💾 Saving classes to database...');
-        // Note: We'll need to add upsertClasses to DatabaseService
-        console.log('⚠️ Classes database save not yet implemented');
+        const classesForDb = classes.map((c) => ({
+          id: typeof c.id === 'string' ? parseInt(c.id, 10) : c.id,
+          school_id: schoolId!,
+          subject_id: c.subject_id ?? null,
+          name: c.name ?? '',
+          description: c.description ?? null,
+          uniq_id: c.uniq_id ?? null,
+          class_section: c.class_section ?? null,
+          language: c.language ?? 'en',
+          program_code: c.program_code ?? '',
+          grade_number: c.grade_number ?? null,
+          start_term_id: c.start_term_id ?? null,
+          end_term_id: c.end_term_id ?? null,
+          archived: c.archived ?? false,
+          lock_memberships: c.lock_memberships ?? null,
+        }));
+        const { data, error } = await databaseService.upsertClasses(classesForDb, schoolId);
+        if (error) {
+          console.warn('⚠️ Failed to save classes to database:', error);
+        } else {
+          console.log(`✅ Saved ${data?.length ?? classes.length} classes to database`);
+        }
       }
 
       return classes;
