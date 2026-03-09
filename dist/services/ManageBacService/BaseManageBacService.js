@@ -57,7 +57,7 @@ export class BaseManageBacService {
         const perPage = 250;
         do {
             if (page > 1) {
-                await delay(800); // Throttle between pages to avoid rate limits
+                await delay(400); // Throttle between pages to avoid rate limits
             }
             const params = new URLSearchParams({ ...existingParams, page: String(page), per_page: String(perPage) });
             const endpoint = `${endpointBase}?${params.toString()}`;

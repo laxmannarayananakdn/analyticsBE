@@ -88,9 +88,9 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
             !(s.program ?? s.program));
         if (needsEnrichment && allStudents.length > 0) {
             log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
-            const BATCH_SIZE = 25;
-            const DELAY_BETWEEN_REQUESTS_MS = 500;
-            const DELAY_BETWEEN_BATCHES_MS = 15000;
+            const BATCH_SIZE = 40;
+            const DELAY_BETWEEN_REQUESTS_MS = 200;
+            const DELAY_BETWEEN_BATCHES_MS = 5000;
             const enriched = [];
             const totalBatches = Math.ceil(allStudents.length / BATCH_SIZE);
             for (let i = 0; i < allStudents.length; i += BATCH_SIZE) {
@@ -102,7 +102,8 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
                 const batchNum = Math.floor(i / BATCH_SIZE) + 1;
                 log(`   📥 Enriching batch ${batchNum}/${totalBatches} (${chunk.length} students)...`);
                 const results = [];
-                for (const s of chunk) {
+                for (let j = 0; j < chunk.length; j++) {
+                    const s = chunk[j];
                     try {
                         const res = await this.makeRequest(`/students/${s.id}`, apiKey, {}, baseUrl);
                         const full = res.data?.student ?? res.data ?? s;
@@ -110,6 +111,9 @@ export async function getStudents(apiKey, filters, baseUrl, schoolId, onLog) {
                     }
                     catch {
                         results.push(s);
+                    }
+                    if ((j + 1) % 10 === 0 || j === chunk.length - 1) {
+                        log(`      ↳ ${i + j + 1}/${allStudents.length} enriched`);
                     }
                     await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS_MS));
                 }
@@ -227,7 +231,8 @@ async function syncStudentsByGradesAndYearGroups(apiKey) {
             }
         }
         for (const group of groups) {
-            await new Promise(r => setTimeout(r, 400)); // Throttle year-group requests
+            await new Promise(r => setTimeout(r, 200)); // Throttle year-group requests
+            console.log(`    📋 Year group ${group.name} (${group.id})...`);
             const studentIds = await fetchYearGroupStudentIds.call(this, apiKey, group.id);
             if (!studentIds.length)
                 continue;
@@ -254,7 +259,7 @@ async function syncStudentsByGradesAndYearGroups(apiKey) {
     let totalRelationshipErrors = 0;
     for (let i = 0; i < studentIdArray.length; i += batchSize) {
         if (i > 0) {
-            await new Promise(r => setTimeout(r, 3000)); // 3s between batches to avoid rate limits
+            await new Promise(r => setTimeout(r, 1500)); // 1.5s between batches to avoid rate limits
         }
         const batch = studentIdArray.slice(i, i + batchSize);
         const batchNum = Math.floor(i / batchSize) + 1;
@@ -366,7 +371,7 @@ async function fetchStudentDetailsBatch(apiKey, studentIds, placement) {
         catch (error) {
             console.warn(`    ⚠️ Failed to fetch student ${studentId}:`, error.message);
         }
-        await new Promise(r => setTimeout(r, 450)); // Throttle between requests to avoid rate limits
+        await new Promise(r => setTimeout(r, 250)); // Throttle between requests to avoid rate limits
     }
     return studentsForDb;
 }

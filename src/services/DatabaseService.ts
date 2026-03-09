@@ -664,8 +664,12 @@ export class DatabaseService {
     const results: YearGroupRecord[] = [];
     const errors: string[] = [];
 
-    for (const group of yearGroups) {
+    for (let idx = 0; idx < yearGroups.length; idx++) {
+      const group = yearGroups[idx];
       try {
+        if ((idx + 1) % 5 === 0 || idx === 0 || idx === yearGroups.length - 1) {
+          console.log(`   💾 Year groups: ${idx + 1}/${yearGroups.length}...`);
+        }
         const updateQuery = `
           UPDATE MB.year_groups
           SET

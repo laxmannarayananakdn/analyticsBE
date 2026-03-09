@@ -519,9 +519,9 @@ export class ManageBacService {
                 !(s.program ?? s.program));
             if (needsEnrichment && allStudents.length > 0) {
                 log(`📋 Step 2: Enriching student records (list returned minimal data; fetching full details for ${allStudents.length} students)...`);
-                const BATCH_SIZE = 25;
-                const DELAY_BETWEEN_REQUESTS_MS = 500;
-                const DELAY_BETWEEN_BATCHES_MS = 15000;
+                const BATCH_SIZE = 40;
+                const DELAY_BETWEEN_REQUESTS_MS = 200;
+                const DELAY_BETWEEN_BATCHES_MS = 5000;
                 const enriched = [];
                 const totalBatches = Math.ceil(allStudents.length / BATCH_SIZE);
                 for (let i = 0; i < allStudents.length; i += BATCH_SIZE) {
@@ -533,7 +533,8 @@ export class ManageBacService {
                     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
                     log(`   📥 Enriching batch ${batchNum}/${totalBatches} (${chunk.length} students)...`);
                     const results = [];
-                    for (const s of chunk) {
+                    for (let j = 0; j < chunk.length; j++) {
+                        const s = chunk[j];
                         try {
                             const res = await this.makeRequest(`/students/${s.id}`, apiKey, {}, baseUrl);
                             const full = res.data?.student ?? res.data ?? s;
@@ -541,6 +542,9 @@ export class ManageBacService {
                         }
                         catch {
                             results.push(s);
+                        }
+                        if ((j + 1) % 10 === 0 || j === chunk.length - 1) {
+                            log(`      ↳ ${i + j + 1}/${allStudents.length} enriched`);
                         }
                         await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS_MS));
                     }
