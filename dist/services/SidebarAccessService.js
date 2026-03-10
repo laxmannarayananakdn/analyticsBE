@@ -12,6 +12,7 @@ export const ADMIN_ITEMS = [
     { id: 'admin:ef-upload', label: 'Upload External Files' },
     { id: 'admin:nexquare-config', label: 'Nexquare Configuration' },
     { id: 'admin:managebac-config', label: 'ManageBac Configuration' },
+    { id: 'admin:mb-term-grade-config', label: 'ManageBac Term Grade Config' },
     { id: 'admin:nexquare-sync', label: 'Nexquare Data Sync' },
     { id: 'admin:managebac-sync', label: 'ManageBac Data Sync' },
     { id: 'admin:sync-schedules', label: 'Sync Schedules' },
