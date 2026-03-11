@@ -22,6 +22,7 @@ import { getYearGroupStudents, getAllYearGroupStudents } from './yearGroupStuden
 import { getMemberships } from './memberships.js';
 import { getTermGrades, syncAllTermGrades, syncTermGradesForYearGroup } from './termGrades.js';
 import { syncClassMembershipsForYearGroup, syncMembershipsForSchool } from './classMemberships.js';
+import { syncManageBacToRP } from './syncToRP.js';
 /**
  * ManageBacService class (modular)
  * Composes all API methods into a single service class
@@ -59,6 +60,7 @@ export class ManageBacService extends BaseManageBacService {
     // Sync operations
     syncClassMembershipsForYearGroup = syncClassMembershipsForYearGroup.bind(this);
     syncMembershipsForSchool = syncMembershipsForSchool.bind(this);
+    syncManageBacToRP = syncManageBacToRP.bind(this);
 }
 /**
  * Singleton instance - same export name as original for drop-in replacement.

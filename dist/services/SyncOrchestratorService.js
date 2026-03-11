@@ -119,6 +119,24 @@ export async function runSync(params) {
                     mbService,
                     onEndpointChange: setCurrentEndpoint,
                 });
+                // When loadRpSchema and term-grades ran: sync MB -> RP.student_assessments, then trigger RP refresh
+                const ay = params.academicYear || new Date().getFullYear().toString();
+                if (loadRpSchema && endpointsMb.includes('term-grades') && item.schoolId) {
+                    await setCurrentEndpoint('rp-sync');
+                    try {
+                        const rows = await mbService.syncManageBacToRP(item.schoolId, ay);
+                        console.log(`   [MB->RP] Synced ${rows} row(s) to RP.student_assessments for school=${item.schoolId}`);
+                        triggerRefresh({
+                            school_id: item.schoolId,
+                            academic_year: ay,
+                            triggered_by: params.triggeredBy || 'scheduler',
+                        }).catch((err) => console.error('[RefreshService] MB trigger failed:', err?.message || err));
+                    }
+                    catch (rpErr) {
+                        console.warn(`   ⚠️ MB->RP sync failed: ${rpErr?.message || rpErr}`);
+                        throw rpErr;
+                    }
+                }
                 await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt: new Date(), id: schoolRunId });
                 await updateRunCounts();
                 trackResults.push({ status: 'fulfilled', value: { success: true, schoolRunId, item } });

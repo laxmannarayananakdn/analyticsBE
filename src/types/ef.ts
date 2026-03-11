@@ -161,6 +161,7 @@ export interface HREmployeeData {
   separation?: string;
   Staff_Category?: string;
   Contract_type?: string;
+  Key?: string;
 }
 
 export interface HRBudgetVsActual {
@@ -169,7 +170,6 @@ export interface HRBudgetVsActual {
   Country?: string;
   Category?: string;
   Budget?: number;
-  Actual?: number;
   Key?: string;
 }
 

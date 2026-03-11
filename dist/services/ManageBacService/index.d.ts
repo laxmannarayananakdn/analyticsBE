@@ -64,6 +64,7 @@ export declare class ManageBacService extends BaseManageBacService {
     syncTermGradesForYearGroup: (apiKey: string, yearGroupId: number) => Promise<void>;
     syncClassMembershipsForYearGroup: (apiKey: string, yearGroupId: number, baseUrl?: string | undefined) => Promise<void>;
     syncMembershipsForSchool: (apiKey: string, baseUrl?: string | undefined) => Promise<void>;
+    syncManageBacToRP: (schoolId: string, academicYear: string) => Promise<number>;
 }
 /**
  * Singleton instance - same export name as original for drop-in replacement.

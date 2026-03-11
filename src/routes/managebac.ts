@@ -678,6 +678,33 @@ router.get('/term-grades', loadManageBacConfig, async (req: Request, res: Respon
 });
 
 /**
+ * POST /api/managebac/sync-to-rp
+ * Populate RP.student_assessments from MB data (one-time or manual trigger).
+ * Body: { school_id: string, academic_year: string }
+ * school_id = MB.schools.id as string (e.g. "123")
+ * academic_year = MB.academic_years.name (e.g. "2024-2025")
+ */
+router.post('/sync-to-rp', async (req: Request, res: Response) => {
+  try {
+    const { school_id, academic_year } = req.body || {};
+    if (!school_id || !academic_year) {
+      return res.status(400).json({
+        error: 'school_id and academic_year are required in request body',
+      });
+    }
+    const rows = await manageBacService.syncManageBacToRP(String(school_id), String(academic_year));
+    res.json({
+      success: true,
+      rowsInserted: rows,
+      message: `Synced ${rows} row(s) to RP.student_assessments. Run RP refresh for downstream tables.`,
+    });
+  } catch (error: any) {
+    console.error('Error syncing MB to RP:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
  * GET /api/managebac/classes/:classId/term-grades/:termId
  * Get term grades for a specific class and term (manual override)
  */

@@ -742,7 +742,8 @@ export class EFService {
             @recruitment${baseIndex},
             @separation${baseIndex},
             @staffCategory${baseIndex},
-            @contractType${baseIndex}
+            @contractType${baseIndex},
+            @key${baseIndex}
           )`;
         }).join(',');
 
@@ -781,7 +782,8 @@ export class EFService {
             [recruitment],
             [separation],
             [Staff_Category],
-            [Contract_type]
+            [Contract_type],
+            [Key]
           ) VALUES ${values};
         `;
 
@@ -823,6 +825,7 @@ export class EFService {
           request.input(`separation${baseIndex}`, sql.NVarChar(200), record.separation ?? null);
           request.input(`staffCategory${baseIndex}`, sql.NVarChar(100), record.Staff_Category ?? null);
           request.input(`contractType${baseIndex}`, sql.NVarChar(200), record.Contract_type ?? null);
+          request.input(`key${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
         });
 
         await request.query(batchQuery);
@@ -878,7 +881,6 @@ export class EFService {
             @country${baseIndex},
             @category${baseIndex},
             @budget${baseIndex},
-            @actual${baseIndex},
             @recordKey${baseIndex}
           )`;
         }).join(',');
@@ -894,7 +896,6 @@ export class EFService {
             [Country],
             [Category],
             [Budget],
-            [Actual],
             [Key]
           ) VALUES ${values};
         `;
@@ -912,7 +913,6 @@ export class EFService {
           request.input(`country${baseIndex}`, sql.NVarChar(100), record.Country ?? null);
           request.input(`category${baseIndex}`, sql.NVarChar(200), record.Category ?? null);
           request.input(`budget${baseIndex}`, sql.Decimal(18, 2), record.Budget ?? null);
-          request.input(`actual${baseIndex}`, sql.Decimal(18, 2), record.Actual ?? null);
           request.input(`recordKey${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
         });
 
@@ -961,12 +961,12 @@ export class EFService {
             country,[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
           )
           SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
           FROM EF.HR_EmployeeData WHERE upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
@@ -976,7 +976,7 @@ export class EFService {
         req.input('uploadId', sql.BigInt, uploadId);
         const insertResult = await req.query(`
           INSERT INTO RP.hr_budget_vs_actual (country,[Year],[Quarter],[Category],[Budget],[Actual],[Key])
-          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Category],[Budget],[Actual],[Key]
+          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Category],[Budget],NULL,[Key]
           FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
@@ -1256,7 +1256,7 @@ export class EFService {
           [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
           [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
           [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-          [recruitment],[separation],[Staff_Category],[Contract_type]
+          [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
         FROM EF.HR_EmployeeData
         WHERE upload_id = @uploadId
         ORDER BY id
@@ -1266,7 +1266,7 @@ export class EFService {
     } else if (fileType.type_code === 'HR_BUDGET_VS_ACTUAL') {
       dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
-          [Year],[Quarter],[Country],[Category],[Budget],[Actual],[Key]
+          [Year],[Quarter],[Country],[Category],[Budget],[Key]
         FROM EF.HR_BudgetVsActual
         WHERE upload_id = @uploadId
         ORDER BY id
