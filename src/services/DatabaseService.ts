@@ -2386,9 +2386,8 @@ export class DatabaseService {
       const aidResult = await executeQuery<{ aid_recipients: number }>(financialAidQuery);
       receivingAid = aidResult.data?.[0]?.aid_recipients || 0;
     } catch (error) {
-      // Table might not exist or have data, use placeholder
-      console.log('Financial aid table not available, using placeholder');
-      receivingAid = Math.floor(totalStudents * 0.23); // 23% placeholder
+      // MB.student_financial_aid has been dropped; FA data comes from MSNAV (EF upload)
+      receivingAid = Math.floor(totalStudents * 0.23); // placeholder
     }
     
     const noAid = totalStudents - receivingAid;

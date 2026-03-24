@@ -29,6 +29,8 @@ export interface Upload {
   uploaded_by: string;
   uploaded_at: Date;
   processed_at?: Date;
+  /** Set for MSNAV_FINANCIAL_AID uploads; used to trigger RP refresh for the school */
+  school_id?: string | null;
 }
 
 export interface IBExternalExam {

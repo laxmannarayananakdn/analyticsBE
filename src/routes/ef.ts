@@ -74,6 +74,24 @@ router.get('/file-types', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/ef/mb-schools
+ * Returns MB (ManageBac) schools for MSNAV Financial Aid upload dropdown.
+ * MSNAV is for MB schools only; UCI matches MB.students.uniq_student_id.
+ */
+router.get('/mb-schools', async (req: Request, res: Response) => {
+  try {
+    const schools = await efService.getMBSchools();
+    res.json({ schools });
+  } catch (error: any) {
+    console.error('❌ Error fetching MB schools:', error);
+    res.status(500).json({
+      error: 'Failed to fetch MB schools',
+      message: error.message
+    });
+  }
+});
+
+/**
  * POST /api/ef/upload
  * Upload and process a file
  */
@@ -125,6 +143,7 @@ router.post('/upload', (req, res, next) => {
     }
 
     const uploadedBy = req.body.uploadedBy || 'Admin';
+    const schoolId = req.body.schoolId ?? req.body.school_id ?? null;
     const skipInvalidRows = req.body.skipInvalidRows === 'true' || req.body.skipInvalidRows === true;
     const fileName = req.file.originalname;
     const fileBuffer = req.file.buffer;
@@ -179,11 +198,25 @@ router.post('/upload', (req, res, next) => {
     }
 
     // Step 3: Create upload record with status 'PROCESSING'
+    // schoolId required for MSNAV_FINANCIAL_AID (stored on upload; used when promoting to RP / refresh)
+    const isMsnav = fileTypeCode.toUpperCase() === 'MSNAV_FINANCIAL_AID';
+    if (isMsnav && !schoolId) {
+      return res.status(400).json({
+        code: ErrorCode.INVALID_FILE_TYPE,
+        message: 'schoolId is required for MSNAV Financial Aid uploads',
+        errors: [{
+          code: ErrorCode.INVALID_FILE_TYPE,
+          message: 'Please provide schoolId when uploading MSNAV Financial Aid files',
+          step: 'VALIDATION'
+        }]
+      });
+    }
     uploadId = await efService.createUpload(
       fileTypeCode,
       fileName,
       fileSize,
-      uploadedBy
+      uploadedBy,
+      schoolId || undefined
     );
 
     console.log(`✅ Created upload record: ${uploadId}`);
@@ -309,6 +342,8 @@ router.post('/upload', (req, res, next) => {
     await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
 
     console.log(`✅ Upload ${uploadId} completed successfully`);
+
+    // MSNAV (and other EF uploads): data stays in EF until user promotes to RP in Upload Details.
 
     // Step 7: Return success response
     res.json({
@@ -566,7 +601,7 @@ router.post('/uploads/:id/retry', async (req: Request, res: Response) => {
 
 /**
  * POST /api/ef/uploads/:id/promote-to-rp
- * Promote completed HR upload to RP schema (copy EF data to RP, full replace)
+ * Promote completed EF upload to RP schema (copy EF data to RP mart table, full replace).
  */
 router.post('/uploads/:id/promote-to-rp', async (req: Request, res: Response) => {
   try {
@@ -579,17 +614,25 @@ router.post('/uploads/:id/promote-to-rp', async (req: Request, res: Response) =>
       });
     }
 
-    console.log(`📤 Promoting upload ${uploadId} to RP schema`);
+    const modeRaw = typeof req.body?.mode === 'string' ? req.body.mode.toLowerCase() : 'replace';
+    const mode = modeRaw === 'append' ? 'append' : 'replace';
 
-    const result = await efService.promoteUploadToRP(uploadId);
+    console.log(`📤 Promoting upload ${uploadId} to RP schema (mode=${mode})`);
 
-    console.log(`✅ Promoted ${result.rowCount} records to RP.${result.fileType === 'HR_EMPLOYEE_DATA' ? 'hr_employee_data' : 'hr_budget_vs_actual'}`);
+    const result = await efService.promoteUploadToRP(uploadId, mode);
+
+    const verb = result.mode === 'append' ? 'Appended' : 'Replaced RP table and loaded';
+    console.log(`✅ ${verb} ${result.rowCount} records (${result.fileType})`);
 
     res.json({
       success: true,
-      message: `Successfully promoted ${result.rowCount} records to RP schema`,
+      message:
+        result.mode === 'append'
+          ? `Successfully appended ${result.rowCount} records to RP schema`
+          : `Successfully replaced RP data with ${result.rowCount} records from this upload`,
       rowCount: result.rowCount,
-      fileType: result.fileType
+      fileType: result.fileType,
+      mode: result.mode
     });
   } catch (error: any) {
     console.error('❌ Error promoting to RP:', error);
@@ -605,7 +648,7 @@ router.post('/uploads/:id/promote-to-rp', async (req: Request, res: Response) =>
         message: error.message
       });
     }
-    if (error.message?.includes('Only HR_')) {
+    if (error.message?.includes('cannot be promoted to RP')) {
       return res.status(400).json({
         error: 'Invalid file type',
         message: error.message

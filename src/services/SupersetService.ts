@@ -53,6 +53,12 @@ export class SupersetService {
     }
   }
 
+  private isExpiredSupersetTokenResponse(status: number, bodyText: string): boolean {
+    if (status !== 401 && status !== 403) return false;
+    const normalized = (bodyText || '').toLowerCase();
+    return normalized.includes('token has expired') || normalized.includes('"msg":"token has expired"');
+  }
+
   /**
    * Get CSRF token from Superset, plus session cookie for subsequent POSTs.
    * @param bearerToken - When provided, use Bearer auth (required by some Superset instances).
@@ -211,25 +217,9 @@ export class SupersetService {
         };
       }
 
-      // Otherwise, generate a new guest token using authentication
+      // Otherwise, generate a new guest token using authentication.
+      // Retry once if Superset says bearer token expired at guest_token step.
       console.log('🔐 Generating new guest token via authentication...');
-      let accessToken = await this.getAccessToken();
-      let csrfResult: { token: string; cookieHeader?: string };
-      try {
-        csrfResult = await this.getCsrfToken(accessToken);
-      } catch (csrfErr: any) {
-        // Token may have expired - clear cache and retry with fresh login
-        if (csrfErr?.message?.includes('401') || csrfErr?.message?.toLowerCase().includes('expired')) {
-          console.log('🔄 Access token expired, refreshing...');
-          this.accessTokenCache = null;
-          accessToken = await this.getAccessToken();
-          csrfResult = await this.getCsrfToken(accessToken);
-        } else {
-          throw csrfErr;
-        }
-      }
-      const { token: csrfToken, cookieHeader } = csrfResult;
-
       const dashboardIdStr = typeof dashboardId === 'string' ? dashboardId : String(dashboardId);
       const guestTokenRequest: GuestTokenRequest = {
         resources: resources || [{ type: 'dashboard', id: dashboardIdStr }],
@@ -241,41 +231,76 @@ export class SupersetService {
         },
       };
 
-      const guestTokenHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-        'X-CSRFToken': csrfToken,
-        // Superset "referrer does not match the host" expects Referer to match request host (Superset URL)
-        'Referer': `${this.config.baseUrl.replace(/\/$/, '')}/`,
-      };
-      if (cookieHeader) {
-        guestTokenHeaders['Cookie'] = cookieHeader;
-      }
-
-      const response = await fetch(`${this.config.baseUrl}/api/v1/security/guest_token/`, {
-        method: 'POST',
-        headers: guestTokenHeaders,
-        body: JSON.stringify(guestTokenRequest),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 403 && user?.username) {
-          throw new SupersetAccessDeniedError(user.username);
+      let lastError: Error | null = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        let accessToken = await this.getAccessToken(attempt > 1);
+        let csrfResult: { token: string; cookieHeader?: string };
+        try {
+          csrfResult = await this.getCsrfToken(accessToken);
+        } catch (csrfErr: any) {
+          // Token may have expired - clear cache and retry with fresh login
+          if (
+            attempt < 2 &&
+            (csrfErr?.message?.includes('401') ||
+              csrfErr?.message?.toLowerCase().includes('expired'))
+          ) {
+            console.log('🔄 Access token expired before guest-token call, refreshing...');
+            this.accessTokenCache = null;
+            continue;
+          }
+          throw csrfErr;
         }
-        throw new Error(`Failed to generate guest token: ${response.statusText}. ${errorText}`);
-      }
+        const { token: csrfToken, cookieHeader } = csrfResult;
 
-      const data = await response.json() as { token: string; expires_in?: number };
+        const guestTokenHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+          'X-CSRFToken': csrfToken,
+          // Superset "referrer does not match the host" expects Referer to match request host (Superset URL)
+          'Referer': `${this.config.baseUrl.replace(/\/$/, '')}/`,
+        };
+        if (cookieHeader) {
+          guestTokenHeaders['Cookie'] = cookieHeader;
+        }
+
+        const response = await fetch(`${this.config.baseUrl}/api/v1/security/guest_token/`, {
+          method: 'POST',
+          headers: guestTokenHeaders,
+          body: JSON.stringify(guestTokenRequest),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+
+          // Some Superset deployments accept CSRF call but reject guest_token with expired bearer.
+          if (attempt < 2 && this.isExpiredSupersetTokenResponse(response.status, errorText)) {
+            console.warn('🔄 Superset bearer token expired at guest_token call, refreshing and retrying once...');
+            this.accessTokenCache = null;
+            continue;
+          }
+
+          if (response.status === 403 && user?.username) {
+            throw new SupersetAccessDeniedError(user.username);
+          }
+
+          lastError = new Error(`Failed to generate guest token: ${response.statusText}. ${errorText}`);
+          break;
+        }
+
+        const data = await response.json() as { token: string; expires_in?: number };
       
-      if (!data.token) {
-        throw new Error('No guest token in response');
+        if (!data.token) {
+          lastError = new Error('No guest token in response');
+          break;
+        }
+
+        return {
+          token: data.token,
+          expires_in: data.expires_in || 3600, // Default to 1 hour
+        };
       }
 
-      return {
-        token: data.token,
-        expires_in: data.expires_in || 3600, // Default to 1 hour
-      };
+      throw lastError || new Error('Failed to generate guest token');
     } catch (error: any) {
       console.error('Error generating guest token:', error);
       throw new Error(`Failed to generate guest token: ${error.message}`);

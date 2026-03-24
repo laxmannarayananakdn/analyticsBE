@@ -4,6 +4,7 @@
  */
 
 import { getConnection, executeQuery, sql } from '../config/database.js';
+import { triggerRefresh } from './RefreshService.js';
 import {
   FileType,
   Upload,
@@ -17,6 +18,22 @@ import {
 } from '../types/ef.js';
 
 export class EFService {
+  /**
+   * Get MB (ManageBac) schools for MSNAV Financial Aid upload dropdown.
+   * MSNAV data is for MB schools only; UCI matches MB.students.uniq_student_id.
+   */
+  async getMBSchools(): Promise<Array<{ school_id: string; school_name: string }>> {
+    const query = `
+      SELECT CAST(school_id AS NVARCHAR(50)) AS school_id, school_name
+      FROM MB.managebac_school_configs
+      WHERE school_id IS NOT NULL AND is_active = 1
+      ORDER BY school_name
+    `;
+    const result = await executeQuery<{ school_id: string; school_name: string }>(query);
+    if (result.error) throw new Error(`Failed to get MB schools: ${result.error}`);
+    return result.data || [];
+  }
+
   /**
    * Get all active file types
    */
@@ -49,13 +66,15 @@ export class EFService {
 
   /**
    * Create a new upload record
+   * @param schoolId Required for MSNAV_FINANCIAL_AID; used to trigger RP refresh for the school
    * @returns The ID of the created upload
    */
   async createUpload(
     fileTypeCode: string,
     fileName: string,
     fileSize: number,
-    uploadedBy: string = 'Admin'
+    uploadedBy: string = 'Admin',
+    schoolId?: string | null
   ): Promise<number> {
     const query = `
       DECLARE @file_type_id INT;
@@ -75,7 +94,8 @@ export class EFService {
         file_size_bytes,
         status,
         uploaded_by,
-        uploaded_at
+        uploaded_at,
+        school_id
       )
       VALUES (
         @file_type_id,
@@ -83,7 +103,8 @@ export class EFService {
         @fileSize,
         'PENDING',
         @uploadedBy,
-        SYSDATETIMEOFFSET()
+        SYSDATETIMEOFFSET(),
+        @schoolId
       );
       
       SELECT SCOPE_IDENTITY() AS id;
@@ -93,7 +114,8 @@ export class EFService {
       fileTypeCode,
       fileName,
       fileSize,
-      uploadedBy
+      uploadedBy,
+      schoolId: schoolId ?? null
     });
 
     if (result.error) {
@@ -928,10 +950,24 @@ export class EFService {
     }
   }
 
+  /** File types that support Promote to RP (EF → reporting tables). */
+  private static readonly PROMOTABLE_TO_RP = new Set([
+    'HR_EMPLOYEE_DATA',
+    'HR_BUDGET_VS_ACTUAL',
+    'IB_EXTERNAL_EXAMS',
+    'MSNAV_FINANCIAL_AID',
+    'CEM_INITIAL',
+    'CEM_FINAL'
+  ]);
+
   /**
-   * Promote HR upload to RP schema (copy EF data to RP, full replace)
+   * Promote completed upload to RP schema (copy EF data to RP mart table).
+   * @param mode replace: clear RP mart table then load this upload; append: insert this upload without clearing RP.
    */
-  async promoteUploadToRP(uploadId: number): Promise<{ rowCount: number; fileType: string }> {
+  async promoteUploadToRP(
+    uploadId: number,
+    mode: 'replace' | 'append' = 'replace'
+  ): Promise<{ rowCount: number; fileType: string; mode: 'replace' | 'append' }> {
     const upload = await this.getUploadById(uploadId);
     if (!upload) throw new Error('Upload not found');
     if (upload.status !== 'COMPLETED') throw new Error('Only completed uploads can be promoted');
@@ -941,9 +977,12 @@ export class EFService {
     if (!fileType) throw new Error('File type not found');
 
     const code = fileType.type_code.toUpperCase();
-    if (code !== 'HR_EMPLOYEE_DATA' && code !== 'HR_BUDGET_VS_ACTUAL') {
-      throw new Error('Only HR_EMPLOYEE_DATA and HR_BUDGET_VS_ACTUAL can be promoted to RP');
+    if (!EFService.PROMOTABLE_TO_RP.has(code)) {
+      throw new Error(`File type ${code} cannot be promoted to RP`);
     }
+
+    const promoteMode: 'replace' | 'append' = mode === 'append' ? 'append' : 'replace';
+    const replace = promoteMode === 'replace';
 
     const connection = await getConnection();
     const transaction = new sql.Transaction(connection);
@@ -953,7 +992,7 @@ export class EFService {
       let rowCount = 0;
 
       if (code === 'HR_EMPLOYEE_DATA') {
-        await transaction.request().query('DELETE FROM RP.hr_employee_data;');
+        if (replace) await transaction.request().query('DELETE FROM RP.hr_employee_data;');
         const req = transaction.request();
         req.input('uploadId', sql.BigInt, uploadId);
         const insertResult = await req.query(`
@@ -970,8 +1009,8 @@ export class EFService {
           FROM EF.HR_EmployeeData WHERE upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
-      } else {
-        await transaction.request().query('DELETE FROM RP.hr_budget_vs_actual;');
+      } else if (code === 'HR_BUDGET_VS_ACTUAL') {
+        if (replace) await transaction.request().query('DELETE FROM RP.hr_budget_vs_actual;');
         const req = transaction.request();
         req.input('uploadId', sql.BigInt, uploadId);
         const insertResult = await req.query(`
@@ -980,14 +1019,126 @@ export class EFService {
           FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      } else if (code === 'IB_EXTERNAL_EXAMS') {
+        if (replace) await transaction.request().query('DELETE FROM RP.IB_ExternalExams;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.IB_ExternalExams (
+            upload_id, file_name, uploaded_at, uploaded_by,
+            [Year],[Month],[School],[Registration_Number],[Personal_Code],[Name],[Category],[Subject],[Level],[Language],
+            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code]
+          )
+          SELECT
+            upload_id, file_name, uploaded_at, uploaded_by,
+            [Year],[Month],[School],[Registration_Number],[Personal_Code],[Name],[Category],[Subject],[Level],[Language],
+            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code]
+          FROM EF.IB_ExternalExams WHERE upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      } else if (code === 'MSNAV_FINANCIAL_AID') {
+        if (replace) await transaction.request().query('DELETE FROM RP.msnav_financial_aid;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.msnav_financial_aid (
+            school_id,[S_No],[UCI],[Academic_Year],[Class],[Class_Code],[Student_No],[Student_Name],
+            [Percentage],[Fee_Classification],[FA_Sub_Type],[Fee_Code],[Community_Status]
+          )
+          SELECT
+            CAST(u.school_id AS NVARCHAR(50)),
+            m.[S_No],m.[UCI],m.[Academic_Year],m.[Class],m.[Class_Code],m.[Student_No],m.[Student_Name],
+            m.[Percentage],m.[Fee_Classification],m.[FA_Sub_Type],m.[Fee_Code],m.[Community_Status]
+          FROM EF.MSNAV_FinancialAid m
+          INNER JOIN EF.Uploads u ON u.id = m.upload_id
+          WHERE m.upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      } else if (code === 'CEM_INITIAL') {
+        if (replace) await transaction.request().query('DELETE FROM RP.cem_prediction_report;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.cem_prediction_report (
+            [Student_ID],[Class],[Name],[Gender],[Date_of_Birth],[Year_Group],[GCSE_Score],[Subject],[Level],
+            [GCSE_Prediction_Points],[GCSE_Prediction_Grade],[Test_Taken],[Test_Score],[Test_Prediction_Points],[Test_Prediction_Grade]
+          )
+          SELECT
+            [Student_ID],[Class],[Name],[Gender],[Date_of_Birth],[Year_Group],[GCSE_Score],[Subject],[Level],
+            [GCSE_Prediction_Points],[GCSE_Prediction_Grade],[Test_Taken],[Test_Score],[Test_Prediction_Points],[Test_Prediction_Grade]
+          FROM EF.CEM_PredictionReport WHERE upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
+      } else if (code === 'CEM_FINAL') {
+        if (replace) await transaction.request().query('DELETE FROM RP.cem_subject_level_analysis;');
+        const req = transaction.request();
+        req.input('uploadId', sql.BigInt, uploadId);
+        const insertResult = await req.query(`
+          INSERT INTO RP.cem_subject_level_analysis (
+            [Student_ID],[Class],[Surname],[Forename],[Gender],[Exam_Type],[Subject_Title],[Syllabus_Title],[Exam_Board],[Syllabus_Code],
+            [Grade],[Grade_as_Points],[GCSE_Score],[GCSE_Prediction],[GCSE_Residual],[GCSE_Standardised_Residual],
+            [GCSE_Gender_Adj_Prediction],[GCSE_Gender_Adj_Residual],[GCSE_Gender_Adj_Std_Residual],
+            [Adaptive_Score],[Adaptive_Prediction],[Adaptive_Residual],[Adaptive_Standardised_Residual],
+            [Adaptive_Gender_Adj_Prediction],[Adaptive_Gender_Adj_Residual],[Adaptive_Gender_Adj_Std_Residual],
+            [TDA_Score],[TDA_Prediction],[TDA_Residual],[TDA_Standardised_Residual],
+            [TDA_Gender_Adj_Prediction],[TDA_Gender_Adj_Residual],[TDA_Gender_Adj_Std_Residual]
+          )
+          SELECT
+            [Student_ID],[Class],[Surname],[Forename],[Gender],[Exam_Type],[Subject_Title],[Syllabus_Title],[Exam_Board],[Syllabus_Code],
+            [Grade],[Grade_as_Points],[GCSE_Score],[GCSE_Prediction],[GCSE_Residual],[GCSE_Standardised_Residual],
+            [GCSE_Gender_Adj_Prediction],[GCSE_Gender_Adj_Residual],[GCSE_Gender_Adj_Std_Residual],
+            [Adaptive_Score],[Adaptive_Prediction],[Adaptive_Residual],[Adaptive_Standardised_Residual],
+            [Adaptive_Gender_Adj_Prediction],[Adaptive_Gender_Adj_Residual],[Adaptive_Gender_Adj_Std_Residual],
+            [TDA_Score],[TDA_Prediction],[TDA_Residual],[TDA_Standardised_Residual],
+            [TDA_Gender_Adj_Prediction],[TDA_Gender_Adj_Residual],[TDA_Gender_Adj_Std_Residual]
+          FROM EF.CEM_SubjectLevelAnalysis WHERE upload_id = @uploadId
+        `);
+        rowCount = insertResult.rowsAffected?.[0] ?? 0;
       }
 
       await transaction.commit();
-      return { rowCount, fileType: code };
+
+      if (code === 'MSNAV_FINANCIAL_AID') {
+        this.triggerRPRefreshAfterMsnavUpload(uploadId).catch((err) =>
+          console.error('[EFService] RP refresh after MSNAV promote failed:', err?.message || err)
+        );
+      }
+
+      return { rowCount, fileType: code, mode: promoteMode };
     } catch (error: any) {
       await transaction.rollback();
       throw new Error(`Failed to promote to RP: ${error.message || error}`);
     }
+  }
+
+  /**
+   * Trigger RP refresh after MSNAV Financial Aid upload.
+   * Gets school_id from upload and academic_year from uploaded MSNAV data,
+   * then triggers the full RP refresh pipeline in the background.
+   */
+  async triggerRPRefreshAfterMsnavUpload(uploadId: number): Promise<{ school_id: string; academic_year: string } | null> {
+    const upload = await this.getUploadById(uploadId);
+    if (!upload || !upload.school_id) return null;
+
+    const ayResult = await executeQuery<{ Academic_Year: string }>(
+      `SELECT TOP 1 [Academic_Year] FROM EF.MSNAV_FinancialAid WHERE upload_id = @uploadId AND [Academic_Year] IS NOT NULL`,
+      { uploadId }
+    );
+    const rawAy = ayResult.data?.[0]?.Academic_Year;
+    if (!rawAy?.trim()) return null;
+
+    // Normalize "2025-26" -> "2025-2026" for RP refresh
+    const academicYear = rawAy.includes('-') && rawAy.length <= 7
+      ? rawAy.replace(/-(\d{2})$/, '-20$1')
+      : rawAy.trim();
+
+    triggerRefresh({
+      school_id: upload.school_id,
+      academic_year: academicYear,
+      triggered_by: 'msnav_upload',
+    }).catch((err) => console.error('[EFService] RP refresh after MSNAV upload failed:', err?.message || err));
+
+    return { school_id: upload.school_id, academic_year: academicYear };
   }
 
   /**
@@ -1005,7 +1156,8 @@ export class EFService {
         u.error_message,
         u.uploaded_by,
         u.uploaded_at,
-        u.processed_at
+        u.processed_at,
+        u.school_id
       FROM EF.Uploads u
       WHERE u.id = @uploadId;
     `;
