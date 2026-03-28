@@ -50,11 +50,13 @@ async function applyCalculatedGradesFromMarkTranslation(
   academicYear: string
 ): Promise<{ cleared: number; set: number; error?: string }> {
   const ayEnd = computeAcademicYearEndDateForMarks(academicYear);
+  // RP rows use academic_year from the NEX file; sync uses schedule AY — often differ by spaces (e.g. "2024 - 2025" vs "2024-2025").
+  const ayMatchExpr = `REPLACE(LTRIM(RTRIM(ISNULL(academic_year, N''))), N' ', N'') = REPLACE(LTRIM(RTRIM(@academic_year)), N' ', N'')`;
 
   const clearSql = `
     UPDATE RP.student_assessments
     SET calculated_grade = NULL, updated_at = SYSDATETIMEOFFSET()
-    WHERE school_id = @school_id AND academic_year = @academic_year;
+    WHERE school_id = @school_id AND ${ayMatchExpr};
     SELECT @@ROWCOUNT AS rowcount;
   `;
   const clearResult = await executeQuery<{ rowcount: number }>(clearSql, {
@@ -115,7 +117,7 @@ async function applyCalculatedGradesFromMarkTranslation(
        AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) >= c.marks_start
        AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) <= c.marks_end
       WHERE rsa.school_id = @school_id
-        AND rsa.academic_year = @academic_year
+        AND REPLACE(LTRIM(RTRIM(ISNULL(rsa.academic_year, N''))), N' ', N'') = REPLACE(LTRIM(RTRIM(@academic_year)), N' ', N'')
     )
     UPDATE rsa
     SET rsa.calculated_grade = p.calculated_grade,
@@ -135,6 +137,49 @@ async function applyCalculatedGradesFromMarkTranslation(
   }
   const set = updateResult.data?.[0]?.rowcount ?? 0;
   return { cleared, set };
+}
+
+/**
+ * Apply mark translation for every distinct academic_year present in RP for this school.
+ * Sync often runs for one AY (e.g. 2024-2025) while older AY rows remain; a single-year update would leave them NULL.
+ */
+async function applyCalculatedGradesForAllYearsInRp(schoolSourcedId: string): Promise<void> {
+  const res = await executeQuery<{ ay: string }>(
+    `
+    SELECT DISTINCT LTRIM(RTRIM(academic_year)) AS ay
+    FROM RP.student_assessments
+    WHERE school_id = @school_id
+      AND academic_year IS NOT NULL
+      AND LTRIM(RTRIM(academic_year)) != N''
+    ORDER BY ay
+    `,
+    { school_id: schoolSourcedId }
+  );
+  if (res.error) {
+    console.warn(`   ⚠️  calculated_grade: could not list academic years: ${res.error}`);
+    return;
+  }
+  const years = res.data?.map((r) => r.ay).filter(Boolean) ?? [];
+  if (years.length === 0) {
+    console.log(`   ℹ️  calculated_grade: no academic_year values in RP for this school; skip`);
+    return;
+  }
+  let totalSet = 0;
+  let lastError: string | undefined;
+  for (const y of years) {
+    const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, y);
+    if (cg.error) {
+      lastError = cg.error;
+    } else {
+      totalSet += cg.set;
+    }
+  }
+  if (lastError) {
+    console.warn(`   ⚠️  calculated_grade: at least one year failed (last error): ${lastError}`);
+  }
+  console.log(
+    `   ✅ calculated_grade applied for ${years.length} distinct academic year(s) in RP; ${totalSet} row(s) matched in total`
+  );
 }
 
 /**
@@ -1137,17 +1182,7 @@ export async function syncStudentAssessmentsToRP(
     
     console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
 
-    if (academicYear) {
-      const ayEndLabel = computeAcademicYearEndDateForMarks(academicYear);
-      const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, academicYear);
-      if (cg.error) {
-        console.warn(`   ⚠️  calculated_grade not updated: ${cg.error}`);
-      } else {
-        console.log(
-          `   ✅ calculated_grade applied for AY end ${ayEndLabel}: ${cg.set} row(s) matched (${cg.cleared} row(s) reset first)`
-        );
-      }
-    }
+    await applyCalculatedGradesForAllYearsInRp(schoolSourcedId);
 
     // Delete from NEX.student_assessments for this school+academic_year after RP load
     if (academicYear) {
