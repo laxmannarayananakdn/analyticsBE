@@ -14,6 +14,130 @@ import { databaseService } from '../DatabaseService.js';
 import type { BaseNexquareService } from './BaseNexquareService.js';
 
 /**
+ * Academic year end date for mark-to-grade translation: 31 March of the end year.
+ * Examples: "2019-2020", "2019 - 2020" -> 2020-03-31; "2024" -> 2024-03-31.
+ */
+function computeAcademicYearEndDateForMarks(academicYear: string): string {
+  const s = academicYear.trim();
+  const years: number[] = [];
+  const re = /\b(19|20)\d{2}\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    years.push(parseInt(m[0], 10));
+  }
+  let endYear: number;
+  if (years.length >= 2) {
+    endYear = Math.max(years[0], years[1]);
+  } else if (years.length === 1) {
+    endYear = years[0];
+  } else {
+    const digits = s.replace(/\D/g, '');
+    const n = parseInt(digits.slice(0, 4), 10);
+    endYear = !Number.isNaN(n) && n >= 1900 ? n : new Date().getFullYear();
+  }
+  return `${endYear}-03-31`;
+}
+
+/**
+ * After RP.student_assessments insert: set calculated_grade from admin.mark_grade_translation_config.
+ * - Resolves school node via admin.Node_School (nex).
+ * - Walks ancestors; nearest node with a matching rule wins.
+ * - Uses latest effective_date per (node, grade) where effective_date <= @ay_end.
+ * - Numeric component_value must fall in [marks_start, marks_end].
+ */
+async function applyCalculatedGradesFromMarkTranslation(
+  schoolSourcedId: string,
+  academicYear: string
+): Promise<{ cleared: number; set: number; error?: string }> {
+  const ayEnd = computeAcademicYearEndDateForMarks(academicYear);
+
+  const clearSql = `
+    UPDATE RP.student_assessments
+    SET calculated_grade = NULL, updated_at = SYSDATETIMEOFFSET()
+    WHERE school_id = @school_id AND academic_year = @academic_year;
+    SELECT @@ROWCOUNT AS rowcount;
+  `;
+  const clearResult = await executeQuery<{ rowcount: number }>(clearSql, {
+    school_id: schoolSourcedId,
+    academic_year: academicYear,
+  });
+  if (clearResult.error) {
+    return { cleared: 0, set: 0, error: clearResult.error };
+  }
+  const cleared = clearResult.data?.[0]?.rowcount ?? 0;
+
+  const updateSql = `
+    ;WITH SchoolNode AS (
+      SELECT TOP (1) ns.Node_ID
+      FROM admin.Node_School ns
+      WHERE ns.School_ID = @school_id AND ns.School_Source = N'nex'
+      ORDER BY ns.Node_ID
+    ),
+    Ancestors AS (
+      SELECT n.Node_ID, n.Parent_Node_ID, 0 AS dist
+      FROM admin.Node n
+      INNER JOIN SchoolNode s ON n.Node_ID = s.Node_ID
+      UNION ALL
+      SELECT p.Node_ID, p.Parent_Node_ID, a.dist + 1
+      FROM admin.Node p
+      INNER JOIN Ancestors a ON p.Node_ID = a.Parent_Node_ID
+      WHERE a.Parent_Node_ID IS NOT NULL
+    ),
+    LatestEffective AS (
+      SELECT c.node_id, c.grade_name, MAX(c.effective_date) AS effective_date
+      FROM admin.mark_grade_translation_config c
+      WHERE c.is_active = 1
+        AND c.effective_date <= CAST(@ay_end AS DATE)
+      GROUP BY c.node_id, c.grade_name
+    ),
+    CfgRows AS (
+      SELECT c.node_id, c.grade_name, c.marks_start, c.marks_end, c.calculated_grade, a.dist
+      FROM admin.mark_grade_translation_config c
+      INNER JOIN LatestEffective le
+        ON le.node_id = c.node_id
+        AND le.grade_name = c.grade_name
+        AND le.effective_date = c.effective_date
+      INNER JOIN Ancestors a ON a.Node_ID = c.node_id
+      WHERE c.is_active = 1
+    ),
+    Pick AS (
+      SELECT
+        rsa.id AS rp_id,
+        c.calculated_grade,
+        ROW_NUMBER() OVER (
+          PARTITION BY rsa.id
+          ORDER BY c.dist ASC, c.marks_start ASC
+        ) AS rk
+      FROM RP.student_assessments rsa
+      INNER JOIN CfgRows c
+        ON LTRIM(RTRIM(rsa.grade_name)) = LTRIM(RTRIM(c.grade_name))
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) IS NOT NULL
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) >= c.marks_start
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) <= c.marks_end
+      WHERE rsa.school_id = @school_id
+        AND rsa.academic_year = @academic_year
+    )
+    UPDATE rsa
+    SET rsa.calculated_grade = p.calculated_grade,
+        rsa.updated_at = SYSDATETIMEOFFSET()
+    FROM RP.student_assessments rsa
+    INNER JOIN Pick p ON p.rp_id = rsa.id AND p.rk = 1;
+    SELECT @@ROWCOUNT AS rowcount;
+  `;
+
+  const updateResult = await executeQuery<{ rowcount: number }>(updateSql, {
+    school_id: schoolSourcedId,
+    academic_year: academicYear,
+    ay_end: ayEnd,
+  });
+  if (updateResult.error) {
+    return { cleared, set: 0, error: updateResult.error };
+  }
+  const set = updateResult.data?.[0]?.rowcount ?? 0;
+  return { cleared, set };
+}
+
+/**
  * Get student assessment/grade book data
  * Fetches CSV file from API, parses it, and saves to database
  * Can be added to a class that extends BaseNexquareService
@@ -1012,6 +1136,18 @@ export async function syncStudentAssessmentsToRP(
     const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
     
     console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
+
+    if (academicYear) {
+      const ayEndLabel = computeAcademicYearEndDateForMarks(academicYear);
+      const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, academicYear);
+      if (cg.error) {
+        console.warn(`   ⚠️  calculated_grade not updated: ${cg.error}`);
+      } else {
+        console.log(
+          `   ✅ calculated_grade applied for AY end ${ayEndLabel}: ${cg.set} row(s) matched (${cg.cleared} row(s) reset first)`
+        );
+      }
+    }
 
     // Delete from NEX.student_assessments for this school+academic_year after RP load
     if (academicYear) {
