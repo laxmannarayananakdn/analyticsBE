@@ -57,16 +57,16 @@ async function applyCalculatedGradesFromMarkTranslation(
     UPDATE RP.student_assessments
     SET calculated_grade = NULL, updated_at = SYSDATETIMEOFFSET()
     WHERE school_id = @school_id AND ${ayMatchExpr};
-    SELECT @@ROWCOUNT AS rowcount;
+    SELECT @@ROWCOUNT AS affected_rows;
   `;
-  const clearResult = await executeQuery<{ rowcount: number }>(clearSql, {
+  const clearResult = await executeQuery<{ affected_rows: number }>(clearSql, {
     school_id: schoolSourcedId,
     academic_year: academicYear,
   });
   if (clearResult.error) {
     return { cleared: 0, set: 0, error: clearResult.error };
   }
-  const cleared = clearResult.data?.[0]?.rowcount ?? 0;
+  const cleared = clearResult.data?.[0]?.affected_rows ?? 0;
 
   const updateSql = `
     ;WITH SchoolNode AS (
@@ -124,10 +124,10 @@ async function applyCalculatedGradesFromMarkTranslation(
         rsa.updated_at = SYSDATETIMEOFFSET()
     FROM RP.student_assessments rsa
     INNER JOIN Pick p ON p.rp_id = rsa.id AND p.rk = 1;
-    SELECT @@ROWCOUNT AS rowcount;
+    SELECT @@ROWCOUNT AS affected_rows;
   `;
 
-  const updateResult = await executeQuery<{ rowcount: number }>(updateSql, {
+  const updateResult = await executeQuery<{ affected_rows: number }>(updateSql, {
     school_id: schoolSourcedId,
     academic_year: academicYear,
     ay_end: ayEnd,
@@ -135,7 +135,7 @@ async function applyCalculatedGradesFromMarkTranslation(
   if (updateResult.error) {
     return { cleared, set: 0, error: updateResult.error };
   }
-  const set = updateResult.data?.[0]?.rowcount ?? 0;
+  const set = updateResult.data?.[0]?.affected_rows ?? 0;
   return { cleared, set };
 }
 
