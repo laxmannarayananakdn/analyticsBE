@@ -1027,13 +1027,20 @@ export class EFService {
           INSERT INTO RP.IB_ExternalExams (
             upload_id, file_name, uploaded_at, uploaded_by,
             [Year],[Month],[School],[Registration_Number],[Personal_Code],[Name],[Category],[Subject],[Level],[Language],
-            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code]
+            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code],
+            school_id
           )
           SELECT
-            upload_id, file_name, uploaded_at, uploaded_by,
-            [Year],[Month],[School],[Registration_Number],[Personal_Code],[Name],[Category],[Subject],[Level],[Language],
-            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code]
-          FROM EF.IB_ExternalExams WHERE upload_id = @uploadId
+            ib.upload_id, ib.file_name, ib.uploaded_at, ib.uploaded_by,
+            ib.[Year], ib.[Month], ib.[School], ib.[Registration_Number], ib.[Personal_Code], ib.[Name], ib.[Category],
+            ib.[Subject], ib.[Level], ib.[Language],
+            ib.[Predicted_Grade], ib.[Grade], ib.[EE_TOK_Points], ib.[Total_Points], ib.[Result], ib.[Diploma_Requirements_Code],
+            m.school_id
+          FROM EF.IB_ExternalExams ib
+          LEFT JOIN admin.ib_external_exam_school_map m
+            ON m.is_active = 1
+            AND LTRIM(RTRIM(COALESCE(ib.[School], N''))) = LTRIM(RTRIM(m.ib_school_code))
+          WHERE ib.upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
       } else if (code === 'MSNAV_FINANCIAL_AID') {
