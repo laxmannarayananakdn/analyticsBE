@@ -1232,7 +1232,8 @@ export class EFService {
   async getUploadData(
     uploadId: number,
     page: number = 1,
-    limit: number = 100
+    limit: number = 100,
+    search?: string
   ): Promise<{ data: any[]; total: number; page: number; limit: number }> {
     // First, get the upload to determine file type
     const upload = await this.getUploadById(uploadId);
@@ -1248,12 +1249,34 @@ export class EFService {
     }
 
     const offset = (page - 1) * limit;
+    const trimmedSearch = search?.trim();
+    const hasSearch = !!trimmedSearch;
 
     let dataQuery = '';
     let countQuery = '';
     const params: Record<string, any> = { uploadId, limit, offset };
+    if (hasSearch) {
+      params.searchPattern = `%${trimmedSearch}%`;
+    }
+    const buildWhereClause = (searchColumns: string[]): string => {
+      if (!hasSearch || searchColumns.length === 0) {
+        return 'WHERE upload_id = @uploadId';
+      }
+      const searchClause = searchColumns
+        .map(
+          (column) =>
+            `CONVERT(NVARCHAR(MAX), [${column}]) COLLATE Latin1_General_CS_AS LIKE @searchPattern COLLATE Latin1_General_CS_AS`
+        )
+        .join(' OR ');
+      return `WHERE upload_id = @uploadId AND (${searchClause})`;
+    };
 
     if (fileType.type_code === 'IB_EXTERNAL_EXAMS') {
+      const whereClause = buildWhereClause([
+        'Year', 'Month', 'School', 'Registration_Number', 'Personal_Code', 'Name', 'Category',
+        'Subject', 'Level', 'Language', 'Predicted_Grade', 'Grade', 'EE_TOK_Points',
+        'Total_Points', 'Result', 'Diploma_Requirements_Code'
+      ]);
       dataQuery = `
         SELECT 
           id,
@@ -1278,7 +1301,7 @@ export class EFService {
           [Result],
           [Diploma_Requirements_Code]
         FROM EF.IB_ExternalExams
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1287,9 +1310,13 @@ export class EFService {
       countQuery = `
         SELECT COUNT(*) as total
         FROM EF.IB_ExternalExams
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
     } else if (fileType.type_code === 'MSNAV_FINANCIAL_AID') {
+      const whereClause = buildWhereClause([
+        'S_No', 'UCI', 'Academic_Year', 'Class', 'Class_Code', 'Student_No', 'Student_Name',
+        'Percentage', 'Fee_Classification', 'FA_Sub_Type', 'Fee_Code', 'Community_Status'
+      ]);
       dataQuery = `
         SELECT 
           id,
@@ -1310,7 +1337,7 @@ export class EFService {
           [Fee_Code],
           [Community_Status]
         FROM EF.MSNAV_FinancialAid
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1319,9 +1346,14 @@ export class EFService {
       countQuery = `
         SELECT COUNT(*) as total
         FROM EF.MSNAV_FinancialAid
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
     } else if (fileType.type_code === 'CEM_INITIAL') {
+      const whereClause = buildWhereClause([
+        'Student_ID', 'Class', 'Name', 'Gender', 'Date_of_Birth', 'Year_Group', 'GCSE_Score',
+        'Subject', 'Level', 'GCSE_Prediction_Points', 'GCSE_Prediction_Grade', 'Test_Taken',
+        'Test_Score', 'Test_Prediction_Points', 'Test_Prediction_Grade'
+      ]);
       dataQuery = `
         SELECT 
           id,
@@ -1345,7 +1377,7 @@ export class EFService {
           [Test_Prediction_Points],
           [Test_Prediction_Grade]
         FROM EF.CEM_PredictionReport
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1354,9 +1386,19 @@ export class EFService {
       countQuery = `
         SELECT COUNT(*) as total
         FROM EF.CEM_PredictionReport
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
     } else if (fileType.type_code === 'CEM_FINAL') {
+      const whereClause = buildWhereClause([
+        'Student_ID', 'Class', 'Surname', 'Forename', 'Gender', 'Exam_Type', 'Subject_Title',
+        'Syllabus_Title', 'Exam_Board', 'Syllabus_Code', 'Grade', 'Grade_as_Points',
+        'GCSE_Score', 'GCSE_Prediction', 'GCSE_Residual', 'GCSE_Standardised_Residual',
+        'GCSE_Gender_Adj_Prediction', 'GCSE_Gender_Adj_Residual', 'GCSE_Gender_Adj_Std_Residual',
+        'Adaptive_Score', 'Adaptive_Prediction', 'Adaptive_Residual', 'Adaptive_Standardised_Residual',
+        'Adaptive_Gender_Adj_Prediction', 'Adaptive_Gender_Adj_Residual', 'Adaptive_Gender_Adj_Std_Residual',
+        'TDA_Score', 'TDA_Prediction', 'TDA_Residual', 'TDA_Standardised_Residual',
+        'TDA_Gender_Adj_Prediction', 'TDA_Gender_Adj_Residual', 'TDA_Gender_Adj_Std_Residual'
+      ]);
       dataQuery = `
         SELECT 
           id,
@@ -1398,7 +1440,7 @@ export class EFService {
           [TDA_Gender_Adj_Residual],
           [TDA_Gender_Adj_Std_Residual]
         FROM EF.CEM_SubjectLevelAnalysis
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1407,9 +1449,17 @@ export class EFService {
       countQuery = `
         SELECT COUNT(*) as total
         FROM EF.CEM_SubjectLevelAnalysis
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
     } else if (fileType.type_code === 'HR_EMPLOYEE_DATA') {
+      const whereClause = buildWhereClause([
+        'Year', 'Quarter', 'Month', 'Country', 'Country_City', 'Entity', 'Emp_ID',
+        'Position_Category', 'Attrition', 'FTE', 'Date_of_Birth', 'Date_of_Hire', 'Sect',
+        'Staff_Nationality', 'Gender', 'Teaching_Level', 'Teaching_Subject_Category',
+        'Qualification', 'Date_of_Separation', 'reason_for_leaving', 'Aging', 'Age_Grouping',
+        'Longevity', 'Longevity_Grouping', 'Reason_type', 'Reporting_Year', 'recruitment',
+        'separation', 'Staff_Category', 'Contract_type', 'Key'
+      ]);
       dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
           [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
@@ -1417,27 +1467,30 @@ export class EFService {
           [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
           [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
         FROM EF.HR_EmployeeData
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
       `;
-      countQuery = `SELECT COUNT(*) as total FROM EF.HR_EmployeeData WHERE upload_id = @uploadId;`;
+      countQuery = `SELECT COUNT(*) as total FROM EF.HR_EmployeeData ${whereClause};`;
     } else if (fileType.type_code === 'HR_BUDGET_VS_ACTUAL') {
+      const whereClause = buildWhereClause([
+        'Year', 'Quarter', 'Country', 'Category', 'Budget', 'Key'
+      ]);
       dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
           [Year],[Quarter],[Country],[Category],[Budget],[Key]
         FROM EF.HR_BudgetVsActual
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
       `;
-      countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId;`;
+      countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual ${whereClause};`;
     } else {
       throw new Error(`Unsupported file type: ${fileType.type_code}`);
     }
 
     // Get total count
-    const countResult = await executeQuery<{ total: number }>(countQuery, { uploadId });
+    const countResult = await executeQuery<{ total: number }>(countQuery, params);
     if (countResult.error) {
       throw new Error(`Failed to get data count: ${countResult.error}`);
     }

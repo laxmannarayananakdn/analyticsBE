@@ -471,7 +471,7 @@ router.get('/uploads/:id', async (req: Request, res: Response) => {
 /**
  * GET /api/ef/uploads/:id/data
  * Get paginated data for an upload
- * Query params: page (optional, default 1), limit (optional, default 100)
+ * Query params: page (optional, default 1), limit (optional, default 100), search (optional)
  */
 router.get('/uploads/:id/data', async (req: Request, res: Response) => {
   try {
@@ -486,6 +486,7 @@ router.get('/uploads/:id/data', async (req: Request, res: Response) => {
 
     const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
 
     if (page < 1) {
       return res.status(400).json({
@@ -501,9 +502,9 @@ router.get('/uploads/:id/data', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`📋 Fetching upload data: ${uploadId} (page: ${page}, limit: ${limit})`);
+    console.log(`📋 Fetching upload data: ${uploadId} (page: ${page}, limit: ${limit}, search: ${search || 'none'})`);
 
-    const result = await efService.getUploadData(uploadId, page, limit);
+    const result = await efService.getUploadData(uploadId, page, limit, search);
 
     res.json(result);
   } catch (error: any) {
