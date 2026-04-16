@@ -700,7 +700,7 @@ async function runNexquareSingleEndpoint(
       await nexquareService.getDailyAttendance(config, schoolId, start, end);
       break;
     case 'student-assessments':
-      await nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: loadRpSchema !== false });
+      await nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 100000, 0, undefined, { loadRpSchema: loadRpSchema !== false });
       break;
     default:
       throw new Error(`Unknown Nexquare endpoint: ${endpointName}`);
@@ -773,6 +773,6 @@ async function syncNexquareSchool(
   }
   throwIfAborted(signal);
   if (eps.includes('student-assessments')) {
-    await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 10000, 0, undefined, { loadRpSchema: rpSchema }));
+    await run('student-assessments', () => nexquareService.getStudentAssessments(config, schoolId, ay, undefined, 100000, 0, undefined, { loadRpSchema: rpSchema }));
   }
 }

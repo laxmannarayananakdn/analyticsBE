@@ -193,7 +193,7 @@ export async function getStudentAssessments(
   schoolId?: string,
   academicYear?: string,
   fileName?: string,
-  limit: number = 10000,
+  limit: number = 50000,
   offset: number = 0,
   onLog?: (msg: string) => void,
   options?: { loadRpSchema?: boolean }
@@ -220,21 +220,35 @@ export async function getStudentAssessments(
     }
 
     log(`📋 Step 1: Fetching student assessments from Nexquare API (school: ${targetSchoolId}, academic year: ${defaultAcademicYear}, API param: ${apiAcademicYear})...`);
-    log(`   Using chunked fetching: ${limit} records per request`);
+    log(`   Using chunked fetching: requested ${limit.toLocaleString()} records per request`);
 
     const endpoint = NEXQUARE_ENDPOINTS.STUDENT_ASSESSMENTS;
-    let allRecords: any[] = [];
     let totalInserted = 0;
 
     // Fetch data in chunks to avoid memory issues with large files
     log(`📥 Fetching assessment data in chunks...`);
-    
-    const chunkSize = limit; // Use the limit parameter (default 10000)
+
+    // Keep chunks reasonably large for throughput, but bounded for parse/heap safety.
+    const maxChunkSize = 100000;
+    const chunkSize = Math.max(1, Math.min(limit, maxChunkSize));
+    if (chunkSize !== limit) {
+      log(`   ℹ️  Chunk size adjusted to ${chunkSize.toLocaleString()} (allowed range: 1-${maxChunkSize.toLocaleString()})`);
+    }
     let currentOffset = offset; // Start from the offset parameter (default 0)
     let hasMoreData = true;
     let chunkNumber = 1;
     let totalFetched = 0;
-    
+
+    // Delete existing NEX assessments for school + academic year before insert (prevent duplicates)
+    if (schoolSourcedId) {
+      const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
+      if (deleteError) {
+        log(`⚠️  Failed to delete existing NEX assessments before sync: ${deleteError}`);
+      } else if (deleted > 0) {
+        log(`🗑️  Deleted ${deleted} existing NEX assessment(s) for school/year before sync`);
+      }
+    }
+
     while (hasMoreData) {
       log(`   📦 Fetching chunk ${chunkNumber} (offset: ${currentOffset}, limit: ${chunkSize})...`);
       
@@ -663,9 +677,19 @@ export async function getStudentAssessments(
 
     // Add chunk records to all records
     if (chunkRecords.length > 0) {
-      allRecords.push(...chunkRecords);
       totalFetched += chunkRecords.length;
-      log(`   ✅ Chunk ${chunkNumber} complete: ${chunkRecords.length} records (total so far: ${totalFetched})`);
+      log(`   ✅ Chunk ${chunkNumber} parsed: ${chunkRecords.length} records (total fetched: ${totalFetched})`);
+
+      // Process this chunk immediately to avoid retaining all rows in memory.
+      log(`   💾 Saving chunk ${chunkNumber} records to database...`);
+      try {
+        const chunkInserted = await (this as any).saveAssessmentBatch(chunkRecords, schoolSourcedId, defaultAcademicYear);
+        totalInserted += chunkInserted;
+        log(`   ✅ Chunk ${chunkNumber} saved: ${chunkInserted} record(s) (total saved: ${totalInserted})`);
+      } catch (chunkSaveError: any) {
+        log(`   ❌ Failed to save chunk ${chunkNumber}: ${chunkSaveError.message}`);
+        throw chunkSaveError;
+      }
       
       // Check if we've reached the end (got fewer records than requested)
       if (chunkRecords.length < chunkSize) {
@@ -681,65 +705,25 @@ export async function getStudentAssessments(
       log(`   📊 No records in chunk ${chunkNumber} - reached end of data`);
       hasMoreData = false;
     }
-    
+
+    // Best-effort memory release between chunks.
+    chunkRecords = [];
+    if (typeof global !== 'undefined' && typeof (global as any).gc === 'function') {
+      (global as any).gc();
+    }
+
     // Small delay between requests to avoid rate limiting
     if (hasMoreData) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     } // End of while loop
-    
-    // After fetching all chunks, process all records
-    if (allRecords.length === 0) {
+
+    if (totalFetched === 0) {
       log(`✅ No records found in any chunk.`);
       return [];
     }
 
-    log(`✅ Step 1 complete: Fetched ${allRecords.length} records across all chunks`);
-
-    // Delete existing NEX assessments for school + academic year before insert (prevent duplicates)
-    if (schoolSourcedId) {
-      const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
-      if (deleteError) {
-        log(`⚠️  Failed to delete existing NEX assessments before sync: ${deleteError}`);
-      } else if (deleted > 0) {
-        log(`🗑️  Deleted ${deleted} existing NEX assessment(s) for school/year before sync`);
-      }
-    }
-
-    // Process records by grade_name to reduce memory usage
-    // Group records by grade_name
-    log(`📋 Step 2: Saving assessment records to database (NEX.student_assessments)...`);
-    const recordsByGrade = new Map<string, any[]>();
-    
-    for (const record of allRecords) {
-      const gradeName = String(record['Grade Name'] || record['grade_name'] || 'Unknown').trim();
-      if (!recordsByGrade.has(gradeName)) {
-        recordsByGrade.set(gradeName, []);
-      }
-      recordsByGrade.get(gradeName)!.push(record);
-    }
-    
-    const gradeNames = Array.from(recordsByGrade.keys()).sort();
-    log(`   📊 Found ${gradeNames.length} unique grade(s): ${gradeNames.join(', ')}`);
-    
-    // Process each grade separately to reduce memory pressure
-    for (const gradeName of gradeNames) {
-      const gradeRecords = recordsByGrade.get(gradeName)!;
-      log(`   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
-      
-      try {
-        const gradeInserted = await (this as any).saveAssessmentBatch(gradeRecords, schoolSourcedId, defaultAcademicYear);
-        totalInserted += gradeInserted;
-        log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
-        
-        // Clear the grade records from memory after processing
-        recordsByGrade.delete(gradeName);
-      } catch (gradeError: any) {
-        log(`   ❌ Failed to save records for grade "${gradeName}": ${gradeError.message}`);
-        // Continue with other grades even if one fails
-      }
-    }
-    
+    log(`✅ Step 1 complete: Fetched ${totalFetched} records across all chunks`);
     log(`✅ Step 2 complete: Saved ${totalInserted} record(s) to NEX.student_assessments`);
 
     // Sync data to RP.student_assessments after processing completes (only if loadRpSchema is true)
@@ -768,10 +752,11 @@ export async function getStudentAssessments(
     }
 
     log(`✅ Student assessments sync complete`);
-    log(`   Total records fetched: ${allRecords.length}`);
+    log(`   Total records fetched: ${totalFetched}`);
     log(`   Total records saved: ${totalInserted}`);
 
-    return allRecords;
+    // Intentionally return an empty array to avoid retaining large payloads in memory.
+    return [];
   } catch (error) {
     console.error('Failed to fetch student assessments:', error);
     throw error;
