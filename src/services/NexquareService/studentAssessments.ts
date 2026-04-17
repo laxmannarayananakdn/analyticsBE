@@ -873,135 +873,167 @@ export async function saveAssessmentBatch(
   });
 
   // Use direct batched INSERT statements (simpler and avoids temp table scope issues)
-  const connection = await getConnection();
-  const transaction = new sql.Transaction(connection);
+  const isTransientSqlError = (error: any): boolean => {
+    const code = String(error?.code || error?.originalError?.code || '').toUpperCase();
+    const message = String(error?.message || error?.originalError?.message || '').toLowerCase();
+    return [
+      'ECONNRESET',
+      'ETIMEDOUT',
+      'ETIMEOUT',
+      'ESOCKET',
+      'EPIPE',
+      'ECONNABORTED',
+      'ECONNREFUSED',
+    ].includes(code) ||
+      message.includes('econnreset') ||
+      message.includes('socket') ||
+      message.includes('connection was closed') ||
+      message.includes('connection lost') ||
+      message.includes('timeout');
+  };
 
-  try {
-    await transaction.begin();
-
-    // Batch size: 90 records per batch to stay within SQL Server's 2100 parameter limit
-    // (90 records * 23 columns = 2070 parameters, leaving margin for safety)
-    const batchSize = 90;
-    let totalInserted = 0;
-    const totalBatches = Math.ceil(rowsToInsert.length / batchSize);
-
-    console.log(`   📦 Inserting ${rowsToInsert.length} record(s) in ${totalBatches} batch(es)...`);
-    const startTime = Date.now();
-
-    for (let i = 0; i < rowsToInsert.length; i += batchSize) {
-      const batch = rowsToInsert.slice(i, i + batchSize);
-      const batchNum = Math.floor(i / batchSize) + 1;
-
-      // Build VALUES clause for batch insert
-      const values = batch.map((record, index) => {
-        const baseIndex = i + index;
-        return `(
-          @schoolId${baseIndex},
-          @schoolName${baseIndex},
-          @regionName${baseIndex},
-          @studentName${baseIndex},
-          @registerNumber${baseIndex},
-          @studentStatus${baseIndex},
-          @gradeName${baseIndex},
-          @sectionName${baseIndex},
-          @className${baseIndex},
-          @academicYear${baseIndex},
-          @subjectId${baseIndex},
-          @subjectName${baseIndex},
-          @termId${baseIndex},
-          @termName${baseIndex},
-          @componentName${baseIndex},
-          @componentValue${baseIndex},
-          @maxValue${baseIndex},
-          @dataType${baseIndex},
-          @calculationMethod${baseIndex},
-          @markGradeName${baseIndex},
-          @markRubricName${baseIndex},
-          SYSDATETIMEOFFSET(),
-          SYSDATETIMEOFFSET()
-        )`;
-      }).join(',');
-
-      const batchQuery = `
-        INSERT INTO NEX.student_assessments (
-          school_id, school_name, region_name, student_name, register_number,
-          student_status, grade_name, section_name, class_name, academic_year,
-          subject_id, subject_name, term_id, term_name, component_name,
-          component_value, max_value, data_type, calculation_method,
-          mark_grade_name, mark_rubric_name, created_at, updated_at
-        ) VALUES ${values};
-      `;
-
-      const request = transaction.request();
-      // Add parameters for each record in the batch
-      batch.forEach((record, index) => {
-        const baseIndex = i + index;
-        request.input(`schoolId${baseIndex}`, sql.NVarChar(100), record.school_id || null);
-        request.input(`schoolName${baseIndex}`, sql.NVarChar(sql.MAX), record.school_name || null);
-        request.input(`regionName${baseIndex}`, sql.NVarChar(sql.MAX), record.region_name || null);
-        request.input(`studentName${baseIndex}`, sql.NVarChar(sql.MAX), record.student_name || null);
-        request.input(`registerNumber${baseIndex}`, sql.NVarChar(100), record.register_number || null);
-        request.input(`studentStatus${baseIndex}`, sql.NVarChar(100), record.student_status || null);
-        request.input(`gradeName${baseIndex}`, sql.NVarChar(100), record.grade_name || null);
-        request.input(`sectionName${baseIndex}`, sql.NVarChar(100), record.section_name || null);
-        request.input(`className${baseIndex}`, sql.NVarChar(sql.MAX), record.class_name || null);
-        request.input(`academicYear${baseIndex}`, sql.NVarChar(100), record.academic_year || null);
-        request.input(`subjectId${baseIndex}`, sql.NVarChar(100), record.subject_id || null);
-        request.input(`subjectName${baseIndex}`, sql.NVarChar(sql.MAX), record.subject_name || null);
-        request.input(`termId${baseIndex}`, sql.NVarChar(100), record.term_id || null);
-        request.input(`termName${baseIndex}`, sql.NVarChar(sql.MAX), record.term_name || null);
-        request.input(`componentName${baseIndex}`, sql.NVarChar(sql.MAX), record.component_name || null);
-        // Handle component_value - ensure it's a string and properly formatted
-        let componentValue: string | null = null;
-        if (record.component_value != null && record.component_value !== '') {
-          const strValue = String(record.component_value).trim();
-          componentValue = strValue.length > 0 ? strValue.substring(0, 500) : null;
-        }
-        request.input(`componentValue${baseIndex}`, sql.NVarChar(500), componentValue);
-        request.input(`maxValue${baseIndex}`, sql.Decimal(10, 2), record.max_value || null);
-        request.input(`dataType${baseIndex}`, sql.NVarChar(100), record.data_type || null);
-        request.input(`calculationMethod${baseIndex}`, sql.NVarChar(sql.MAX), record.calculation_method || null);
-        request.input(`markGradeName${baseIndex}`, sql.NVarChar(100), record.mark_grade_name || null);
-        request.input(`markRubricName${baseIndex}`, sql.NVarChar(sql.MAX), record.mark_rubric_name || null);
-      });
-
-      try {
-        await request.query(batchQuery);
-        totalInserted += batch.length;
-
-        if (batchNum % 10 === 0 || batchNum === totalBatches) {
-          console.log(`   Progress: ${batchNum}/${totalBatches} batches (${totalInserted}/${rowsToInsert.length} records)`);
-        }
-      } catch (batchError: any) {
-        console.error(`❌ Error in batch ${batchNum}/${totalBatches}:`, batchError.message);
-        throw batchError;
-      }
-    }
-
-    await transaction.commit();
-
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`   ✅ Bulk insert completed in ${duration} seconds`);
-    
-    return totalInserted;
-  } catch (error: any) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
     try {
-      await transaction.rollback();
-    } catch (rollbackError) {
-      console.warn('   ⚠️  Transaction rollback error (may be already aborted)');
+      await transaction.begin();
+
+      // Batch size: 90 records per batch to stay within SQL Server's 2100 parameter limit
+      // (90 records * 23 columns = 2070 parameters, leaving margin for safety)
+      const batchSize = 90;
+      let totalInserted = 0;
+      const totalBatches = Math.ceil(rowsToInsert.length / batchSize);
+
+      console.log(`   📦 Inserting ${rowsToInsert.length} record(s) in ${totalBatches} batch(es)...`);
+      const startTime = Date.now();
+
+      for (let i = 0; i < rowsToInsert.length; i += batchSize) {
+        const batch = rowsToInsert.slice(i, i + batchSize);
+        const batchNum = Math.floor(i / batchSize) + 1;
+
+        // Build VALUES clause for batch insert
+        const values = batch.map((record, index) => {
+          const baseIndex = i + index;
+          return `(
+            @schoolId${baseIndex},
+            @schoolName${baseIndex},
+            @regionName${baseIndex},
+            @studentName${baseIndex},
+            @registerNumber${baseIndex},
+            @studentStatus${baseIndex},
+            @gradeName${baseIndex},
+            @sectionName${baseIndex},
+            @className${baseIndex},
+            @academicYear${baseIndex},
+            @subjectId${baseIndex},
+            @subjectName${baseIndex},
+            @termId${baseIndex},
+            @termName${baseIndex},
+            @componentName${baseIndex},
+            @componentValue${baseIndex},
+            @maxValue${baseIndex},
+            @dataType${baseIndex},
+            @calculationMethod${baseIndex},
+            @markGradeName${baseIndex},
+            @markRubricName${baseIndex},
+            SYSDATETIMEOFFSET(),
+            SYSDATETIMEOFFSET()
+          )`;
+        }).join(',');
+
+        const batchQuery = `
+          INSERT INTO NEX.student_assessments (
+            school_id, school_name, region_name, student_name, register_number,
+            student_status, grade_name, section_name, class_name, academic_year,
+            subject_id, subject_name, term_id, term_name, component_name,
+            component_value, max_value, data_type, calculation_method,
+            mark_grade_name, mark_rubric_name, created_at, updated_at
+          ) VALUES ${values};
+        `;
+
+        const request = transaction.request();
+        // Add parameters for each record in the batch
+        batch.forEach((record, index) => {
+          const baseIndex = i + index;
+          request.input(`schoolId${baseIndex}`, sql.NVarChar(100), record.school_id || null);
+          request.input(`schoolName${baseIndex}`, sql.NVarChar(sql.MAX), record.school_name || null);
+          request.input(`regionName${baseIndex}`, sql.NVarChar(sql.MAX), record.region_name || null);
+          request.input(`studentName${baseIndex}`, sql.NVarChar(sql.MAX), record.student_name || null);
+          request.input(`registerNumber${baseIndex}`, sql.NVarChar(100), record.register_number || null);
+          request.input(`studentStatus${baseIndex}`, sql.NVarChar(100), record.student_status || null);
+          request.input(`gradeName${baseIndex}`, sql.NVarChar(100), record.grade_name || null);
+          request.input(`sectionName${baseIndex}`, sql.NVarChar(100), record.section_name || null);
+          request.input(`className${baseIndex}`, sql.NVarChar(sql.MAX), record.class_name || null);
+          request.input(`academicYear${baseIndex}`, sql.NVarChar(100), record.academic_year || null);
+          request.input(`subjectId${baseIndex}`, sql.NVarChar(100), record.subject_id || null);
+          request.input(`subjectName${baseIndex}`, sql.NVarChar(sql.MAX), record.subject_name || null);
+          request.input(`termId${baseIndex}`, sql.NVarChar(100), record.term_id || null);
+          request.input(`termName${baseIndex}`, sql.NVarChar(sql.MAX), record.term_name || null);
+          request.input(`componentName${baseIndex}`, sql.NVarChar(sql.MAX), record.component_name || null);
+          // Handle component_value - ensure it's a string and properly formatted
+          let componentValue: string | null = null;
+          if (record.component_value != null && record.component_value !== '') {
+            const strValue = String(record.component_value).trim();
+            componentValue = strValue.length > 0 ? strValue.substring(0, 500) : null;
+          }
+          request.input(`componentValue${baseIndex}`, sql.NVarChar(500), componentValue);
+          request.input(`maxValue${baseIndex}`, sql.Decimal(10, 2), record.max_value || null);
+          request.input(`dataType${baseIndex}`, sql.NVarChar(100), record.data_type || null);
+          request.input(`calculationMethod${baseIndex}`, sql.NVarChar(sql.MAX), record.calculation_method || null);
+          request.input(`markGradeName${baseIndex}`, sql.NVarChar(100), record.mark_grade_name || null);
+          request.input(`markRubricName${baseIndex}`, sql.NVarChar(sql.MAX), record.mark_rubric_name || null);
+        });
+
+        try {
+          await request.query(batchQuery);
+          totalInserted += batch.length;
+
+          if (batchNum % 10 === 0 || batchNum === totalBatches) {
+            console.log(`   Progress: ${batchNum}/${totalBatches} batches (${totalInserted}/${rowsToInsert.length} records)`);
+          }
+        } catch (batchError: any) {
+          console.error(`❌ Error in batch ${batchNum}/${totalBatches}:`, batchError.message);
+          throw batchError;
+        }
+      }
+
+      await transaction.commit();
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      console.log(`   ✅ Bulk insert completed in ${duration} seconds`);
+      return totalInserted;
+    } catch (error: any) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.warn('   ⚠️  Transaction rollback error (may be already aborted)');
+      }
+      const transient = isTransientSqlError(error);
+      const canRetry = transient && attempt < maxAttempts;
+
+      console.error(`   ❌ Bulk insert failed (attempt ${attempt}/${maxAttempts}):`, error.message);
+      console.error('   Error code:', error.code);
+      console.error('   Error number:', error.number);
+      if (error.originalError) {
+        console.error('   Original error:', error.originalError.message);
+      }
+      if (rowsToInsert.length > 0) {
+        console.error('   First record:', JSON.stringify(rowsToInsert[0]).substring(0, 300));
+      }
+
+      if (canRetry) {
+        const delayMs = attempt * 2000;
+        console.warn(`   ⚠️  Transient DB error detected. Retrying in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      throw new Error(`Bulk insert failed: ${error.message || error}`);
     }
-    console.error('   ❌ Bulk insert failed:', error.message);
-    console.error('   Error code:', error.code);
-    console.error('   Error number:', error.number);
-    if (error.originalError) {
-      console.error('   Original error:', error.originalError.message);
-    }
-    // Log first record for debugging
-    if (rowsToInsert.length > 0) {
-      console.error('   First record:', JSON.stringify(rowsToInsert[0]).substring(0, 300));
-    }
-    throw new Error(`Bulk insert failed: ${error.message || error}`);
   }
+
+  throw new Error('Bulk insert failed after all retry attempts');
 }
 
 /**
