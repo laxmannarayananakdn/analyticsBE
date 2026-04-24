@@ -139,46 +139,26 @@ async function applyCalculatedGradesFromMarkTranslation(
   return { cleared, set };
 }
 
-/**
- * Apply mark translation for every distinct academic_year present in RP for this school.
- * Sync often runs for one AY (e.g. 2024-2025) while older AY rows remain; a single-year update would leave them NULL.
- */
-async function applyCalculatedGradesForAllYearsInRp(schoolSourcedId: string): Promise<void> {
-  const res = await executeQuery<{ ay: string }>(
-    `
-    SELECT DISTINCT LTRIM(RTRIM(academic_year)) AS ay
-    FROM RP.student_assessments
-    WHERE school_id = @school_id
-      AND academic_year IS NOT NULL
-      AND LTRIM(RTRIM(academic_year)) != N''
-    ORDER BY ay
-    `,
-    { school_id: schoolSourcedId }
-  );
-  if (res.error) {
-    console.warn(`   ⚠️  calculated_grade: could not list academic years: ${res.error}`);
+async function applyCalculatedGradesForRunYear(
+  schoolSourcedId: string,
+  academicYear?: string
+): Promise<void> {
+  const runAcademicYear = (academicYear || '').trim();
+  if (!runAcademicYear) {
+    console.warn(
+      `   ⚠️  calculated_grade skipped: no academic year provided for this run (to avoid updating all years)`
+    );
     return;
   }
-  const years = res.data?.map((r) => r.ay).filter(Boolean) ?? [];
-  if (years.length === 0) {
-    console.log(`   ℹ️  calculated_grade: no academic_year values in RP for this school; skip`);
+
+  const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, runAcademicYear);
+  if (cg.error) {
+    console.warn(`   ⚠️  calculated_grade failed for academic year ${runAcademicYear}: ${cg.error}`);
     return;
   }
-  let totalSet = 0;
-  let lastError: string | undefined;
-  for (const y of years) {
-    const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, y);
-    if (cg.error) {
-      lastError = cg.error;
-    } else {
-      totalSet += cg.set;
-    }
-  }
-  if (lastError) {
-    console.warn(`   ⚠️  calculated_grade: at least one year failed (last error): ${lastError}`);
-  }
+
   console.log(
-    `   ✅ calculated_grade applied for ${years.length} distinct academic year(s) in RP; ${totalSet} row(s) matched in total`
+    `   ✅ calculated_grade applied for academic year ${runAcademicYear}; ${cg.set} row(s) matched`
   );
 }
 
@@ -1199,7 +1179,7 @@ export async function syncStudentAssessmentsToRP(
     
     console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
 
-    await applyCalculatedGradesForAllYearsInRp(schoolSourcedId);
+    await applyCalculatedGradesForRunYear(schoolSourcedId, academicYear);
 
     // Delete from NEX.student_assessments for this school+academic_year after RP load
     if (academicYear) {

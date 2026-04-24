@@ -164,10 +164,14 @@ export async function getStaffAllocations(
             staff_sourced_id: staffSourcedId,
             school_id: schoolSourcedId,
             academic_year: academicYear,
-            subject_sourced_id: subject.subjectSourcedId || subject.subject_sourced_id || null,
+            // Nexquare staff subject payload typically uses `sourcedId` (not subjectSourcedId)
+            subject_sourced_id: subject.subjectSourcedId || subject.subject_sourced_id || subject.sourcedId || null,
             subject_id: subject.subjectId || subject.subject_id || null,
             subject_name: subject.subjectName || subject.subject_name || null,
-            allocation_type: subject.allocationType || subject.allocation_type || null,
+            // Keep explicit type even when API omits allocationType
+            allocation_type: subject.allocationType || subject.allocation_type || 'subject',
+            // Staff subject payload carries classId/class_id on subject rows
+            class_id: subject.classId || subject.class_id || null,
           });
         } catch (error: any) {
           skippedCount++;
@@ -185,6 +189,7 @@ export async function getStaffAllocations(
             cohort_sourced_id: cohort.sourcedId || cohort.sourced_id || null,
             cohort_id: cohort.cohortId || cohort.cohort_id || null,
             cohort_name: cohort.cohortName || cohort.cohort_name || null,
+            allocation_type: cohort.allocationType || cohort.allocation_type || 'cohort',
           });
         } catch (error: any) {
           skippedCount++;
@@ -202,6 +207,7 @@ export async function getStaffAllocations(
             lesson_sourced_id: lesson.sourcedId || lesson.sourced_id || null,
             lesson_id: lesson.lessonId || lesson.lesson_id || null,
             lesson_name: lesson.lessonName || lesson.lesson_name || null,
+            allocation_type: lesson.allocationType || lesson.allocation_type || 'lesson',
             class_id: lesson.classId || lesson.class_id || null,
           });
         } catch (error: any) {
