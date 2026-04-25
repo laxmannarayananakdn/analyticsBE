@@ -436,7 +436,7 @@ router.get('/schools', async (req: Request, res: Response) => {
 
 /**
  * GET /api/rp-config/academic-years
- * Get academic years from RP Config tables only (subject_mapping).
+ * Get academic years from RP Config tables (subject_mapping + component_filter_config).
  * Optional: school_id - filter years for that school.
  */
 router.get('/academic-years', async (req: Request, res: Response) => {
@@ -451,9 +451,19 @@ router.get('/academic-years', async (req: Request, res: Response) => {
 
     const query = `
       SELECT DISTINCT academic_year
-      FROM admin.subject_mapping
-      WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
-      ${schoolFilter}
+      FROM (
+        SELECT academic_year
+        FROM admin.subject_mapping
+        WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
+        ${schoolFilter}
+
+        UNION
+
+        SELECT academic_year
+        FROM admin.component_filter_config
+        WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
+        ${schoolFilter}
+      ) AS years
       ORDER BY academic_year DESC
     `;
 
@@ -595,18 +605,22 @@ router.get('/subjects', async (req: Request, res: Response) => {
  */
 router.get('/component-filters', async (req: Request, res: Response) => {
   try {
-    const { school_id } = req.query;
+    const { school_id, academic_year } = req.query;
     if (!school_id || typeof school_id !== 'string') {
       return res.status(400).json({ error: 'school_id is required' });
     }
+    if (!academic_year || typeof academic_year !== 'string') {
+      return res.status(400).json({ error: 'academic_year is required' });
+    }
 
     const query = `
-      SELECT id, school_id, filter_type, pattern, display_order, created_at, updated_at
+      SELECT id, school_id, academic_year, filter_type, pattern, display_order, created_at, updated_at
       FROM admin.component_filter_config
       WHERE school_id = @school_id
+        AND academic_year = @academic_year
       ORDER BY display_order, filter_type, id
     `;
-    const result = await executeQuery<any>(query, { school_id });
+    const result = await executeQuery<any>(query, { school_id, academic_year });
     if (result.error) return res.status(500).json({ error: result.error });
 
     res.json({ success: true, data: result.data || [] });
@@ -635,8 +649,8 @@ router.post('/component-filters', async (req: Request, res: Response) => {
     const errors: string[] = [];
 
     for (const f of filters) {
-      const { id, school_id, filter_type, pattern } = f;
-      if (!school_id || !filter_type || !pattern) {
+      const { id, school_id, academic_year, filter_type, pattern } = f;
+      if (!school_id || !academic_year || !filter_type || !pattern) {
         errorCount++;
         errors.push(`Missing required fields: ${JSON.stringify(f)}`);
         continue;
@@ -650,13 +664,21 @@ router.post('/component-filters', async (req: Request, res: Response) => {
       try {
         const request = transaction.request();
         request.input('school_id', sql.NVarChar(200), school_id);
+        request.input('academic_year', sql.NVarChar(200), academic_year);
         request.input('filter_type', sql.NVarChar(20), filter_type);
         request.input('pattern', sql.NVarChar(500), pattern);
         if (id) {
           request.input('id', sql.BigInt, id);
-          await request.query(`UPDATE admin.component_filter_config SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET() WHERE id=@id AND school_id=@school_id`);
+          await request.query(`
+            UPDATE admin.component_filter_config
+            SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET()
+            WHERE id=@id AND school_id=@school_id AND academic_year=@academic_year
+          `);
         } else {
-          await request.query(`INSERT INTO admin.component_filter_config (school_id, filter_type, pattern) VALUES (@school_id, @filter_type, @pattern)`);
+          await request.query(`
+            INSERT INTO admin.component_filter_config (school_id, academic_year, filter_type, pattern)
+            VALUES (@school_id, @academic_year, @filter_type, @pattern)
+          `);
         }
         successCount++;
       } catch (err: any) {

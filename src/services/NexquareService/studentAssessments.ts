@@ -43,7 +43,7 @@ function computeAcademicYearEndDateForMarks(academicYear: string): string {
  * - Resolves school node via admin.Node_School (nex).
  * - Walks ancestors; nearest node with a matching rule wins.
  * - Uses latest effective_date per (node, grade) where effective_date <= @ay_end.
- * - Numeric component_value must fall in [marks_start, marks_end].
+ * - Percentage ((component_value / max_value) * 100) must fall in [marks_start, marks_end].
  */
 async function applyCalculatedGradesFromMarkTranslation(
   schoolSourcedId: string,
@@ -114,8 +114,14 @@ async function applyCalculatedGradesFromMarkTranslation(
       INNER JOIN CfgRows c
         ON LTRIM(RTRIM(rsa.grade_name)) = LTRIM(RTRIM(c.grade_name))
        AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) IS NOT NULL
-       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) >= c.marks_start
-       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) <= c.marks_end
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.max_value) IS NOT NULL
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.max_value) > 0
+       AND (
+            (TRY_CONVERT(DECIMAL(10, 4), rsa.component_value) / TRY_CONVERT(DECIMAL(10, 4), rsa.max_value)) * 100.0
+           ) >= c.marks_start
+       AND (
+            (TRY_CONVERT(DECIMAL(10, 4), rsa.component_value) / TRY_CONVERT(DECIMAL(10, 4), rsa.max_value)) * 100.0
+           ) <= c.marks_end
       WHERE rsa.school_id = @school_id
         AND REPLACE(LTRIM(RTRIM(ISNULL(rsa.academic_year, N''))), N' ', N'') = REPLACE(LTRIM(RTRIM(@academic_year)), N' ', N'')
     )
@@ -1046,8 +1052,16 @@ export async function syncStudentAssessmentsToRP(
     // Fetch component filters and term filters (tables created by create_rp_filter_tables.sql)
     let compFilters: { filter_type: string; pattern: string }[] = [];
     const compResult = await executeQuery<{ filter_type: string; pattern: string }>(
-      `SELECT filter_type, pattern FROM admin.component_filter_config WHERE school_id = @school_id`,
-      { school_id: schoolSourcedId }
+      `
+        SELECT filter_type, pattern
+        FROM admin.component_filter_config
+        WHERE school_id = @school_id
+          AND (
+            (@academic_year IS NOT NULL AND academic_year = @academic_year)
+            OR (@academic_year IS NULL AND (academic_year IS NULL OR LTRIM(RTRIM(academic_year)) = ''))
+          )
+      `,
+      { school_id: schoolSourcedId, academic_year: academicYear || null }
     );
     if (compResult.error) {
       console.log(`   ℹ️  Component filters not available (${compResult.error}) - including all components`);
