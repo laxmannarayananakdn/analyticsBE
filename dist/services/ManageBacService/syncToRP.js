@@ -34,6 +34,55 @@ export async function syncManageBacToRP(schoolId, academicYear) {
         throw new Error(`Delete RP failed: ${deleteError}`);
     }
     const insertQuery = `
+    ;WITH src AS (
+      SELECT
+        CAST(c.school_id AS NVARCHAR(50)) AS school_id,
+        sch.name AS school_name,
+        sch.country AS region_name,
+        RTRIM(LTRIM(ISNULL(s.first_name,'') + ' ' + ISNULL(s.last_name,''))) AS student_name,
+        ISNULL(s.uniq_student_id, CAST(s.id AS NVARCHAR(50))) AS register_number,
+        CASE WHEN s.archived = 1 THEN 'Archived' ELSE 'Active' END AS student_status,
+        CAST(c.grade_number AS NVARCHAR(50)) AS grade_name,
+        c.class_section AS section_name,
+        c.name AS class_name,
+        ay.name AS academic_year,
+        CAST(subj.id AS NVARCHAR(200)) AS subject_id,
+        subj.name AS subject_name,
+        CAST(tg.term_id AS NVARCHAR(200)) AS term_id,
+        at.name AS term_name,
+        b.title AS component_name,
+        b.grade AS component_value,
+        b.id AS rubric_id
+      FROM MB.term_grade_rubrics b
+      INNER JOIN MB.term_grades tg ON b.term_grade_id = tg.id
+      INNER JOIN MB.students s ON tg.student_id = s.id
+      INNER JOIN MB.classes c ON tg.class_id = c.id
+      INNER JOIN MB.subjects subj ON c.subject_id = subj.id
+      INNER JOIN MB.academic_terms at ON tg.term_id = at.id
+      INNER JOIN MB.academic_years ay ON at.academic_year_id = ay.id
+      INNER JOIN MB.schools sch ON c.school_id = sch.id
+      WHERE b.grade IS NOT NULL
+        AND c.school_id = @school_id_bigint
+        AND ay.name = @academic_year
+        AND (
+          EXISTS (
+            SELECT 1 FROM admin.mb_term_grade_rubric_config cfg
+            WHERE cfg.school_id = c.school_id
+              AND cfg.academic_year = ay.name
+              AND cfg.grade_number = c.grade_number
+              AND cfg.rubric_title = b.title
+              AND cfg.term_id = tg.term_id
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM admin.mb_term_grade_rubric_config cfg
+            WHERE cfg.school_id = c.school_id AND cfg.academic_year = ay.name
+          )
+        )
+    ),
+    numbered AS (
+      SELECT *, ROW_NUMBER() OVER (ORDER BY rubric_id) AS rn
+      FROM src
+    )
     INSERT INTO RP.student_assessments (
       nex_assessment_id, school_id, school_name, region_name, student_name, register_number,
       student_status, grade_name, section_name, class_name, academic_year, subject_id, subject_name,
@@ -41,62 +90,32 @@ export async function syncManageBacToRP(schoolId, academicYear) {
       mark_grade_name, mark_rubric_name, reported_subject, created_at, updated_at
     )
     SELECT
-      NULL,
-      CAST(c.school_id AS NVARCHAR(50)),
-      sch.name,
-      sch.country,
-      RTRIM(LTRIM(ISNULL(s.first_name,'') + ' ' + ISNULL(s.last_name,''))) ,
-      ISNULL(s.uniq_student_id, CAST(s.id AS NVARCHAR(50))),
-      CASE WHEN s.archived = 1 THEN 'Archived' ELSE 'Active' END,
-      CAST(c.grade_number AS NVARCHAR(50)),
-      c.class_section,
-      c.name,
-      ay.name,
-      CAST(subj.id AS NVARCHAR(200)),
-      subj.name,
-      CAST(tg.term_id AS NVARCHAR(200)),
-      at.name,
-      b.title,
-      b.grade,
+      (SELECT ISNULL(MAX(nex_assessment_id), 0) FROM RP.student_assessments) + n.rn,
+      n.school_id,
+      n.school_name,
+      n.region_name,
+      n.student_name,
+      n.register_number,
+      n.student_status,
+      n.grade_name,
+      n.section_name,
+      n.class_name,
+      n.academic_year,
+      n.subject_id,
+      n.subject_name,
+      n.term_id,
+      n.term_name,
+      n.component_name,
+      n.component_value,
       NULL,
       'grade',
       NULL,
-      b.grade,
-      b.title,
-      COALESCE(sm.reported_subject, subj.name),
+      n.component_value,
+      n.component_name,
+      n.subject_name,
       SYSDATETIMEOFFSET(),
       SYSDATETIMEOFFSET()
-    FROM MB.term_grade_rubrics b
-    INNER JOIN MB.term_grades tg ON b.term_grade_id = tg.id
-    INNER JOIN MB.students s ON tg.student_id = s.id
-    INNER JOIN MB.classes c ON tg.class_id = c.id
-    INNER JOIN MB.subjects subj ON c.subject_id = subj.id
-    INNER JOIN MB.academic_terms at ON tg.term_id = at.id
-    INNER JOIN MB.academic_years ay ON at.academic_year_id = ay.id
-    INNER JOIN MB.schools sch ON c.school_id = sch.id
-    LEFT JOIN admin.subject_mapping sm
-      ON sm.school_id = CAST(c.school_id AS NVARCHAR(200))
-      AND sm.academic_year = ay.name
-      AND sm.grade = CAST(c.grade_number AS NVARCHAR(200))
-      AND sm.subject = subj.name
-      AND sm.reported_subject IS NOT NULL AND LTRIM(RTRIM(sm.reported_subject)) != ''
-    WHERE b.grade IS NOT NULL
-      AND c.school_id = @school_id_bigint
-      AND ay.name = @academic_year
-      AND (
-        EXISTS (
-          SELECT 1 FROM admin.mb_term_grade_rubric_config cfg
-          WHERE cfg.school_id = c.school_id
-            AND cfg.academic_year = ay.name
-            AND cfg.grade_number = c.grade_number
-            AND cfg.rubric_title = b.title
-            AND cfg.term_id = tg.term_id
-        )
-        OR NOT EXISTS (
-          SELECT 1 FROM admin.mb_term_grade_rubric_config cfg
-          WHERE cfg.school_id = c.school_id AND cfg.academic_year = ay.name
-        )
-      );
+    FROM numbered n;
     SELECT @@ROWCOUNT AS rows_affected;
   `;
     const result = await request.query(insertQuery);

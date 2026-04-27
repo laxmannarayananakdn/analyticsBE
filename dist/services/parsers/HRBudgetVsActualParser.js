@@ -77,8 +77,7 @@ export class HRBudgetVsActualParser {
             const colCountry = idx('country') >= 0 ? idx('country') : 2;
             const colCategory = idx('category') >= 0 ? idx('category') : 3;
             const colBudget = idx('budget') >= 0 ? idx('budget') : 4;
-            const colActual = idx('actual') >= 0 ? idx('actual') : 5;
-            const colKey = idx('key') >= 0 ? idx('key') : 6;
+            const colKey = idx('key') >= 0 ? idx('key') : 5;
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
                 totalRows++;
@@ -111,7 +110,6 @@ export class HRBudgetVsActualParser {
                     Country: country ?? undefined,
                     Category: str(colCategory) ?? undefined,
                     Budget: num(colBudget) ?? undefined,
-                    Actual: num(colActual) ?? undefined,
                     Key: str(colKey) ?? undefined
                 });
             }

@@ -1,0 +1,1 @@
+{"version":3,"file":"FinanceTrialBalanceParser.d.ts","sourceRoot":"","sources":["../../../src/services/parsers/FinanceTrialBalanceParser.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,gBAAgB,EAA0B,MAAM,uBAAuB,CAAC;AACjF,OAAO,EAAE,yBAAyB,EAAE,MAAM,mBAAmB,CAAC;AAE9D,qBAAa,yBAAyB;IAC9B,wBAAwB,CAC5B,UAAU,EAAE,MAAM,EAClB,eAAe,GAAE,OAAe,GAC/B,OAAO,CAAC,gBAAgB,CAAC,yBAAyB,CAAC,CAAC;CAkJxD"}

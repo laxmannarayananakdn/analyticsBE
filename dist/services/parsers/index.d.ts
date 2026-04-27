@@ -2,7 +2,7 @@
  * File Parser Factory
  * Selects and uses the appropriate parser based on file type
  */
-import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis, HREmployeeData, HRBudgetVsActual } from '../../types/ef.js';
+import { IBExternalExam, MSNAVFinancialAid, CEMPredictionReport, CEMSubjectLevelAnalysis, HREmployeeData, HRBudgetVsActual, FinanceDictionaryRecord, FinanceTrialBalanceRecord } from '../../types/ef.js';
 import { ValidationResult } from '../../types/errors.js';
 export type ParseResult<T> = ValidationResult<T>;
 export declare class FileParserFactory {
@@ -12,6 +12,8 @@ export declare class FileParserFactory {
     private cemSubjectParser;
     private hrEmployeeParser;
     private hrBudgetParser;
+    private financeDictionaryParser;
+    private financeTrialBalanceParser;
     constructor();
     /**
      * Parse file based on file type code
@@ -20,7 +22,7 @@ export declare class FileParserFactory {
      * @param skipInvalidRows - Whether to skip invalid rows or fail on first error
      * @returns Validation result with data or errors
      */
-    parseFile(fileTypeCode: string, fileBuffer: Buffer, skipInvalidRows?: boolean): Promise<ParseResult<IBExternalExam | MSNAVFinancialAid | CEMPredictionReport | CEMSubjectLevelAnalysis | HREmployeeData | HRBudgetVsActual>>;
+    parseFile(fileTypeCode: string, fileBuffer: Buffer, skipInvalidRows?: boolean): Promise<ParseResult<IBExternalExam | MSNAVFinancialAid | CEMPredictionReport | CEMSubjectLevelAnalysis | HREmployeeData | HRBudgetVsActual | FinanceDictionaryRecord | FinanceTrialBalanceRecord>>;
     /**
      * Parse IB External Exams file
      */
@@ -53,4 +55,6 @@ export { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
 export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 export { HREmployeeDataParser } from './HREmployeeDataParser.js';
 export { HRBudgetVsActualParser } from './HRBudgetVsActualParser.js';
+export { FinanceDictionaryParser } from './FinanceDictionaryParser.js';
+export { FinanceTrialBalanceParser } from './FinanceTrialBalanceParser.js';
 //# sourceMappingURL=index.d.ts.map

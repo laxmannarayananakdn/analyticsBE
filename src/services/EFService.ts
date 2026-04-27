@@ -14,10 +14,26 @@ import {
   CEMPredictionReport,
   CEMSubjectLevelAnalysis,
   HREmployeeData,
-  HRBudgetVsActual
+  HRBudgetVsActual,
+  FinanceDictionaryRecord,
+  FinanceTrialBalanceRecord
 } from '../types/ef.js';
 
 export class EFService {
+  private static readonly FINANCE_DICTIONARY_CODES = new Set([
+    'FIN_DIC_ACCOUNT',
+    'FIN_DIC_ACTIVITY',
+    'FIN_DIC_DEPARTMENT',
+    'FIN_DIC_FIXED_ASSETS',
+    'FIN_DIC_OPERATING_UNIT',
+    'FIN_DIC_PARTY',
+    'FIN_DIC_PROJECT',
+    'FIN_DIC_REFERENCE',
+    'FIN_DIC_REGION',
+    'FIN_DIC_RESOURCE',
+    'FIN_DIC_SOURCE_OF_FUND'
+  ]);
+
   /**
    * Get MB (ManageBac) schools for MSNAV Financial Aid upload dropdown.
    * MSNAV data is for MB schools only; UCI matches MB.students.uniq_student_id.
@@ -950,6 +966,162 @@ export class EFService {
     }
   }
 
+  async deleteAllFINDictionaryByType(dictionaryType: string): Promise<void> {
+    const result = await executeQuery(
+      `DELETE FROM FIN.DictionaryData WHERE dictionary_type = @dictionaryType;`,
+      { dictionaryType }
+    );
+    if (result.error) {
+      throw new Error(`Failed to delete FIN dictionary data (${dictionaryType}): ${result.error}`);
+    }
+  }
+
+  async deleteAllFINTrialBalanceByType(tbType: 'ACTUAL' | 'BUDGET'): Promise<void> {
+    const result = await executeQuery(
+      `DELETE FROM FIN.TrialBalance WHERE tb_type = @tbType;`,
+      { tbType }
+    );
+    if (result.error) {
+      throw new Error(`Failed to delete FIN trial balance data (${tbType}): ${result.error}`);
+    }
+  }
+
+  async insertFINDictionary(
+    uploadId: number,
+    fileName: string,
+    uploadedBy: string,
+    dictionaryType: string,
+    records: FinanceDictionaryRecord[]
+  ): Promise<number> {
+    if (records.length === 0) return 0;
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+
+    try {
+      await transaction.begin();
+      const batchSize = 100;
+      let totalInserted = 0;
+
+      for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+        const values = batch.map((_, index) => {
+          const baseIndex = i + index;
+          return `(
+            @uploadId, @fileName, @uploadedBy, @dictionaryType,
+            @code${baseIndex}, @description${baseIndex}, @suspended${baseIndex}, @entity${baseIndex},
+            @groupDimension${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+          )`;
+        }).join(',');
+
+        const query = `
+          INSERT INTO FIN.DictionaryData (
+            upload_id, file_name, uploaded_by, dictionary_type,
+            code, description, suspended, entity, group_dimension, last_updated_by, last_updated_at
+          ) VALUES ${values};
+        `;
+
+        const request = transaction.request();
+        request.input('uploadId', sql.BigInt, uploadId);
+        request.input('fileName', sql.NVarChar, fileName);
+        request.input('uploadedBy', sql.NVarChar, uploadedBy);
+        request.input('dictionaryType', sql.NVarChar(50), dictionaryType);
+
+        batch.forEach((record, index) => {
+          const baseIndex = i + index;
+          request.input(`code${baseIndex}`, sql.NVarChar(100), record.code ?? null);
+          request.input(`description${baseIndex}`, sql.NVarChar(500), record.description ?? null);
+          request.input(`suspended${baseIndex}`, sql.NVarChar(50), record.suspended ?? null);
+          request.input(`entity${baseIndex}`, sql.NVarChar(100), record.entity ?? null);
+          request.input(`groupDimension${baseIndex}`, sql.NVarChar(100), record.group_dimension ?? null);
+        });
+
+        await request.query(query);
+        totalInserted += batch.length;
+      }
+
+      await transaction.commit();
+      return totalInserted;
+    } catch (error: any) {
+      await transaction.rollback();
+      throw new Error(`Failed to insert FIN dictionary records: ${error.message || error}`);
+    }
+  }
+
+  async insertFINTrialBalance(
+    uploadId: number,
+    fileName: string,
+    uploadedBy: string,
+    tbType: 'ACTUAL' | 'BUDGET',
+    records: FinanceTrialBalanceRecord[]
+  ): Promise<number> {
+    if (records.length === 0) return 0;
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+
+    try {
+      await transaction.begin();
+      const batchSize = 100;
+      let totalInserted = 0;
+
+      for (let i = 0; i < records.length; i += batchSize) {
+        const batch = records.slice(i, i + batchSize);
+        const values = batch.map((_, index) => {
+          const baseIndex = i + index;
+          return `(
+            @uploadId, @fileName, @uploadedBy, @tbType,
+            @mainAccount${baseIndex}, @fundingSource${baseIndex}, @region${baseIndex}, @operatingUnit${baseIndex},
+            @department${baseIndex}, @project${baseIndex}, @activity${baseIndex}, @resource${baseIndex},
+            @party${baseIndex}, @fixedAssets${baseIndex}, @reference${baseIndex}, @debit${baseIndex},
+            @credit${baseIndex}, @status${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+          )`;
+        }).join(',');
+
+        const query = `
+          INSERT INTO FIN.TrialBalance (
+            upload_id, file_name, uploaded_by, tb_type,
+            main_account, funding_source, region, operating_unit, department, project, activity,
+            resource, party, fixed_assets, reference, debit, credit, status, last_updated_by, last_updated_at
+          ) VALUES ${values};
+        `;
+
+        const request = transaction.request();
+        request.input('uploadId', sql.BigInt, uploadId);
+        request.input('fileName', sql.NVarChar, fileName);
+        request.input('uploadedBy', sql.NVarChar, uploadedBy);
+        request.input('tbType', sql.NVarChar(20), tbType);
+
+        batch.forEach((record, index) => {
+          const baseIndex = i + index;
+          request.input(`mainAccount${baseIndex}`, sql.NVarChar(100), record.main_account ?? null);
+          request.input(`fundingSource${baseIndex}`, sql.NVarChar(100), record.funding_source ?? null);
+          request.input(`region${baseIndex}`, sql.NVarChar(100), record.region ?? null);
+          request.input(`operatingUnit${baseIndex}`, sql.NVarChar(100), record.operating_unit ?? null);
+          request.input(`department${baseIndex}`, sql.NVarChar(100), record.department ?? null);
+          request.input(`project${baseIndex}`, sql.NVarChar(100), record.project ?? null);
+          request.input(`activity${baseIndex}`, sql.NVarChar(100), record.activity ?? null);
+          request.input(`resource${baseIndex}`, sql.NVarChar(100), record.resource ?? null);
+          request.input(`party${baseIndex}`, sql.NVarChar(100), record.party ?? null);
+          request.input(`fixedAssets${baseIndex}`, sql.NVarChar(100), record.fixed_assets ?? null);
+          request.input(`reference${baseIndex}`, sql.NVarChar(100), record.reference ?? null);
+          request.input(`debit${baseIndex}`, sql.Decimal(19, 4), record.debit ?? null);
+          request.input(`credit${baseIndex}`, sql.Decimal(19, 4), record.credit ?? null);
+          request.input(`status${baseIndex}`, sql.NVarChar(100), record.status ?? null);
+        });
+
+        await request.query(query);
+        totalInserted += batch.length;
+      }
+
+      await transaction.commit();
+      return totalInserted;
+    } catch (error: any) {
+      await transaction.rollback();
+      throw new Error(`Failed to insert FIN trial balance records: ${error.message || error}`);
+    }
+  }
+
   /** File types that support Promote to RP (EF → reporting tables). */
   private static readonly PROMOTABLE_TO_RP = new Set([
     'HR_EMPLOYEE_DATA',
@@ -1485,6 +1657,40 @@ export class EFService {
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
       `;
       countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual ${whereClause};`;
+    } else if (EFService.FINANCE_DICTIONARY_CODES.has(fileType.type_code)) {
+      const whereClause = buildWhereClause([
+        'dictionary_type', 'code', 'description', 'suspended', 'entity', 'group_dimension',
+        'last_updated_by'
+      ]);
+      dataQuery = `
+        SELECT
+          id, upload_id, file_name, uploaded_at, uploaded_by,
+          dictionary_type, code, description, suspended, entity, group_dimension,
+          last_updated_by, last_updated_at
+        FROM FIN.DictionaryData
+        ${whereClause}
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+      countQuery = `SELECT COUNT(*) as total FROM FIN.DictionaryData ${whereClause};`;
+    } else if (fileType.type_code === 'FIN_TB_ACTUAL' || fileType.type_code === 'FIN_TB_BUDGET') {
+      const whereClause = buildWhereClause([
+        'tb_type', 'main_account', 'funding_source', 'region', 'operating_unit', 'department',
+        'project', 'activity', 'resource', 'party', 'fixed_assets', 'reference',
+        'debit', 'credit', 'status', 'last_updated_by'
+      ]);
+      dataQuery = `
+        SELECT
+          id, upload_id, file_name, uploaded_at, uploaded_by,
+          tb_type, main_account, funding_source, region, operating_unit, department, project, activity,
+          resource, party, fixed_assets, reference, debit, credit, status,
+          last_updated_by, last_updated_at
+        FROM FIN.TrialBalance
+        ${whereClause}
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+      countQuery = `SELECT COUNT(*) as total FROM FIN.TrialBalance ${whereClause};`;
     } else {
       throw new Error(`Unsupported file type: ${fileType.type_code}`);
     }
@@ -1551,7 +1757,9 @@ export class EFService {
       'CEM_PredictionReport',
       'CEM_SubjectLevelAnalysis',
       'HR_EmployeeData',
-      'HR_BudgetVsActual'
+      'HR_BudgetVsActual',
+      'FIN_DictionaryData',
+      'FIN_TrialBalance'
     ];
 
     if (!allowedTables.includes(targetTable)) {
@@ -1567,10 +1775,13 @@ export class EFService {
       // Delete from the appropriate data table using dynamic table name
       // Table name is whitelist-validated and comes from trusted database source
       // Using square brackets for SQL Server identifier quoting
-      const deleteDataQuery = `
-        DELETE FROM EF.[${targetTable}]
-        WHERE upload_id = @uploadId;
-      `;
+      const dataTableRef =
+        targetTable === 'FIN_DictionaryData'
+          ? 'FIN.DictionaryData'
+          : targetTable === 'FIN_TrialBalance'
+            ? 'FIN.TrialBalance'
+            : `EF.[${targetTable}]`;
+      const deleteDataQuery = `DELETE FROM ${dataTableRef} WHERE upload_id = @uploadId;`;
 
       const deleteUploadQuery = `
         DELETE FROM EF.Uploads

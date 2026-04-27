@@ -8,6 +8,8 @@ import { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
 import { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 import { HREmployeeDataParser } from './HREmployeeDataParser.js';
 import { HRBudgetVsActualParser } from './HRBudgetVsActualParser.js';
+import { FinanceDictionaryParser } from './FinanceDictionaryParser.js';
+import { FinanceTrialBalanceParser } from './FinanceTrialBalanceParser.js';
 export class FileParserFactory {
     ibParser;
     msnavParser;
@@ -15,6 +17,8 @@ export class FileParserFactory {
     cemSubjectParser;
     hrEmployeeParser;
     hrBudgetParser;
+    financeDictionaryParser;
+    financeTrialBalanceParser;
     constructor() {
         this.ibParser = new IBExternalExamParser();
         this.msnavParser = new MSNAVFinancialAidParser();
@@ -22,6 +26,8 @@ export class FileParserFactory {
         this.cemSubjectParser = new CEMSubjectLevelAnalysisParser();
         this.hrEmployeeParser = new HREmployeeDataParser();
         this.hrBudgetParser = new HRBudgetVsActualParser();
+        this.financeDictionaryParser = new FinanceDictionaryParser();
+        this.financeTrialBalanceParser = new FinanceTrialBalanceParser();
     }
     /**
      * Parse file based on file type code
@@ -45,12 +51,27 @@ export class FileParserFactory {
                     return await this.hrEmployeeParser.parseHREmployeeData(fileBuffer, skipInvalidRows);
                 case 'HR_BUDGET_VS_ACTUAL':
                     return await this.hrBudgetParser.parseHRBudgetVsActual(fileBuffer, skipInvalidRows);
+                case 'FIN_DIC_ACCOUNT':
+                case 'FIN_DIC_ACTIVITY':
+                case 'FIN_DIC_DEPARTMENT':
+                case 'FIN_DIC_FIXED_ASSETS':
+                case 'FIN_DIC_OPERATING_UNIT':
+                case 'FIN_DIC_PARTY':
+                case 'FIN_DIC_PROJECT':
+                case 'FIN_DIC_REFERENCE':
+                case 'FIN_DIC_REGION':
+                case 'FIN_DIC_RESOURCE':
+                case 'FIN_DIC_SOURCE_OF_FUND':
+                    return await this.financeDictionaryParser.parseFinanceDictionary(fileBuffer, skipInvalidRows);
+                case 'FIN_TB_ACTUAL':
+                case 'FIN_TB_BUDGET':
+                    return await this.financeTrialBalanceParser.parseFinanceTrialBalance(fileBuffer, skipInvalidRows);
                 default:
                     return {
                         valid: false,
                         errors: [{
                                 code: 'UNSUPPORTED_FILE_TYPE',
-                                message: `Unsupported file type: ${fileTypeCode}. Supported types: IB_EXTERNAL_EXAMS, MSNAV_FINANCIAL_AID, CEM_INITIAL, CEM_FINAL, HR_EMPLOYEE_DATA, HR_BUDGET_VS_ACTUAL`,
+                                message: `Unsupported file type: ${fileTypeCode}`,
                                 step: 'PARSE'
                             }],
                         skippedRows: 0,
@@ -117,4 +138,6 @@ export { CEMPredictionReportParser } from './CEMPredictionReportParser.js';
 export { CEMSubjectLevelAnalysisParser } from './CEMSubjectLevelAnalysisParser.js';
 export { HREmployeeDataParser } from './HREmployeeDataParser.js';
 export { HRBudgetVsActualParser } from './HRBudgetVsActualParser.js';
+export { FinanceDictionaryParser } from './FinanceDictionaryParser.js';
+export { FinanceTrialBalanceParser } from './FinanceTrialBalanceParser.js';
 //# sourceMappingURL=index.js.map

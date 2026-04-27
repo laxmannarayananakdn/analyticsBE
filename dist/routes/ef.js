@@ -52,6 +52,24 @@ router.get('/file-types', async (req, res) => {
     }
 });
 /**
+ * GET /api/ef/mb-schools
+ * Returns MB (ManageBac) schools for MSNAV Financial Aid upload dropdown.
+ * MSNAV is for MB schools only; UCI matches MB.students.uniq_student_id.
+ */
+router.get('/mb-schools', async (req, res) => {
+    try {
+        const schools = await efService.getMBSchools();
+        res.json({ schools });
+    }
+    catch (error) {
+        console.error('❌ Error fetching MB schools:', error);
+        res.status(500).json({
+            error: 'Failed to fetch MB schools',
+            message: error.message
+        });
+    }
+});
+/**
  * POST /api/ef/upload
  * Upload and process a file
  */
@@ -100,6 +118,7 @@ router.post('/upload', (req, res, next) => {
             });
         }
         const uploadedBy = req.body.uploadedBy || 'Admin';
+        const schoolId = req.body.schoolId ?? req.body.school_id ?? null;
         const skipInvalidRows = req.body.skipInvalidRows === 'true' || req.body.skipInvalidRows === true;
         const fileName = req.file.originalname;
         const fileBuffer = req.file.buffer;
@@ -146,7 +165,20 @@ router.post('/upload', (req, res, next) => {
             });
         }
         // Step 3: Create upload record with status 'PROCESSING'
-        uploadId = await efService.createUpload(fileTypeCode, fileName, fileSize, uploadedBy);
+        // schoolId required for MSNAV_FINANCIAL_AID (stored on upload; used when promoting to RP / refresh)
+        const isMsnav = fileTypeCode.toUpperCase() === 'MSNAV_FINANCIAL_AID';
+        if (isMsnav && !schoolId) {
+            return res.status(400).json({
+                code: ErrorCode.INVALID_FILE_TYPE,
+                message: 'schoolId is required for MSNAV Financial Aid uploads',
+                errors: [{
+                        code: ErrorCode.INVALID_FILE_TYPE,
+                        message: 'Please provide schoolId when uploading MSNAV Financial Aid files',
+                        step: 'VALIDATION'
+                    }]
+            });
+        }
+        uploadId = await efService.createUpload(fileTypeCode, fileName, fileSize, uploadedBy, schoolId || undefined);
         console.log(`✅ Created upload record: ${uploadId}`);
         // Step 5: Parse the file using appropriate parser
         console.log(`📝 Parsing file...`);
@@ -212,11 +244,37 @@ router.post('/upload', (req, res, next) => {
             'CEM_INITIAL': async (id, name, by, recs) => await efService.insertCEMPredictionReport(id, name, by, recs),
             'CEM_FINAL': async (id, name, by, recs) => await efService.insertCEMSubjectLevelAnalysis(id, name, by, recs),
             'HR_EMPLOYEE_DATA': async (id, name, by, recs) => await efService.insertHREmployeeData(id, name, by, recs),
-            'HR_BUDGET_VS_ACTUAL': async (id, name, by, recs) => await efService.insertHRBudgetVsActual(id, name, by, recs)
+            'HR_BUDGET_VS_ACTUAL': async (id, name, by, recs) => await efService.insertHRBudgetVsActual(id, name, by, recs),
+            'FIN_DIC_ACCOUNT': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'ACCOUNT', recs),
+            'FIN_DIC_ACTIVITY': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'ACTIVITY', recs),
+            'FIN_DIC_DEPARTMENT': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'DEPARTMENT', recs),
+            'FIN_DIC_FIXED_ASSETS': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'FIXED_ASSETS', recs),
+            'FIN_DIC_OPERATING_UNIT': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'OPERATING_UNIT', recs),
+            'FIN_DIC_PARTY': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'PARTY', recs),
+            'FIN_DIC_PROJECT': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'PROJECT', recs),
+            'FIN_DIC_REFERENCE': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'REFERENCE', recs),
+            'FIN_DIC_REGION': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'REGION', recs),
+            'FIN_DIC_RESOURCE': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'RESOURCE', recs),
+            'FIN_DIC_SOURCE_OF_FUND': async (id, name, by, recs) => await efService.insertFINDictionary(id, name, by, 'SOURCE_OF_FUND', recs),
+            'FIN_TB_ACTUAL': async (id, name, by, recs) => await efService.insertFINTrialBalance(id, name, by, 'ACTUAL', recs),
+            'FIN_TB_BUDGET': async (id, name, by, recs) => await efService.insertFINTrialBalance(id, name, by, 'BUDGET', recs)
         };
         const fileTypeUpper = fileTypeCode.toUpperCase();
         // HR types: overwrite previous data before insert
         const hrFileTypes = ['HR_EMPLOYEE_DATA', 'HR_BUDGET_VS_ACTUAL'];
+        const financeDictionaryFileTypes = [
+            'FIN_DIC_ACCOUNT',
+            'FIN_DIC_ACTIVITY',
+            'FIN_DIC_DEPARTMENT',
+            'FIN_DIC_FIXED_ASSETS',
+            'FIN_DIC_OPERATING_UNIT',
+            'FIN_DIC_PARTY',
+            'FIN_DIC_PROJECT',
+            'FIN_DIC_REFERENCE',
+            'FIN_DIC_REGION',
+            'FIN_DIC_RESOURCE',
+            'FIN_DIC_SOURCE_OF_FUND'
+        ];
         if (hrFileTypes.includes(fileTypeUpper)) {
             if (fileTypeUpper === 'HR_EMPLOYEE_DATA') {
                 await efService.deleteAllHREmployeeData();
@@ -224,6 +282,14 @@ router.post('/upload', (req, res, next) => {
             else {
                 await efService.deleteAllHRBudgetVsActual();
             }
+        }
+        else if (financeDictionaryFileTypes.includes(fileTypeUpper)) {
+            const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
+            await efService.deleteAllFINDictionaryByType(dictionaryType);
+        }
+        else if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+            const tbType = fileTypeUpper === 'FIN_TB_ACTUAL' ? 'ACTUAL' : 'BUDGET';
+            await efService.deleteAllFINTrialBalanceByType(tbType);
         }
         const insertFunction = insertRegistry[fileTypeUpper];
         if (!insertFunction) {
@@ -234,6 +300,7 @@ router.post('/upload', (req, res, next) => {
         // Step 6: Update upload status to 'COMPLETED' with row count
         await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
         console.log(`✅ Upload ${uploadId} completed successfully`);
+        // MSNAV (and other EF uploads): data stays in EF until user promotes to RP in Upload Details.
         // Step 7: Return success response
         res.json({
             uploadId,
@@ -341,7 +408,7 @@ router.get('/uploads/:id', async (req, res) => {
 /**
  * GET /api/ef/uploads/:id/data
  * Get paginated data for an upload
- * Query params: page (optional, default 1), limit (optional, default 100)
+ * Query params: page (optional, default 1), limit (optional, default 100), search (optional)
  */
 router.get('/uploads/:id/data', async (req, res) => {
     try {
@@ -354,6 +421,7 @@ router.get('/uploads/:id/data', async (req, res) => {
         }
         const page = req.query.page ? parseInt(req.query.page, 10) : 1;
         const limit = req.query.limit ? parseInt(req.query.limit, 10) : 100;
+        const search = typeof req.query.search === 'string' ? req.query.search : undefined;
         if (page < 1) {
             return res.status(400).json({
                 error: 'Invalid page parameter',
@@ -366,8 +434,8 @@ router.get('/uploads/:id/data', async (req, res) => {
                 message: 'Limit must be between 1 and 1000'
             });
         }
-        console.log(`📋 Fetching upload data: ${uploadId} (page: ${page}, limit: ${limit})`);
-        const result = await efService.getUploadData(uploadId, page, limit);
+        console.log(`📋 Fetching upload data: ${uploadId} (page: ${page}, limit: ${limit}, search: ${search || 'none'})`);
+        const result = await efService.getUploadData(uploadId, page, limit, search);
         res.json(result);
     }
     catch (error) {
@@ -455,7 +523,7 @@ router.post('/uploads/:id/retry', async (req, res) => {
 });
 /**
  * POST /api/ef/uploads/:id/promote-to-rp
- * Promote completed HR upload to RP schema (copy EF data to RP, full replace)
+ * Promote completed EF upload to RP schema (copy EF data to RP mart table, full replace).
  */
 router.post('/uploads/:id/promote-to-rp', async (req, res) => {
     try {
@@ -466,14 +534,20 @@ router.post('/uploads/:id/promote-to-rp', async (req, res) => {
                 message: 'Upload ID must be a valid number'
             });
         }
-        console.log(`📤 Promoting upload ${uploadId} to RP schema`);
-        const result = await efService.promoteUploadToRP(uploadId);
-        console.log(`✅ Promoted ${result.rowCount} records to RP.${result.fileType === 'HR_EMPLOYEE_DATA' ? 'hr_employee_data' : 'hr_budget_vs_actual'}`);
+        const modeRaw = typeof req.body?.mode === 'string' ? req.body.mode.toLowerCase() : 'replace';
+        const mode = modeRaw === 'append' ? 'append' : 'replace';
+        console.log(`📤 Promoting upload ${uploadId} to RP schema (mode=${mode})`);
+        const result = await efService.promoteUploadToRP(uploadId, mode);
+        const verb = result.mode === 'append' ? 'Appended' : 'Replaced RP table and loaded';
+        console.log(`✅ ${verb} ${result.rowCount} records (${result.fileType})`);
         res.json({
             success: true,
-            message: `Successfully promoted ${result.rowCount} records to RP schema`,
+            message: result.mode === 'append'
+                ? `Successfully appended ${result.rowCount} records to RP schema`
+                : `Successfully replaced RP data with ${result.rowCount} records from this upload`,
             rowCount: result.rowCount,
-            fileType: result.fileType
+            fileType: result.fileType,
+            mode: result.mode
         });
     }
     catch (error) {
@@ -490,7 +564,7 @@ router.post('/uploads/:id/promote-to-rp', async (req, res) => {
                 message: error.message
             });
         }
-        if (error.message?.includes('Only HR_')) {
+        if (error.message?.includes('cannot be promoted to RP')) {
             return res.status(400).json({
                 error: 'Invalid file type',
                 message: error.message

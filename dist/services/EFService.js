@@ -3,7 +3,37 @@
  * Handles all database operations for External Files Upload System
  */
 import { getConnection, executeQuery, sql } from '../config/database.js';
+import { triggerRefresh } from './RefreshService.js';
 export class EFService {
+    static FINANCE_DICTIONARY_CODES = new Set([
+        'FIN_DIC_ACCOUNT',
+        'FIN_DIC_ACTIVITY',
+        'FIN_DIC_DEPARTMENT',
+        'FIN_DIC_FIXED_ASSETS',
+        'FIN_DIC_OPERATING_UNIT',
+        'FIN_DIC_PARTY',
+        'FIN_DIC_PROJECT',
+        'FIN_DIC_REFERENCE',
+        'FIN_DIC_REGION',
+        'FIN_DIC_RESOURCE',
+        'FIN_DIC_SOURCE_OF_FUND'
+    ]);
+    /**
+     * Get MB (ManageBac) schools for MSNAV Financial Aid upload dropdown.
+     * MSNAV data is for MB schools only; UCI matches MB.students.uniq_student_id.
+     */
+    async getMBSchools() {
+        const query = `
+      SELECT CAST(school_id AS NVARCHAR(50)) AS school_id, school_name
+      FROM MB.managebac_school_configs
+      WHERE school_id IS NOT NULL AND is_active = 1
+      ORDER BY school_name
+    `;
+        const result = await executeQuery(query);
+        if (result.error)
+            throw new Error(`Failed to get MB schools: ${result.error}`);
+        return result.data || [];
+    }
     /**
      * Get all active file types
      */
@@ -32,9 +62,10 @@ export class EFService {
     }
     /**
      * Create a new upload record
+     * @param schoolId Required for MSNAV_FINANCIAL_AID; used to trigger RP refresh for the school
      * @returns The ID of the created upload
      */
-    async createUpload(fileTypeCode, fileName, fileSize, uploadedBy = 'Admin') {
+    async createUpload(fileTypeCode, fileName, fileSize, uploadedBy = 'Admin', schoolId) {
         const query = `
       DECLARE @file_type_id INT;
       
@@ -53,7 +84,8 @@ export class EFService {
         file_size_bytes,
         status,
         uploaded_by,
-        uploaded_at
+        uploaded_at,
+        school_id
       )
       VALUES (
         @file_type_id,
@@ -61,7 +93,8 @@ export class EFService {
         @fileSize,
         'PENDING',
         @uploadedBy,
-        SYSDATETIMEOFFSET()
+        SYSDATETIMEOFFSET(),
+        @schoolId
       );
       
       SELECT SCOPE_IDENTITY() AS id;
@@ -70,7 +103,8 @@ export class EFService {
             fileTypeCode,
             fileName,
             fileSize,
-            uploadedBy
+            uploadedBy,
+            schoolId: schoolId ?? null
         });
         if (result.error) {
             throw new Error(`Failed to create upload: ${result.error}`);
@@ -634,7 +668,8 @@ export class EFService {
             @recruitment${baseIndex},
             @separation${baseIndex},
             @staffCategory${baseIndex},
-            @contractType${baseIndex}
+            @contractType${baseIndex},
+            @key${baseIndex}
           )`;
                 }).join(',');
                 const batchQuery = `
@@ -672,7 +707,8 @@ export class EFService {
             [recruitment],
             [separation],
             [Staff_Category],
-            [Contract_type]
+            [Contract_type],
+            [Key]
           ) VALUES ${values};
         `;
                 const request = transaction.request();
@@ -712,6 +748,7 @@ export class EFService {
                     request.input(`separation${baseIndex}`, sql.NVarChar(200), record.separation ?? null);
                     request.input(`staffCategory${baseIndex}`, sql.NVarChar(100), record.Staff_Category ?? null);
                     request.input(`contractType${baseIndex}`, sql.NVarChar(200), record.Contract_type ?? null);
+                    request.input(`key${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
                 });
                 await request.query(batchQuery);
                 totalInserted += batch.length;
@@ -755,7 +792,6 @@ export class EFService {
             @country${baseIndex},
             @category${baseIndex},
             @budget${baseIndex},
-            @actual${baseIndex},
             @recordKey${baseIndex}
           )`;
                 }).join(',');
@@ -770,7 +806,6 @@ export class EFService {
             [Country],
             [Category],
             [Budget],
-            [Actual],
             [Key]
           ) VALUES ${values};
         `;
@@ -786,7 +821,6 @@ export class EFService {
                     request.input(`country${baseIndex}`, sql.NVarChar(100), record.Country ?? null);
                     request.input(`category${baseIndex}`, sql.NVarChar(200), record.Category ?? null);
                     request.input(`budget${baseIndex}`, sql.Decimal(18, 2), record.Budget ?? null);
-                    request.input(`actual${baseIndex}`, sql.Decimal(18, 2), record.Actual ?? null);
                     request.input(`recordKey${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
                 });
                 await request.query(batchQuery);
@@ -800,10 +834,142 @@ export class EFService {
             throw new Error(`Failed to insert HR Budget vs Actual: ${error.message || error}`);
         }
     }
+    async deleteAllFINDictionaryByType(dictionaryType) {
+        const result = await executeQuery(`DELETE FROM FIN.DictionaryData WHERE dictionary_type = @dictionaryType;`, { dictionaryType });
+        if (result.error) {
+            throw new Error(`Failed to delete FIN dictionary data (${dictionaryType}): ${result.error}`);
+        }
+    }
+    async deleteAllFINTrialBalanceByType(tbType) {
+        const result = await executeQuery(`DELETE FROM FIN.TrialBalance WHERE tb_type = @tbType;`, { tbType });
+        if (result.error) {
+            throw new Error(`Failed to delete FIN trial balance data (${tbType}): ${result.error}`);
+        }
+    }
+    async insertFINDictionary(uploadId, fileName, uploadedBy, dictionaryType, records) {
+        if (records.length === 0)
+            return 0;
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        try {
+            await transaction.begin();
+            const batchSize = 100;
+            let totalInserted = 0;
+            for (let i = 0; i < records.length; i += batchSize) {
+                const batch = records.slice(i, i + batchSize);
+                const values = batch.map((_, index) => {
+                    const baseIndex = i + index;
+                    return `(
+            @uploadId, @fileName, @uploadedBy, @dictionaryType,
+            @code${baseIndex}, @description${baseIndex}, @suspended${baseIndex}, @entity${baseIndex},
+            @groupDimension${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+          )`;
+                }).join(',');
+                const query = `
+          INSERT INTO FIN.DictionaryData (
+            upload_id, file_name, uploaded_by, dictionary_type,
+            code, description, suspended, entity, group_dimension, last_updated_by, last_updated_at
+          ) VALUES ${values};
+        `;
+                const request = transaction.request();
+                request.input('uploadId', sql.BigInt, uploadId);
+                request.input('fileName', sql.NVarChar, fileName);
+                request.input('uploadedBy', sql.NVarChar, uploadedBy);
+                request.input('dictionaryType', sql.NVarChar(50), dictionaryType);
+                batch.forEach((record, index) => {
+                    const baseIndex = i + index;
+                    request.input(`code${baseIndex}`, sql.NVarChar(100), record.code ?? null);
+                    request.input(`description${baseIndex}`, sql.NVarChar(500), record.description ?? null);
+                    request.input(`suspended${baseIndex}`, sql.NVarChar(50), record.suspended ?? null);
+                    request.input(`entity${baseIndex}`, sql.NVarChar(100), record.entity ?? null);
+                    request.input(`groupDimension${baseIndex}`, sql.NVarChar(100), record.group_dimension ?? null);
+                });
+                await request.query(query);
+                totalInserted += batch.length;
+            }
+            await transaction.commit();
+            return totalInserted;
+        }
+        catch (error) {
+            await transaction.rollback();
+            throw new Error(`Failed to insert FIN dictionary records: ${error.message || error}`);
+        }
+    }
+    async insertFINTrialBalance(uploadId, fileName, uploadedBy, tbType, records) {
+        if (records.length === 0)
+            return 0;
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        try {
+            await transaction.begin();
+            const batchSize = 100;
+            let totalInserted = 0;
+            for (let i = 0; i < records.length; i += batchSize) {
+                const batch = records.slice(i, i + batchSize);
+                const values = batch.map((_, index) => {
+                    const baseIndex = i + index;
+                    return `(
+            @uploadId, @fileName, @uploadedBy, @tbType,
+            @mainAccount${baseIndex}, @fundingSource${baseIndex}, @region${baseIndex}, @operatingUnit${baseIndex},
+            @department${baseIndex}, @project${baseIndex}, @activity${baseIndex}, @resource${baseIndex},
+            @party${baseIndex}, @fixedAssets${baseIndex}, @reference${baseIndex}, @debit${baseIndex},
+            @credit${baseIndex}, @status${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+          )`;
+                }).join(',');
+                const query = `
+          INSERT INTO FIN.TrialBalance (
+            upload_id, file_name, uploaded_by, tb_type,
+            main_account, funding_source, region, operating_unit, department, project, activity,
+            resource, party, fixed_assets, reference, debit, credit, status, last_updated_by, last_updated_at
+          ) VALUES ${values};
+        `;
+                const request = transaction.request();
+                request.input('uploadId', sql.BigInt, uploadId);
+                request.input('fileName', sql.NVarChar, fileName);
+                request.input('uploadedBy', sql.NVarChar, uploadedBy);
+                request.input('tbType', sql.NVarChar(20), tbType);
+                batch.forEach((record, index) => {
+                    const baseIndex = i + index;
+                    request.input(`mainAccount${baseIndex}`, sql.NVarChar(100), record.main_account ?? null);
+                    request.input(`fundingSource${baseIndex}`, sql.NVarChar(100), record.funding_source ?? null);
+                    request.input(`region${baseIndex}`, sql.NVarChar(100), record.region ?? null);
+                    request.input(`operatingUnit${baseIndex}`, sql.NVarChar(100), record.operating_unit ?? null);
+                    request.input(`department${baseIndex}`, sql.NVarChar(100), record.department ?? null);
+                    request.input(`project${baseIndex}`, sql.NVarChar(100), record.project ?? null);
+                    request.input(`activity${baseIndex}`, sql.NVarChar(100), record.activity ?? null);
+                    request.input(`resource${baseIndex}`, sql.NVarChar(100), record.resource ?? null);
+                    request.input(`party${baseIndex}`, sql.NVarChar(100), record.party ?? null);
+                    request.input(`fixedAssets${baseIndex}`, sql.NVarChar(100), record.fixed_assets ?? null);
+                    request.input(`reference${baseIndex}`, sql.NVarChar(100), record.reference ?? null);
+                    request.input(`debit${baseIndex}`, sql.Decimal(19, 4), record.debit ?? null);
+                    request.input(`credit${baseIndex}`, sql.Decimal(19, 4), record.credit ?? null);
+                    request.input(`status${baseIndex}`, sql.NVarChar(100), record.status ?? null);
+                });
+                await request.query(query);
+                totalInserted += batch.length;
+            }
+            await transaction.commit();
+            return totalInserted;
+        }
+        catch (error) {
+            await transaction.rollback();
+            throw new Error(`Failed to insert FIN trial balance records: ${error.message || error}`);
+        }
+    }
+    /** File types that support Promote to RP (EF → reporting tables). */
+    static PROMOTABLE_TO_RP = new Set([
+        'HR_EMPLOYEE_DATA',
+        'HR_BUDGET_VS_ACTUAL',
+        'IB_EXTERNAL_EXAMS',
+        'MSNAV_FINANCIAL_AID',
+        'CEM_INITIAL',
+        'CEM_FINAL'
+    ]);
     /**
-     * Promote HR upload to RP schema (copy EF data to RP, full replace)
+     * Promote completed upload to RP schema (copy EF data to RP mart table).
+     * @param mode replace: clear RP mart table then load this upload; append: insert this upload without clearing RP.
      */
-    async promoteUploadToRP(uploadId) {
+    async promoteUploadToRP(uploadId, mode = 'replace') {
         const upload = await this.getUploadById(uploadId);
         if (!upload)
             throw new Error('Upload not found');
@@ -814,16 +980,19 @@ export class EFService {
         if (!fileType)
             throw new Error('File type not found');
         const code = fileType.type_code.toUpperCase();
-        if (code !== 'HR_EMPLOYEE_DATA' && code !== 'HR_BUDGET_VS_ACTUAL') {
-            throw new Error('Only HR_EMPLOYEE_DATA and HR_BUDGET_VS_ACTUAL can be promoted to RP');
+        if (!EFService.PROMOTABLE_TO_RP.has(code)) {
+            throw new Error(`File type ${code} cannot be promoted to RP`);
         }
+        const promoteMode = mode === 'append' ? 'append' : 'replace';
+        const replace = promoteMode === 'replace';
         const connection = await getConnection();
         const transaction = new sql.Transaction(connection);
         try {
             await transaction.begin();
             let rowCount = 0;
             if (code === 'HR_EMPLOYEE_DATA') {
-                await transaction.request().query('DELETE FROM RP.hr_employee_data;');
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.hr_employee_data;');
                 const req = transaction.request();
                 req.input('uploadId', sql.BigInt, uploadId);
                 const insertResult = await req.query(`
@@ -831,34 +1000,152 @@ export class EFService {
             country,[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
           )
           SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
           FROM EF.HR_EmployeeData WHERE upload_id = @uploadId
         `);
                 rowCount = insertResult.rowsAffected?.[0] ?? 0;
             }
-            else {
-                await transaction.request().query('DELETE FROM RP.hr_budget_vs_actual;');
+            else if (code === 'HR_BUDGET_VS_ACTUAL') {
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.hr_budget_vs_actual;');
                 const req = transaction.request();
                 req.input('uploadId', sql.BigInt, uploadId);
                 const insertResult = await req.query(`
           INSERT INTO RP.hr_budget_vs_actual (country,[Year],[Quarter],[Category],[Budget],[Actual],[Key])
-          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Category],[Budget],[Actual],[Key]
+          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Category],[Budget],NULL,[Key]
           FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId
         `);
                 rowCount = insertResult.rowsAffected?.[0] ?? 0;
             }
+            else if (code === 'IB_EXTERNAL_EXAMS') {
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.IB_ExternalExams;');
+                const req = transaction.request();
+                req.input('uploadId', sql.BigInt, uploadId);
+                const insertResult = await req.query(`
+          INSERT INTO RP.IB_ExternalExams (
+            upload_id, file_name, uploaded_at, uploaded_by,
+            [Year],[Month],[School],[Registration_Number],[Personal_Code],[Name],[Category],[Subject],[Level],[Language],
+            [Predicted_Grade],[Grade],[EE_TOK_Points],[Total_Points],[Result],[Diploma_Requirements_Code],
+            school_id
+          )
+          SELECT
+            ib.upload_id, ib.file_name, ib.uploaded_at, ib.uploaded_by,
+            ib.[Year], ib.[Month], ib.[School], ib.[Registration_Number], ib.[Personal_Code], ib.[Name], ib.[Category],
+            ib.[Subject], ib.[Level], ib.[Language],
+            ib.[Predicted_Grade], ib.[Grade], ib.[EE_TOK_Points], ib.[Total_Points], ib.[Result], ib.[Diploma_Requirements_Code],
+            m.school_id
+          FROM EF.IB_ExternalExams ib
+          LEFT JOIN admin.ib_external_exam_school_map m
+            ON m.is_active = 1
+            AND LTRIM(RTRIM(COALESCE(ib.[School], N''))) = LTRIM(RTRIM(m.ib_school_code))
+          WHERE ib.upload_id = @uploadId
+        `);
+                rowCount = insertResult.rowsAffected?.[0] ?? 0;
+            }
+            else if (code === 'MSNAV_FINANCIAL_AID') {
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.msnav_financial_aid;');
+                const req = transaction.request();
+                req.input('uploadId', sql.BigInt, uploadId);
+                const insertResult = await req.query(`
+          INSERT INTO RP.msnav_financial_aid (
+            school_id,[S_No],[UCI],[Academic_Year],[Class],[Class_Code],[Student_No],[Student_Name],
+            [Percentage],[Fee_Classification],[FA_Sub_Type],[Fee_Code],[Community_Status]
+          )
+          SELECT
+            CAST(u.school_id AS NVARCHAR(50)),
+            m.[S_No],m.[UCI],m.[Academic_Year],m.[Class],m.[Class_Code],m.[Student_No],m.[Student_Name],
+            m.[Percentage],m.[Fee_Classification],m.[FA_Sub_Type],m.[Fee_Code],m.[Community_Status]
+          FROM EF.MSNAV_FinancialAid m
+          INNER JOIN EF.Uploads u ON u.id = m.upload_id
+          WHERE m.upload_id = @uploadId
+        `);
+                rowCount = insertResult.rowsAffected?.[0] ?? 0;
+            }
+            else if (code === 'CEM_INITIAL') {
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.cem_prediction_report;');
+                const req = transaction.request();
+                req.input('uploadId', sql.BigInt, uploadId);
+                const insertResult = await req.query(`
+          INSERT INTO RP.cem_prediction_report (
+            [Student_ID],[Class],[Name],[Gender],[Date_of_Birth],[Year_Group],[GCSE_Score],[Subject],[Level],
+            [GCSE_Prediction_Points],[GCSE_Prediction_Grade],[Test_Taken],[Test_Score],[Test_Prediction_Points],[Test_Prediction_Grade]
+          )
+          SELECT
+            [Student_ID],[Class],[Name],[Gender],[Date_of_Birth],[Year_Group],[GCSE_Score],[Subject],[Level],
+            [GCSE_Prediction_Points],[GCSE_Prediction_Grade],[Test_Taken],[Test_Score],[Test_Prediction_Points],[Test_Prediction_Grade]
+          FROM EF.CEM_PredictionReport WHERE upload_id = @uploadId
+        `);
+                rowCount = insertResult.rowsAffected?.[0] ?? 0;
+            }
+            else if (code === 'CEM_FINAL') {
+                if (replace)
+                    await transaction.request().query('DELETE FROM RP.cem_subject_level_analysis;');
+                const req = transaction.request();
+                req.input('uploadId', sql.BigInt, uploadId);
+                const insertResult = await req.query(`
+          INSERT INTO RP.cem_subject_level_analysis (
+            [Student_ID],[Class],[Surname],[Forename],[Gender],[Exam_Type],[Subject_Title],[Syllabus_Title],[Exam_Board],[Syllabus_Code],
+            [Grade],[Grade_as_Points],[GCSE_Score],[GCSE_Prediction],[GCSE_Residual],[GCSE_Standardised_Residual],
+            [GCSE_Gender_Adj_Prediction],[GCSE_Gender_Adj_Residual],[GCSE_Gender_Adj_Std_Residual],
+            [Adaptive_Score],[Adaptive_Prediction],[Adaptive_Residual],[Adaptive_Standardised_Residual],
+            [Adaptive_Gender_Adj_Prediction],[Adaptive_Gender_Adj_Residual],[Adaptive_Gender_Adj_Std_Residual],
+            [TDA_Score],[TDA_Prediction],[TDA_Residual],[TDA_Standardised_Residual],
+            [TDA_Gender_Adj_Prediction],[TDA_Gender_Adj_Residual],[TDA_Gender_Adj_Std_Residual]
+          )
+          SELECT
+            [Student_ID],[Class],[Surname],[Forename],[Gender],[Exam_Type],[Subject_Title],[Syllabus_Title],[Exam_Board],[Syllabus_Code],
+            [Grade],[Grade_as_Points],[GCSE_Score],[GCSE_Prediction],[GCSE_Residual],[GCSE_Standardised_Residual],
+            [GCSE_Gender_Adj_Prediction],[GCSE_Gender_Adj_Residual],[GCSE_Gender_Adj_Std_Residual],
+            [Adaptive_Score],[Adaptive_Prediction],[Adaptive_Residual],[Adaptive_Standardised_Residual],
+            [Adaptive_Gender_Adj_Prediction],[Adaptive_Gender_Adj_Residual],[Adaptive_Gender_Adj_Std_Residual],
+            [TDA_Score],[TDA_Prediction],[TDA_Residual],[TDA_Standardised_Residual],
+            [TDA_Gender_Adj_Prediction],[TDA_Gender_Adj_Residual],[TDA_Gender_Adj_Std_Residual]
+          FROM EF.CEM_SubjectLevelAnalysis WHERE upload_id = @uploadId
+        `);
+                rowCount = insertResult.rowsAffected?.[0] ?? 0;
+            }
             await transaction.commit();
-            return { rowCount, fileType: code };
+            if (code === 'MSNAV_FINANCIAL_AID') {
+                this.triggerRPRefreshAfterMsnavUpload(uploadId).catch((err) => console.error('[EFService] RP refresh after MSNAV promote failed:', err?.message || err));
+            }
+            return { rowCount, fileType: code, mode: promoteMode };
         }
         catch (error) {
             await transaction.rollback();
             throw new Error(`Failed to promote to RP: ${error.message || error}`);
         }
+    }
+    /**
+     * Trigger RP refresh after MSNAV Financial Aid upload.
+     * Gets school_id from upload and academic_year from uploaded MSNAV data,
+     * then triggers the full RP refresh pipeline in the background.
+     */
+    async triggerRPRefreshAfterMsnavUpload(uploadId) {
+        const upload = await this.getUploadById(uploadId);
+        if (!upload || !upload.school_id)
+            return null;
+        const ayResult = await executeQuery(`SELECT TOP 1 [Academic_Year] FROM EF.MSNAV_FinancialAid WHERE upload_id = @uploadId AND [Academic_Year] IS NOT NULL`, { uploadId });
+        const rawAy = ayResult.data?.[0]?.Academic_Year;
+        if (!rawAy?.trim())
+            return null;
+        // Normalize "2025-26" -> "2025-2026" for RP refresh
+        const academicYear = rawAy.includes('-') && rawAy.length <= 7
+            ? rawAy.replace(/-(\d{2})$/, '-20$1')
+            : rawAy.trim();
+        triggerRefresh({
+            school_id: upload.school_id,
+            academic_year: academicYear,
+            triggered_by: 'msnav_upload',
+        }).catch((err) => console.error('[EFService] RP refresh after MSNAV upload failed:', err?.message || err));
+        return { school_id: upload.school_id, academic_year: academicYear };
     }
     /**
      * Get upload by ID
@@ -875,7 +1162,8 @@ export class EFService {
         u.error_message,
         u.uploaded_by,
         u.uploaded_at,
-        u.processed_at
+        u.processed_at,
+        u.school_id
       FROM EF.Uploads u
       WHERE u.id = @uploadId;
     `;
@@ -926,7 +1214,7 @@ export class EFService {
      * Get upload data (paginated)
      * Returns data from the appropriate table based on upload's file type
      */
-    async getUploadData(uploadId, page = 1, limit = 100) {
+    async getUploadData(uploadId, page = 1, limit = 100, search) {
         // First, get the upload to determine file type
         const upload = await this.getUploadById(uploadId);
         if (!upload) {
@@ -939,10 +1227,29 @@ export class EFService {
             throw new Error('File type not found');
         }
         const offset = (page - 1) * limit;
+        const trimmedSearch = search?.trim();
+        const hasSearch = !!trimmedSearch;
         let dataQuery = '';
         let countQuery = '';
         const params = { uploadId, limit, offset };
+        if (hasSearch) {
+            params.searchPattern = `%${trimmedSearch}%`;
+        }
+        const buildWhereClause = (searchColumns) => {
+            if (!hasSearch || searchColumns.length === 0) {
+                return 'WHERE upload_id = @uploadId';
+            }
+            const searchClause = searchColumns
+                .map((column) => `CONVERT(NVARCHAR(MAX), [${column}]) COLLATE Latin1_General_CS_AS LIKE @searchPattern COLLATE Latin1_General_CS_AS`)
+                .join(' OR ');
+            return `WHERE upload_id = @uploadId AND (${searchClause})`;
+        };
         if (fileType.type_code === 'IB_EXTERNAL_EXAMS') {
+            const whereClause = buildWhereClause([
+                'Year', 'Month', 'School', 'Registration_Number', 'Personal_Code', 'Name', 'Category',
+                'Subject', 'Level', 'Language', 'Predicted_Grade', 'Grade', 'EE_TOK_Points',
+                'Total_Points', 'Result', 'Diploma_Requirements_Code'
+            ]);
             dataQuery = `
         SELECT 
           id,
@@ -967,7 +1274,7 @@ export class EFService {
           [Result],
           [Diploma_Requirements_Code]
         FROM EF.IB_ExternalExams
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -975,10 +1282,14 @@ export class EFService {
             countQuery = `
         SELECT COUNT(*) as total
         FROM EF.IB_ExternalExams
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
         }
         else if (fileType.type_code === 'MSNAV_FINANCIAL_AID') {
+            const whereClause = buildWhereClause([
+                'S_No', 'UCI', 'Academic_Year', 'Class', 'Class_Code', 'Student_No', 'Student_Name',
+                'Percentage', 'Fee_Classification', 'FA_Sub_Type', 'Fee_Code', 'Community_Status'
+            ]);
             dataQuery = `
         SELECT 
           id,
@@ -999,7 +1310,7 @@ export class EFService {
           [Fee_Code],
           [Community_Status]
         FROM EF.MSNAV_FinancialAid
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1007,10 +1318,15 @@ export class EFService {
             countQuery = `
         SELECT COUNT(*) as total
         FROM EF.MSNAV_FinancialAid
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
         }
         else if (fileType.type_code === 'CEM_INITIAL') {
+            const whereClause = buildWhereClause([
+                'Student_ID', 'Class', 'Name', 'Gender', 'Date_of_Birth', 'Year_Group', 'GCSE_Score',
+                'Subject', 'Level', 'GCSE_Prediction_Points', 'GCSE_Prediction_Grade', 'Test_Taken',
+                'Test_Score', 'Test_Prediction_Points', 'Test_Prediction_Grade'
+            ]);
             dataQuery = `
         SELECT 
           id,
@@ -1034,7 +1350,7 @@ export class EFService {
           [Test_Prediction_Points],
           [Test_Prediction_Grade]
         FROM EF.CEM_PredictionReport
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1042,10 +1358,20 @@ export class EFService {
             countQuery = `
         SELECT COUNT(*) as total
         FROM EF.CEM_PredictionReport
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
         }
         else if (fileType.type_code === 'CEM_FINAL') {
+            const whereClause = buildWhereClause([
+                'Student_ID', 'Class', 'Surname', 'Forename', 'Gender', 'Exam_Type', 'Subject_Title',
+                'Syllabus_Title', 'Exam_Board', 'Syllabus_Code', 'Grade', 'Grade_as_Points',
+                'GCSE_Score', 'GCSE_Prediction', 'GCSE_Residual', 'GCSE_Standardised_Residual',
+                'GCSE_Gender_Adj_Prediction', 'GCSE_Gender_Adj_Residual', 'GCSE_Gender_Adj_Std_Residual',
+                'Adaptive_Score', 'Adaptive_Prediction', 'Adaptive_Residual', 'Adaptive_Standardised_Residual',
+                'Adaptive_Gender_Adj_Prediction', 'Adaptive_Gender_Adj_Residual', 'Adaptive_Gender_Adj_Std_Residual',
+                'TDA_Score', 'TDA_Prediction', 'TDA_Residual', 'TDA_Standardised_Residual',
+                'TDA_Gender_Adj_Prediction', 'TDA_Gender_Adj_Residual', 'TDA_Gender_Adj_Std_Residual'
+            ]);
             dataQuery = `
         SELECT 
           id,
@@ -1087,7 +1413,7 @@ export class EFService {
           [TDA_Gender_Adj_Residual],
           [TDA_Gender_Adj_Std_Residual]
         FROM EF.CEM_SubjectLevelAnalysis
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS
         FETCH NEXT @limit ROWS ONLY;
@@ -1095,39 +1421,86 @@ export class EFService {
             countQuery = `
         SELECT COUNT(*) as total
         FROM EF.CEM_SubjectLevelAnalysis
-        WHERE upload_id = @uploadId;
+        ${whereClause};
       `;
         }
         else if (fileType.type_code === 'HR_EMPLOYEE_DATA') {
+            const whereClause = buildWhereClause([
+                'Year', 'Quarter', 'Month', 'Country', 'Country_City', 'Entity', 'Emp_ID',
+                'Position_Category', 'Attrition', 'FTE', 'Date_of_Birth', 'Date_of_Hire', 'Sect',
+                'Staff_Nationality', 'Gender', 'Teaching_Level', 'Teaching_Subject_Category',
+                'Qualification', 'Date_of_Separation', 'reason_for_leaving', 'Aging', 'Age_Grouping',
+                'Longevity', 'Longevity_Grouping', 'Reason_type', 'Reporting_Year', 'recruitment',
+                'separation', 'Staff_Category', 'Contract_type', 'Key'
+            ]);
             dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
           [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
           [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
           [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-          [recruitment],[separation],[Staff_Category],[Contract_type]
+          [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
         FROM EF.HR_EmployeeData
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
       `;
-            countQuery = `SELECT COUNT(*) as total FROM EF.HR_EmployeeData WHERE upload_id = @uploadId;`;
+            countQuery = `SELECT COUNT(*) as total FROM EF.HR_EmployeeData ${whereClause};`;
         }
         else if (fileType.type_code === 'HR_BUDGET_VS_ACTUAL') {
+            const whereClause = buildWhereClause([
+                'Year', 'Quarter', 'Country', 'Category', 'Budget', 'Key'
+            ]);
             dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
-          [Year],[Quarter],[Country],[Category],[Budget],[Actual],[Key]
+          [Year],[Quarter],[Country],[Category],[Budget],[Key]
         FROM EF.HR_BudgetVsActual
-        WHERE upload_id = @uploadId
+        ${whereClause}
         ORDER BY id
         OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
       `;
-            countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual WHERE upload_id = @uploadId;`;
+            countQuery = `SELECT COUNT(*) as total FROM EF.HR_BudgetVsActual ${whereClause};`;
+        }
+        else if (EFService.FINANCE_DICTIONARY_CODES.has(fileType.type_code)) {
+            const whereClause = buildWhereClause([
+                'dictionary_type', 'code', 'description', 'suspended', 'entity', 'group_dimension',
+                'last_updated_by'
+            ]);
+            dataQuery = `
+        SELECT
+          id, upload_id, file_name, uploaded_at, uploaded_by,
+          dictionary_type, code, description, suspended, entity, group_dimension,
+          last_updated_by, last_updated_at
+        FROM FIN.DictionaryData
+        ${whereClause}
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+            countQuery = `SELECT COUNT(*) as total FROM FIN.DictionaryData ${whereClause};`;
+        }
+        else if (fileType.type_code === 'FIN_TB_ACTUAL' || fileType.type_code === 'FIN_TB_BUDGET') {
+            const whereClause = buildWhereClause([
+                'tb_type', 'main_account', 'funding_source', 'region', 'operating_unit', 'department',
+                'project', 'activity', 'resource', 'party', 'fixed_assets', 'reference',
+                'debit', 'credit', 'status', 'last_updated_by'
+            ]);
+            dataQuery = `
+        SELECT
+          id, upload_id, file_name, uploaded_at, uploaded_by,
+          tb_type, main_account, funding_source, region, operating_unit, department, project, activity,
+          resource, party, fixed_assets, reference, debit, credit, status,
+          last_updated_by, last_updated_at
+        FROM FIN.TrialBalance
+        ${whereClause}
+        ORDER BY id
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `;
+            countQuery = `SELECT COUNT(*) as total FROM FIN.TrialBalance ${whereClause};`;
         }
         else {
             throw new Error(`Unsupported file type: ${fileType.type_code}`);
         }
         // Get total count
-        const countResult = await executeQuery(countQuery, { uploadId });
+        const countResult = await executeQuery(countQuery, params);
         if (countResult.error) {
             throw new Error(`Failed to get data count: ${countResult.error}`);
         }
@@ -1177,7 +1550,9 @@ export class EFService {
             'CEM_PredictionReport',
             'CEM_SubjectLevelAnalysis',
             'HR_EmployeeData',
-            'HR_BudgetVsActual'
+            'HR_BudgetVsActual',
+            'FIN_DictionaryData',
+            'FIN_TrialBalance'
         ];
         if (!allowedTables.includes(targetTable)) {
             throw new Error(`Invalid target table: ${targetTable}. Table not in whitelist.`);
@@ -1189,10 +1564,12 @@ export class EFService {
             // Delete from the appropriate data table using dynamic table name
             // Table name is whitelist-validated and comes from trusted database source
             // Using square brackets for SQL Server identifier quoting
-            const deleteDataQuery = `
-        DELETE FROM EF.[${targetTable}]
-        WHERE upload_id = @uploadId;
-      `;
+            const dataTableRef = targetTable === 'FIN_DictionaryData'
+                ? 'FIN.DictionaryData'
+                : targetTable === 'FIN_TrialBalance'
+                    ? 'FIN.TrialBalance'
+                    : `EF.[${targetTable}]`;
+            const deleteDataQuery = `DELETE FROM ${dataTableRef} WHERE upload_id = @uploadId;`;
             const deleteUploadQuery = `
         DELETE FROM EF.Uploads
         WHERE id = @uploadId;

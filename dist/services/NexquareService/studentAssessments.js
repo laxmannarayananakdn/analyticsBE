@@ -10,11 +10,150 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { databaseService } from '../DatabaseService.js';
 /**
+ * Academic year end date for mark-to-grade translation: 31 March of the end year.
+ * Examples: "2019-2020", "2019 - 2020" -> 2020-03-31; "2024" -> 2024-03-31.
+ */
+function computeAcademicYearEndDateForMarks(academicYear) {
+    const s = academicYear.trim();
+    const years = [];
+    const re = /\b(19|20)\d{2}\b/g;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+        years.push(parseInt(m[0], 10));
+    }
+    let endYear;
+    if (years.length >= 2) {
+        endYear = Math.max(years[0], years[1]);
+    }
+    else if (years.length === 1) {
+        endYear = years[0];
+    }
+    else {
+        const digits = s.replace(/\D/g, '');
+        const n = parseInt(digits.slice(0, 4), 10);
+        endYear = !Number.isNaN(n) && n >= 1900 ? n : new Date().getFullYear();
+    }
+    return `${endYear}-03-31`;
+}
+/**
+ * After RP.student_assessments insert: set calculated_grade from admin.mark_grade_translation_config.
+ * - Resolves school node via admin.Node_School (nex).
+ * - Walks ancestors; nearest node with a matching rule wins.
+ * - Uses latest effective_date per (node, grade) where effective_date <= @ay_end.
+ * - Percentage ((component_value / max_value) * 100) must fall in [marks_start, marks_end].
+ */
+async function applyCalculatedGradesFromMarkTranslation(schoolSourcedId, academicYear) {
+    const ayEnd = computeAcademicYearEndDateForMarks(academicYear);
+    // RP rows use academic_year from the NEX file; sync uses schedule AY — often differ by spaces (e.g. "2024 - 2025" vs "2024-2025").
+    const ayMatchExpr = `REPLACE(LTRIM(RTRIM(ISNULL(academic_year, N''))), N' ', N'') = REPLACE(LTRIM(RTRIM(@academic_year)), N' ', N'')`;
+    const clearSql = `
+    UPDATE RP.student_assessments
+    SET calculated_grade = NULL, updated_at = SYSDATETIMEOFFSET()
+    WHERE school_id = @school_id AND ${ayMatchExpr};
+    SELECT @@ROWCOUNT AS affected_rows;
+  `;
+    const clearResult = await executeQuery(clearSql, {
+        school_id: schoolSourcedId,
+        academic_year: academicYear,
+    });
+    if (clearResult.error) {
+        return { cleared: 0, set: 0, error: clearResult.error };
+    }
+    const cleared = clearResult.data?.[0]?.affected_rows ?? 0;
+    const updateSql = `
+    ;WITH SchoolNode AS (
+      SELECT TOP (1) ns.Node_ID
+      FROM admin.Node_School ns
+      WHERE ns.School_ID = @school_id AND ns.School_Source = N'nex'
+      ORDER BY ns.Node_ID
+    ),
+    Ancestors AS (
+      SELECT n.Node_ID, n.Parent_Node_ID, 0 AS dist
+      FROM admin.Node n
+      INNER JOIN SchoolNode s ON n.Node_ID = s.Node_ID
+      UNION ALL
+      SELECT p.Node_ID, p.Parent_Node_ID, a.dist + 1
+      FROM admin.Node p
+      INNER JOIN Ancestors a ON p.Node_ID = a.Parent_Node_ID
+      WHERE a.Parent_Node_ID IS NOT NULL
+    ),
+    LatestEffective AS (
+      SELECT c.node_id, c.grade_name, MAX(c.effective_date) AS effective_date
+      FROM admin.mark_grade_translation_config c
+      WHERE c.is_active = 1
+        AND c.effective_date <= CAST(@ay_end AS DATE)
+      GROUP BY c.node_id, c.grade_name
+    ),
+    CfgRows AS (
+      SELECT c.node_id, c.grade_name, c.marks_start, c.marks_end, c.calculated_grade, a.dist
+      FROM admin.mark_grade_translation_config c
+      INNER JOIN LatestEffective le
+        ON le.node_id = c.node_id
+        AND le.grade_name = c.grade_name
+        AND le.effective_date = c.effective_date
+      INNER JOIN Ancestors a ON a.Node_ID = c.node_id
+      WHERE c.is_active = 1
+    ),
+    Pick AS (
+      SELECT
+        rsa.id AS rp_id,
+        c.calculated_grade,
+        ROW_NUMBER() OVER (
+          PARTITION BY rsa.id
+          ORDER BY c.dist ASC, c.marks_start ASC
+        ) AS rk
+      FROM RP.student_assessments rsa
+      INNER JOIN CfgRows c
+        ON LTRIM(RTRIM(rsa.grade_name)) = LTRIM(RTRIM(c.grade_name))
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.component_value) IS NOT NULL
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.max_value) IS NOT NULL
+       AND TRY_CONVERT(DECIMAL(10, 2), rsa.max_value) > 0
+       AND (
+            (TRY_CONVERT(DECIMAL(10, 4), rsa.component_value) / TRY_CONVERT(DECIMAL(10, 4), rsa.max_value)) * 100.0
+           ) >= c.marks_start
+       AND (
+            (TRY_CONVERT(DECIMAL(10, 4), rsa.component_value) / TRY_CONVERT(DECIMAL(10, 4), rsa.max_value)) * 100.0
+           ) <= c.marks_end
+      WHERE rsa.school_id = @school_id
+        AND REPLACE(LTRIM(RTRIM(ISNULL(rsa.academic_year, N''))), N' ', N'') = REPLACE(LTRIM(RTRIM(@academic_year)), N' ', N'')
+    )
+    UPDATE rsa
+    SET rsa.calculated_grade = p.calculated_grade,
+        rsa.updated_at = SYSDATETIMEOFFSET()
+    FROM RP.student_assessments rsa
+    INNER JOIN Pick p ON p.rp_id = rsa.id AND p.rk = 1;
+    SELECT @@ROWCOUNT AS affected_rows;
+  `;
+    const updateResult = await executeQuery(updateSql, {
+        school_id: schoolSourcedId,
+        academic_year: academicYear,
+        ay_end: ayEnd,
+    });
+    if (updateResult.error) {
+        return { cleared, set: 0, error: updateResult.error };
+    }
+    const set = updateResult.data?.[0]?.affected_rows ?? 0;
+    return { cleared, set };
+}
+async function applyCalculatedGradesForRunYear(schoolSourcedId, academicYear) {
+    const runAcademicYear = (academicYear || '').trim();
+    if (!runAcademicYear) {
+        console.warn(`   ⚠️  calculated_grade skipped: no academic year provided for this run (to avoid updating all years)`);
+        return;
+    }
+    const cg = await applyCalculatedGradesFromMarkTranslation(schoolSourcedId, runAcademicYear);
+    if (cg.error) {
+        console.warn(`   ⚠️  calculated_grade failed for academic year ${runAcademicYear}: ${cg.error}`);
+        return;
+    }
+    console.log(`   ✅ calculated_grade applied for academic year ${runAcademicYear}; ${cg.set} row(s) matched`);
+}
+/**
  * Get student assessment/grade book data
  * Fetches CSV file from API, parses it, and saves to database
  * Can be added to a class that extends BaseNexquareService
  */
-export async function getStudentAssessments(config, schoolId, academicYear, fileName, limit = 10000, offset = 0, onLog, options) {
+export async function getStudentAssessments(config, schoolId, academicYear, fileName, limit = 50000, offset = 0, onLog, options) {
     const log = (msg) => {
         console.log(msg);
         onLog?.(msg);
@@ -34,17 +173,31 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
             log(`⚠️  Warning: School with sourced_id "${targetSchoolId}" not found in database. Assessments will be saved with school_id = NULL.`);
         }
         log(`📋 Step 1: Fetching student assessments from Nexquare API (school: ${targetSchoolId}, academic year: ${defaultAcademicYear}, API param: ${apiAcademicYear})...`);
-        log(`   Using chunked fetching: ${limit} records per request`);
+        log(`   Using chunked fetching: requested ${limit.toLocaleString()} records per request`);
         const endpoint = NEXQUARE_ENDPOINTS.STUDENT_ASSESSMENTS;
-        let allRecords = [];
         let totalInserted = 0;
         // Fetch data in chunks to avoid memory issues with large files
         log(`📥 Fetching assessment data in chunks...`);
-        const chunkSize = limit; // Use the limit parameter (default 10000)
+        // Keep chunks reasonably large for throughput, but bounded for parse/heap safety.
+        const maxChunkSize = 100000;
+        const chunkSize = Math.max(1, Math.min(limit, maxChunkSize));
+        if (chunkSize !== limit) {
+            log(`   ℹ️  Chunk size adjusted to ${chunkSize.toLocaleString()} (allowed range: 1-${maxChunkSize.toLocaleString()})`);
+        }
         let currentOffset = offset; // Start from the offset parameter (default 0)
         let hasMoreData = true;
         let chunkNumber = 1;
         let totalFetched = 0;
+        // Delete existing NEX assessments for school + academic year before insert (prevent duplicates)
+        if (schoolSourcedId) {
+            const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
+            if (deleteError) {
+                log(`⚠️  Failed to delete existing NEX assessments before sync: ${deleteError}`);
+            }
+            else if (deleted > 0) {
+                log(`🗑️  Deleted ${deleted} existing NEX assessment(s) for school/year before sync`);
+            }
+        }
         while (hasMoreData) {
             log(`   📦 Fetching chunk ${chunkNumber} (offset: ${currentOffset}, limit: ${chunkSize})...`);
             // Build query parameters with offset and limit
@@ -429,9 +582,19 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
             }
             // Add chunk records to all records
             if (chunkRecords.length > 0) {
-                allRecords.push(...chunkRecords);
                 totalFetched += chunkRecords.length;
-                log(`   ✅ Chunk ${chunkNumber} complete: ${chunkRecords.length} records (total so far: ${totalFetched})`);
+                log(`   ✅ Chunk ${chunkNumber} parsed: ${chunkRecords.length} records (total fetched: ${totalFetched})`);
+                // Process this chunk immediately to avoid retaining all rows in memory.
+                log(`   💾 Saving chunk ${chunkNumber} records to database...`);
+                try {
+                    const chunkInserted = await this.saveAssessmentBatch(chunkRecords, schoolSourcedId, defaultAcademicYear);
+                    totalInserted += chunkInserted;
+                    log(`   ✅ Chunk ${chunkNumber} saved: ${chunkInserted} record(s) (total saved: ${totalInserted})`);
+                }
+                catch (chunkSaveError) {
+                    log(`   ❌ Failed to save chunk ${chunkNumber}: ${chunkSaveError.message}`);
+                    throw chunkSaveError;
+                }
                 // Check if we've reached the end (got fewer records than requested)
                 if (chunkRecords.length < chunkSize) {
                     log(`   📊 Reached end of data (got ${chunkRecords.length} < ${chunkSize} records)`);
@@ -448,56 +611,21 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
                 log(`   📊 No records in chunk ${chunkNumber} - reached end of data`);
                 hasMoreData = false;
             }
+            // Best-effort memory release between chunks.
+            chunkRecords = [];
+            if (typeof global !== 'undefined' && typeof global.gc === 'function') {
+                global.gc();
+            }
             // Small delay between requests to avoid rate limiting
             if (hasMoreData) {
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
         } // End of while loop
-        // After fetching all chunks, process all records
-        if (allRecords.length === 0) {
+        if (totalFetched === 0) {
             log(`✅ No records found in any chunk.`);
             return [];
         }
-        log(`✅ Step 1 complete: Fetched ${allRecords.length} records across all chunks`);
-        // Delete existing NEX assessments for school + academic year before insert (prevent duplicates)
-        if (schoolSourcedId) {
-            const { deleted, error: deleteError } = await databaseService.deleteNexquareStudentAssessmentsByYear(schoolSourcedId, defaultAcademicYear);
-            if (deleteError) {
-                log(`⚠️  Failed to delete existing NEX assessments before sync: ${deleteError}`);
-            }
-            else if (deleted > 0) {
-                log(`🗑️  Deleted ${deleted} existing NEX assessment(s) for school/year before sync`);
-            }
-        }
-        // Process records by grade_name to reduce memory usage
-        // Group records by grade_name
-        log(`📋 Step 2: Saving assessment records to database (NEX.student_assessments)...`);
-        const recordsByGrade = new Map();
-        for (const record of allRecords) {
-            const gradeName = String(record['Grade Name'] || record['grade_name'] || 'Unknown').trim();
-            if (!recordsByGrade.has(gradeName)) {
-                recordsByGrade.set(gradeName, []);
-            }
-            recordsByGrade.get(gradeName).push(record);
-        }
-        const gradeNames = Array.from(recordsByGrade.keys()).sort();
-        log(`   📊 Found ${gradeNames.length} unique grade(s): ${gradeNames.join(', ')}`);
-        // Process each grade separately to reduce memory pressure
-        for (const gradeName of gradeNames) {
-            const gradeRecords = recordsByGrade.get(gradeName);
-            log(`   📚 Processing grade "${gradeName}" (${gradeRecords.length} records)...`);
-            try {
-                const gradeInserted = await this.saveAssessmentBatch(gradeRecords, schoolSourcedId, defaultAcademicYear);
-                totalInserted += gradeInserted;
-                log(`   ✅ Saved ${gradeInserted} record(s) for grade "${gradeName}"`);
-                // Clear the grade records from memory after processing
-                recordsByGrade.delete(gradeName);
-            }
-            catch (gradeError) {
-                log(`   ❌ Failed to save records for grade "${gradeName}": ${gradeError.message}`);
-                // Continue with other grades even if one fails
-            }
-        }
+        log(`✅ Step 1 complete: Fetched ${totalFetched} records across all chunks`);
         log(`✅ Step 2 complete: Saved ${totalInserted} record(s) to NEX.student_assessments`);
         // Sync data to RP.student_assessments after processing completes (only if loadRpSchema is true)
         const loadRpSchema = options?.loadRpSchema !== false;
@@ -527,9 +655,10 @@ export async function getStudentAssessments(config, schoolId, academicYear, file
             log(`⚠️  Skipping RP sync - school sourced_id not available`);
         }
         log(`✅ Student assessments sync complete`);
-        log(`   Total records fetched: ${allRecords.length}`);
+        log(`   Total records fetched: ${totalFetched}`);
         log(`   Total records saved: ${totalInserted}`);
-        return allRecords;
+        // Intentionally return an empty array to avoid retaining large payloads in memory.
+        return [];
     }
     catch (error) {
         console.error('Failed to fetch student assessments:', error);
@@ -631,126 +760,155 @@ academicYearParam) {
         };
     });
     // Use direct batched INSERT statements (simpler and avoids temp table scope issues)
-    const connection = await getConnection();
-    const transaction = new sql.Transaction(connection);
-    try {
-        await transaction.begin();
-        // Batch size: 90 records per batch to stay within SQL Server's 2100 parameter limit
-        // (90 records * 23 columns = 2070 parameters, leaving margin for safety)
-        const batchSize = 90;
-        let totalInserted = 0;
-        const totalBatches = Math.ceil(rowsToInsert.length / batchSize);
-        console.log(`   📦 Inserting ${rowsToInsert.length} record(s) in ${totalBatches} batch(es)...`);
-        const startTime = Date.now();
-        for (let i = 0; i < rowsToInsert.length; i += batchSize) {
-            const batch = rowsToInsert.slice(i, i + batchSize);
-            const batchNum = Math.floor(i / batchSize) + 1;
-            // Build VALUES clause for batch insert
-            const values = batch.map((record, index) => {
-                const baseIndex = i + index;
-                return `(
-          @schoolId${baseIndex},
-          @schoolName${baseIndex},
-          @regionName${baseIndex},
-          @studentName${baseIndex},
-          @registerNumber${baseIndex},
-          @studentStatus${baseIndex},
-          @gradeName${baseIndex},
-          @sectionName${baseIndex},
-          @className${baseIndex},
-          @academicYear${baseIndex},
-          @subjectId${baseIndex},
-          @subjectName${baseIndex},
-          @termId${baseIndex},
-          @termName${baseIndex},
-          @componentName${baseIndex},
-          @componentValue${baseIndex},
-          @maxValue${baseIndex},
-          @dataType${baseIndex},
-          @calculationMethod${baseIndex},
-          @markGradeName${baseIndex},
-          @markRubricName${baseIndex},
-          SYSDATETIMEOFFSET(),
-          SYSDATETIMEOFFSET()
-        )`;
-            }).join(',');
-            const batchQuery = `
-        INSERT INTO NEX.student_assessments (
-          school_id, school_name, region_name, student_name, register_number,
-          student_status, grade_name, section_name, class_name, academic_year,
-          subject_id, subject_name, term_id, term_name, component_name,
-          component_value, max_value, data_type, calculation_method,
-          mark_grade_name, mark_rubric_name, created_at, updated_at
-        ) VALUES ${values};
-      `;
-            const request = transaction.request();
-            // Add parameters for each record in the batch
-            batch.forEach((record, index) => {
-                const baseIndex = i + index;
-                request.input(`schoolId${baseIndex}`, sql.NVarChar(100), record.school_id || null);
-                request.input(`schoolName${baseIndex}`, sql.NVarChar(sql.MAX), record.school_name || null);
-                request.input(`regionName${baseIndex}`, sql.NVarChar(sql.MAX), record.region_name || null);
-                request.input(`studentName${baseIndex}`, sql.NVarChar(sql.MAX), record.student_name || null);
-                request.input(`registerNumber${baseIndex}`, sql.NVarChar(100), record.register_number || null);
-                request.input(`studentStatus${baseIndex}`, sql.NVarChar(100), record.student_status || null);
-                request.input(`gradeName${baseIndex}`, sql.NVarChar(100), record.grade_name || null);
-                request.input(`sectionName${baseIndex}`, sql.NVarChar(100), record.section_name || null);
-                request.input(`className${baseIndex}`, sql.NVarChar(sql.MAX), record.class_name || null);
-                request.input(`academicYear${baseIndex}`, sql.NVarChar(100), record.academic_year || null);
-                request.input(`subjectId${baseIndex}`, sql.NVarChar(100), record.subject_id || null);
-                request.input(`subjectName${baseIndex}`, sql.NVarChar(sql.MAX), record.subject_name || null);
-                request.input(`termId${baseIndex}`, sql.NVarChar(100), record.term_id || null);
-                request.input(`termName${baseIndex}`, sql.NVarChar(sql.MAX), record.term_name || null);
-                request.input(`componentName${baseIndex}`, sql.NVarChar(sql.MAX), record.component_name || null);
-                // Handle component_value - ensure it's a string and properly formatted
-                let componentValue = null;
-                if (record.component_value != null && record.component_value !== '') {
-                    const strValue = String(record.component_value).trim();
-                    componentValue = strValue.length > 0 ? strValue.substring(0, 500) : null;
-                }
-                request.input(`componentValue${baseIndex}`, sql.NVarChar(500), componentValue);
-                request.input(`maxValue${baseIndex}`, sql.Decimal(10, 2), record.max_value || null);
-                request.input(`dataType${baseIndex}`, sql.NVarChar(100), record.data_type || null);
-                request.input(`calculationMethod${baseIndex}`, sql.NVarChar(sql.MAX), record.calculation_method || null);
-                request.input(`markGradeName${baseIndex}`, sql.NVarChar(100), record.mark_grade_name || null);
-                request.input(`markRubricName${baseIndex}`, sql.NVarChar(sql.MAX), record.mark_rubric_name || null);
-            });
-            try {
-                await request.query(batchQuery);
-                totalInserted += batch.length;
-                if (batchNum % 10 === 0 || batchNum === totalBatches) {
-                    console.log(`   Progress: ${batchNum}/${totalBatches} batches (${totalInserted}/${rowsToInsert.length} records)`);
-                }
-            }
-            catch (batchError) {
-                console.error(`❌ Error in batch ${batchNum}/${totalBatches}:`, batchError.message);
-                throw batchError;
-            }
-        }
-        await transaction.commit();
-        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-        console.log(`   ✅ Bulk insert completed in ${duration} seconds`);
-        return totalInserted;
-    }
-    catch (error) {
+    const isTransientSqlError = (error) => {
+        const code = String(error?.code || error?.originalError?.code || '').toUpperCase();
+        const message = String(error?.message || error?.originalError?.message || '').toLowerCase();
+        return [
+            'ECONNRESET',
+            'ETIMEDOUT',
+            'ETIMEOUT',
+            'ESOCKET',
+            'EPIPE',
+            'ECONNABORTED',
+            'ECONNREFUSED',
+        ].includes(code) ||
+            message.includes('econnreset') ||
+            message.includes('socket') ||
+            message.includes('connection was closed') ||
+            message.includes('connection lost') ||
+            message.includes('timeout');
+    };
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
         try {
-            await transaction.rollback();
+            await transaction.begin();
+            // Batch size: 90 records per batch to stay within SQL Server's 2100 parameter limit
+            // (90 records * 23 columns = 2070 parameters, leaving margin for safety)
+            const batchSize = 90;
+            let totalInserted = 0;
+            const totalBatches = Math.ceil(rowsToInsert.length / batchSize);
+            console.log(`   📦 Inserting ${rowsToInsert.length} record(s) in ${totalBatches} batch(es)...`);
+            const startTime = Date.now();
+            for (let i = 0; i < rowsToInsert.length; i += batchSize) {
+                const batch = rowsToInsert.slice(i, i + batchSize);
+                const batchNum = Math.floor(i / batchSize) + 1;
+                // Build VALUES clause for batch insert
+                const values = batch.map((record, index) => {
+                    const baseIndex = i + index;
+                    return `(
+            @schoolId${baseIndex},
+            @schoolName${baseIndex},
+            @regionName${baseIndex},
+            @studentName${baseIndex},
+            @registerNumber${baseIndex},
+            @studentStatus${baseIndex},
+            @gradeName${baseIndex},
+            @sectionName${baseIndex},
+            @className${baseIndex},
+            @academicYear${baseIndex},
+            @subjectId${baseIndex},
+            @subjectName${baseIndex},
+            @termId${baseIndex},
+            @termName${baseIndex},
+            @componentName${baseIndex},
+            @componentValue${baseIndex},
+            @maxValue${baseIndex},
+            @dataType${baseIndex},
+            @calculationMethod${baseIndex},
+            @markGradeName${baseIndex},
+            @markRubricName${baseIndex},
+            SYSDATETIMEOFFSET(),
+            SYSDATETIMEOFFSET()
+          )`;
+                }).join(',');
+                const batchQuery = `
+          INSERT INTO NEX.student_assessments (
+            school_id, school_name, region_name, student_name, register_number,
+            student_status, grade_name, section_name, class_name, academic_year,
+            subject_id, subject_name, term_id, term_name, component_name,
+            component_value, max_value, data_type, calculation_method,
+            mark_grade_name, mark_rubric_name, created_at, updated_at
+          ) VALUES ${values};
+        `;
+                const request = transaction.request();
+                // Add parameters for each record in the batch
+                batch.forEach((record, index) => {
+                    const baseIndex = i + index;
+                    request.input(`schoolId${baseIndex}`, sql.NVarChar(100), record.school_id || null);
+                    request.input(`schoolName${baseIndex}`, sql.NVarChar(sql.MAX), record.school_name || null);
+                    request.input(`regionName${baseIndex}`, sql.NVarChar(sql.MAX), record.region_name || null);
+                    request.input(`studentName${baseIndex}`, sql.NVarChar(sql.MAX), record.student_name || null);
+                    request.input(`registerNumber${baseIndex}`, sql.NVarChar(100), record.register_number || null);
+                    request.input(`studentStatus${baseIndex}`, sql.NVarChar(100), record.student_status || null);
+                    request.input(`gradeName${baseIndex}`, sql.NVarChar(100), record.grade_name || null);
+                    request.input(`sectionName${baseIndex}`, sql.NVarChar(100), record.section_name || null);
+                    request.input(`className${baseIndex}`, sql.NVarChar(sql.MAX), record.class_name || null);
+                    request.input(`academicYear${baseIndex}`, sql.NVarChar(100), record.academic_year || null);
+                    request.input(`subjectId${baseIndex}`, sql.NVarChar(100), record.subject_id || null);
+                    request.input(`subjectName${baseIndex}`, sql.NVarChar(sql.MAX), record.subject_name || null);
+                    request.input(`termId${baseIndex}`, sql.NVarChar(100), record.term_id || null);
+                    request.input(`termName${baseIndex}`, sql.NVarChar(sql.MAX), record.term_name || null);
+                    request.input(`componentName${baseIndex}`, sql.NVarChar(sql.MAX), record.component_name || null);
+                    // Handle component_value - ensure it's a string and properly formatted
+                    let componentValue = null;
+                    if (record.component_value != null && record.component_value !== '') {
+                        const strValue = String(record.component_value).trim();
+                        componentValue = strValue.length > 0 ? strValue.substring(0, 500) : null;
+                    }
+                    request.input(`componentValue${baseIndex}`, sql.NVarChar(500), componentValue);
+                    request.input(`maxValue${baseIndex}`, sql.Decimal(10, 2), record.max_value || null);
+                    request.input(`dataType${baseIndex}`, sql.NVarChar(100), record.data_type || null);
+                    request.input(`calculationMethod${baseIndex}`, sql.NVarChar(sql.MAX), record.calculation_method || null);
+                    request.input(`markGradeName${baseIndex}`, sql.NVarChar(100), record.mark_grade_name || null);
+                    request.input(`markRubricName${baseIndex}`, sql.NVarChar(sql.MAX), record.mark_rubric_name || null);
+                });
+                try {
+                    await request.query(batchQuery);
+                    totalInserted += batch.length;
+                    if (batchNum % 10 === 0 || batchNum === totalBatches) {
+                        console.log(`   Progress: ${batchNum}/${totalBatches} batches (${totalInserted}/${rowsToInsert.length} records)`);
+                    }
+                }
+                catch (batchError) {
+                    console.error(`❌ Error in batch ${batchNum}/${totalBatches}:`, batchError.message);
+                    throw batchError;
+                }
+            }
+            await transaction.commit();
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+            console.log(`   ✅ Bulk insert completed in ${duration} seconds`);
+            return totalInserted;
         }
-        catch (rollbackError) {
-            console.warn('   ⚠️  Transaction rollback error (may be already aborted)');
+        catch (error) {
+            try {
+                await transaction.rollback();
+            }
+            catch (rollbackError) {
+                console.warn('   ⚠️  Transaction rollback error (may be already aborted)');
+            }
+            const transient = isTransientSqlError(error);
+            const canRetry = transient && attempt < maxAttempts;
+            console.error(`   ❌ Bulk insert failed (attempt ${attempt}/${maxAttempts}):`, error.message);
+            console.error('   Error code:', error.code);
+            console.error('   Error number:', error.number);
+            if (error.originalError) {
+                console.error('   Original error:', error.originalError.message);
+            }
+            if (rowsToInsert.length > 0) {
+                console.error('   First record:', JSON.stringify(rowsToInsert[0]).substring(0, 300));
+            }
+            if (canRetry) {
+                const delayMs = attempt * 2000;
+                console.warn(`   ⚠️  Transient DB error detected. Retrying in ${delayMs}ms...`);
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                continue;
+            }
+            throw new Error(`Bulk insert failed: ${error.message || error}`);
         }
-        console.error('   ❌ Bulk insert failed:', error.message);
-        console.error('   Error code:', error.code);
-        console.error('   Error number:', error.number);
-        if (error.originalError) {
-            console.error('   Original error:', error.originalError.message);
-        }
-        // Log first record for debugging
-        if (rowsToInsert.length > 0) {
-            console.error('   First record:', JSON.stringify(rowsToInsert[0]).substring(0, 300));
-        }
-        throw new Error(`Bulk insert failed: ${error.message || error}`);
     }
+    throw new Error('Bulk insert failed after all retry attempts');
 }
 /**
  * Sync student assessments from NEX.student_assessments to RP.student_assessments
@@ -774,7 +932,15 @@ export async function syncStudentAssessmentsToRP(schoolSourcedId, academicYear) 
         const connection = await getConnection();
         // Fetch component filters and term filters (tables created by create_rp_filter_tables.sql)
         let compFilters = [];
-        const compResult = await executeQuery(`SELECT filter_type, pattern FROM admin.component_filter_config WHERE school_id = @school_id`, { school_id: schoolSourcedId });
+        const compResult = await executeQuery(`
+        SELECT filter_type, pattern
+        FROM admin.component_filter_config
+        WHERE school_id = @school_id
+          AND (
+            (@academic_year IS NOT NULL AND academic_year = @academic_year)
+            OR (@academic_year IS NULL AND (academic_year IS NULL OR LTRIM(RTRIM(academic_year)) = ''))
+          )
+      `, { school_id: schoolSourcedId, academic_year: academicYear || null });
         if (compResult.error) {
             console.log(`   ℹ️  Component filters not available (${compResult.error}) - including all components`);
         }
@@ -894,6 +1060,7 @@ export async function syncStudentAssessmentsToRP(schoolSourcedId, academicYear) 
         // Get the number of rows inserted from @@ROWCOUNT
         const rowsAffected = queryResult.recordset?.[0]?.rows_affected || 0;
         console.log(`   ✅ Synced ${rowsAffected} record(s) to RP.student_assessments`);
+        await applyCalculatedGradesForRunYear(schoolSourcedId, academicYear);
         // Delete from NEX.student_assessments for this school+academic_year after RP load
         if (academicYear) {
             try {

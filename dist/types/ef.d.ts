@@ -26,6 +26,8 @@ export interface Upload {
     uploaded_by: string;
     uploaded_at: Date;
     processed_at?: Date;
+    /** Set for MSNAV_FINANCIAL_AID uploads; used to trigger RP refresh for the school */
+    school_id?: string | null;
 }
 export interface IBExternalExam {
     Year?: number;
@@ -142,6 +144,7 @@ export interface HREmployeeData {
     separation?: string;
     Staff_Category?: string;
     Contract_type?: string;
+    Key?: string;
 }
 export interface HRBudgetVsActual {
     Year?: string;
@@ -149,7 +152,29 @@ export interface HRBudgetVsActual {
     Country?: string;
     Category?: string;
     Budget?: number;
-    Actual?: number;
     Key?: string;
+}
+export interface FinanceDictionaryRecord {
+    code: string;
+    description?: string;
+    suspended?: string;
+    entity?: string;
+    group_dimension?: string;
+}
+export interface FinanceTrialBalanceRecord {
+    main_account: string;
+    funding_source?: string;
+    region?: string;
+    operating_unit?: string;
+    department?: string;
+    project?: string;
+    activity?: string;
+    resource?: string;
+    party?: string;
+    fixed_assets?: string;
+    reference?: string;
+    debit?: number;
+    credit?: number;
+    status?: string;
 }
 //# sourceMappingURL=ef.d.ts.map

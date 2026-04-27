@@ -11,6 +11,7 @@ export declare class SupersetService {
     private config;
     private accessTokenCache;
     constructor();
+    private isExpiredSupersetTokenResponse;
     /**
      * Get CSRF token from Superset, plus session cookie for subsequent POSTs.
      * @param bearerToken - When provided, use Bearer auth (required by some Superset instances).

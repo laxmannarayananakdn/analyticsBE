@@ -175,3 +175,28 @@ export interface HRBudgetVsActual {
   Key?: string;
 }
 
+export interface FinanceDictionaryRecord {
+  code: string;
+  description?: string;
+  suspended?: string;
+  entity?: string;
+  group_dimension?: string;
+}
+
+export interface FinanceTrialBalanceRecord {
+  main_account: string;
+  funding_source?: string;
+  region?: string;
+  operating_unit?: string;
+  department?: string;
+  project?: string;
+  activity?: string;
+  resource?: string;
+  party?: string;
+  fixed_assets?: string;
+  reference?: string;
+  debit?: number;
+  credit?: number;
+  status?: string;
+}
+

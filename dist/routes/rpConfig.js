@@ -393,7 +393,7 @@ router.get('/schools', async (req, res) => {
 });
 /**
  * GET /api/rp-config/academic-years
- * Get academic years from RP Config tables only (subject_mapping).
+ * Get academic years from RP Config tables (subject_mapping + component_filter_config).
  * Optional: school_id - filter years for that school.
  */
 router.get('/academic-years', async (req, res) => {
@@ -406,9 +406,19 @@ router.get('/academic-years', async (req, res) => {
         }
         const query = `
       SELECT DISTINCT academic_year
-      FROM admin.subject_mapping
-      WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
-      ${schoolFilter}
+      FROM (
+        SELECT academic_year
+        FROM admin.subject_mapping
+        WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
+        ${schoolFilter}
+
+        UNION
+
+        SELECT academic_year
+        FROM admin.component_filter_config
+        WHERE academic_year IS NOT NULL AND LTRIM(RTRIM(academic_year)) != ''
+        ${schoolFilter}
+      ) AS years
       ORDER BY academic_year DESC
     `;
         const result = await executeQuery(query, params);
@@ -533,17 +543,21 @@ router.get('/subjects', async (req, res) => {
  */
 router.get('/component-filters', async (req, res) => {
     try {
-        const { school_id } = req.query;
+        const { school_id, academic_year } = req.query;
         if (!school_id || typeof school_id !== 'string') {
             return res.status(400).json({ error: 'school_id is required' });
         }
+        if (!academic_year || typeof academic_year !== 'string') {
+            return res.status(400).json({ error: 'academic_year is required' });
+        }
         const query = `
-      SELECT id, school_id, filter_type, pattern, display_order, created_at, updated_at
+      SELECT id, school_id, academic_year, filter_type, pattern, display_order, created_at, updated_at
       FROM admin.component_filter_config
       WHERE school_id = @school_id
+        AND academic_year = @academic_year
       ORDER BY display_order, filter_type, id
     `;
-        const result = await executeQuery(query, { school_id });
+        const result = await executeQuery(query, { school_id, academic_year });
         if (result.error)
             return res.status(500).json({ error: result.error });
         res.json({ success: true, data: result.data || [] });
@@ -569,8 +583,8 @@ router.post('/component-filters', async (req, res) => {
         let errorCount = 0;
         const errors = [];
         for (const f of filters) {
-            const { id, school_id, filter_type, pattern } = f;
-            if (!school_id || !filter_type || !pattern) {
+            const { id, school_id, academic_year, filter_type, pattern } = f;
+            if (!school_id || !academic_year || !filter_type || !pattern) {
                 errorCount++;
                 errors.push(`Missing required fields: ${JSON.stringify(f)}`);
                 continue;
@@ -583,14 +597,22 @@ router.post('/component-filters', async (req, res) => {
             try {
                 const request = transaction.request();
                 request.input('school_id', sql.NVarChar(200), school_id);
+                request.input('academic_year', sql.NVarChar(200), academic_year);
                 request.input('filter_type', sql.NVarChar(20), filter_type);
                 request.input('pattern', sql.NVarChar(500), pattern);
                 if (id) {
                     request.input('id', sql.BigInt, id);
-                    await request.query(`UPDATE admin.component_filter_config SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET() WHERE id=@id AND school_id=@school_id`);
+                    await request.query(`
+            UPDATE admin.component_filter_config
+            SET filter_type=@filter_type, pattern=@pattern, updated_at=SYSDATETIMEOFFSET()
+            WHERE id=@id AND school_id=@school_id AND academic_year=@academic_year
+          `);
                 }
                 else {
-                    await request.query(`INSERT INTO admin.component_filter_config (school_id, filter_type, pattern) VALUES (@school_id, @filter_type, @pattern)`);
+                    await request.query(`
+            INSERT INTO admin.component_filter_config (school_id, academic_year, filter_type, pattern)
+            VALUES (@school_id, @academic_year, @filter_type, @pattern)
+          `);
                 }
                 successCount++;
             }
@@ -722,6 +744,233 @@ router.delete('/term-filters/:id', async (req, res) => {
     }
     catch (error) {
         console.error('Error deleting term filter:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+// =============================================
+// MARK -> CALCULATED GRADE TRANSLATION CONFIG ROUTES
+// =============================================
+/**
+ * GET /api/rp-config/mark-grade-translations
+ * Get mark-grade translation rows filtered by node_id, effective_date, grade_name
+ */
+router.get('/mark-grade-translations', async (req, res) => {
+    try {
+        const { node_id, effective_date, grade_name } = req.query;
+        let query = `
+      SELECT
+        id,
+        node_id,
+        effective_date,
+        grade_name,
+        marks_start,
+        marks_end,
+        calculated_grade,
+        is_active,
+        created_at,
+        updated_at
+      FROM admin.mark_grade_translation_config
+      WHERE 1=1
+    `;
+        const params = {};
+        if (node_id && typeof node_id === 'string') {
+            query += ` AND node_id = @node_id`;
+            params.node_id = node_id;
+        }
+        if (effective_date && typeof effective_date === 'string') {
+            query += ` AND effective_date = @effective_date`;
+            params.effective_date = effective_date;
+        }
+        if (grade_name && typeof grade_name === 'string') {
+            query += ` AND grade_name = @grade_name`;
+            params.grade_name = grade_name;
+        }
+        query += ` ORDER BY node_id, effective_date DESC, grade_name, marks_start`;
+        const result = await executeQuery(query, params);
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: result.data || [] });
+    }
+    catch (error) {
+        console.error('Error fetching mark-grade translations:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /api/rp-config/mark-grade-effective-dates
+ * Get distinct effective dates for a node.
+ */
+router.get('/mark-grade-effective-dates', async (req, res) => {
+    try {
+        const { node_id } = req.query;
+        if (!node_id || typeof node_id !== 'string') {
+            return res.status(400).json({ error: 'node_id is required' });
+        }
+        const result = await executeQuery(`
+      SELECT DISTINCT CONVERT(NVARCHAR(10), effective_date, 23) AS effective_date
+      FROM admin.mark_grade_translation_config
+      WHERE node_id = @node_id
+      ORDER BY effective_date DESC
+      `, { node_id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: (result.data || []).map((r) => r.effective_date) });
+    }
+    catch (error) {
+        console.error('Error fetching mark-grade effective dates:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /api/rp-config/mark-grade-names
+ * Get distinct grade names for node + effective date.
+ */
+router.get('/mark-grade-names', async (req, res) => {
+    try {
+        const { node_id, effective_date } = req.query;
+        if (!node_id || typeof node_id !== 'string') {
+            return res.status(400).json({ error: 'node_id is required' });
+        }
+        const params = { node_id };
+        let dateFilter = '';
+        if (effective_date && typeof effective_date === 'string') {
+            dateFilter = ' AND effective_date = @effective_date';
+            params.effective_date = effective_date;
+        }
+        const result = await executeQuery(`
+      SELECT DISTINCT grade_name
+      FROM admin.mark_grade_translation_config
+      WHERE node_id = @node_id
+        ${dateFilter}
+        AND grade_name IS NOT NULL
+        AND LTRIM(RTRIM(grade_name)) != ''
+      ORDER BY grade_name
+      `, params);
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: (result.data || []).map((r) => r.grade_name) });
+    }
+    catch (error) {
+        console.error('Error fetching mark-grade names:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * POST /api/rp-config/mark-grade-translations
+ * Create or update mark-grade translation rows (bulk).
+ */
+router.post('/mark-grade-translations', async (req, res) => {
+    try {
+        const { mappings } = req.body;
+        if (!Array.isArray(mappings) || mappings.length === 0) {
+            return res.status(400).json({ error: 'mappings array is required' });
+        }
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        let successCount = 0;
+        let errorCount = 0;
+        const errors = [];
+        for (const m of mappings) {
+            const { id, node_id, effective_date, grade_name, marks_start, marks_end, calculated_grade, is_active } = m;
+            if (!node_id || !effective_date || !grade_name || marks_start == null || marks_end == null || !calculated_grade) {
+                errorCount++;
+                errors.push(`Missing required fields: ${JSON.stringify(m)}`);
+                continue;
+            }
+            const start = Number(marks_start);
+            const end = Number(marks_end);
+            if (Number.isNaN(start) || Number.isNaN(end)) {
+                errorCount++;
+                errors.push(`Invalid marks range (not numeric): ${JSON.stringify(m)}`);
+                continue;
+            }
+            if (start > end) {
+                errorCount++;
+                errors.push(`Invalid marks range (start > end): ${JSON.stringify(m)}`);
+                continue;
+            }
+            try {
+                const request = transaction.request();
+                request.input('node_id', sql.VarChar(50), node_id);
+                request.input('effective_date', sql.Date, effective_date);
+                request.input('grade_name', sql.NVarChar(100), grade_name);
+                request.input('marks_start', sql.Decimal(10, 2), start);
+                request.input('marks_end', sql.Decimal(10, 2), end);
+                request.input('calculated_grade', sql.NVarChar(50), calculated_grade);
+                request.input('is_active', sql.Bit, is_active === false ? false : true);
+                if (id) {
+                    request.input('id', sql.BigInt, id);
+                    await request.query(`
+            UPDATE admin.mark_grade_translation_config
+            SET
+              node_id = @node_id,
+              effective_date = @effective_date,
+              grade_name = @grade_name,
+              marks_start = @marks_start,
+              marks_end = @marks_end,
+              calculated_grade = @calculated_grade,
+              is_active = @is_active,
+              updated_at = SYSDATETIMEOFFSET()
+            WHERE id = @id
+          `);
+                }
+                else {
+                    await request.query(`
+            MERGE admin.mark_grade_translation_config AS target
+            USING (
+              SELECT
+                @node_id AS node_id,
+                @effective_date AS effective_date,
+                @grade_name AS grade_name,
+                @marks_start AS marks_start,
+                @marks_end AS marks_end
+            ) AS source
+            ON target.node_id = source.node_id
+              AND target.effective_date = source.effective_date
+              AND target.grade_name = source.grade_name
+              AND target.marks_start = source.marks_start
+              AND target.marks_end = source.marks_end
+            WHEN MATCHED THEN
+              UPDATE SET
+                calculated_grade = @calculated_grade,
+                is_active = @is_active,
+                updated_at = SYSDATETIMEOFFSET()
+            WHEN NOT MATCHED THEN
+              INSERT (node_id, effective_date, grade_name, marks_start, marks_end, calculated_grade, is_active, created_at, updated_at)
+              VALUES (@node_id, @effective_date, @grade_name, @marks_start, @marks_end, @calculated_grade, @is_active, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+          `);
+                }
+                successCount++;
+            }
+            catch (err) {
+                errorCount++;
+                errors.push(err.message);
+            }
+        }
+        await transaction.commit();
+        res.json({ success: true, successCount, errorCount, errors: errors.length ? errors : undefined });
+    }
+    catch (error) {
+        console.error('Error saving mark-grade translations:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * DELETE /api/rp-config/mark-grade-translations/:id
+ */
+router.delete('/mark-grade-translations/:id', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (isNaN(id))
+            return res.status(400).json({ error: 'Invalid ID' });
+        const result = await executeQuery('DELETE FROM admin.mark_grade_translation_config WHERE id = @id', { id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, message: 'Deleted' });
+    }
+    catch (error) {
+        console.error('Error deleting mark-grade translation:', error);
         res.status(500).json({ error: error.message || 'Internal server error' });
     }
 });

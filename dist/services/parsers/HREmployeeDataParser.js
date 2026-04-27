@@ -44,7 +44,8 @@ function toDbColumn(header) {
         recruitment: 'recruitment',
         separation: 'separation',
         staff_category: 'Staff_Category',
-        contract_type: 'Contract_type'
+        contract_type: 'Contract_type',
+        key: 'Key'
     };
     return map[n] || null;
 }
@@ -146,8 +147,9 @@ export class HREmployeeDataParser {
                     const n = typeof v === 'number' ? v : parseFloat(String(v));
                     return isNaN(n) ? null : n;
                 };
+                // "Country / City" maps to Country_City; derive Country from it (e.g. "Kenya" from "Kenya/Nairobi")
                 const countryCity = str('Country_City') ?? str('Country');
-                const country = str('Country') ?? deriveCountry(countryCity);
+                const country = deriveCountry(countryCity) ?? str('Country');
                 const record = {
                     Year: num('Year') ?? undefined,
                     Quarter: str('Quarter') ?? undefined,
@@ -178,7 +180,8 @@ export class HREmployeeDataParser {
                     recruitment: str('recruitment') ?? undefined,
                     separation: str('separation') ?? undefined,
                     Staff_Category: str('Staff_Category') ?? undefined,
-                    Contract_type: str('Contract_type') ?? undefined
+                    Contract_type: str('Contract_type') ?? undefined,
+                    Key: str('Key') ?? undefined
                 };
                 if (record.Emp_ID || record.Entity || record.Country) {
                     results.push(record);

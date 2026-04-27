@@ -1,0 +1,1 @@
+{"version":3,"file":"FinanceDictionaryParser.d.ts","sourceRoot":"","sources":["../../../src/services/parsers/FinanceDictionaryParser.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,gBAAgB,EAA0B,MAAM,uBAAuB,CAAC;AACjF,OAAO,EAAE,uBAAuB,EAAE,MAAM,mBAAmB,CAAC;AAE5D,qBAAa,uBAAuB;IAC5B,sBAAsB,CAC1B,UAAU,EAAE,MAAM,EAClB,eAAe,GAAE,OAAe,GAC/B,OAAO,CAAC,gBAAgB,CAAC,uBAAuB,CAAC,CAAC;CA6HtD"}

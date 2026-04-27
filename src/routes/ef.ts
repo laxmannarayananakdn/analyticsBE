@@ -12,7 +12,9 @@ import {
   CEMPredictionReport,
   CEMSubjectLevelAnalysis,
   HREmployeeData,
-  HRBudgetVsActual
+  HRBudgetVsActual,
+  FinanceDictionaryRecord,
+  FinanceTrialBalanceRecord
 } from '../types/ef.js';
 import {
   validateFileSize,
@@ -314,19 +316,64 @@ router.post('/upload', (req, res, next) => {
       'HR_EMPLOYEE_DATA': async (id, name, by, recs) =>
         await efService.insertHREmployeeData(id, name, by, recs as HREmployeeData[]),
       'HR_BUDGET_VS_ACTUAL': async (id, name, by, recs) =>
-        await efService.insertHRBudgetVsActual(id, name, by, recs as HRBudgetVsActual[])
+        await efService.insertHRBudgetVsActual(id, name, by, recs as HRBudgetVsActual[]),
+      'FIN_DIC_ACCOUNT': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'ACCOUNT', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_ACTIVITY': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'ACTIVITY', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_DEPARTMENT': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'DEPARTMENT', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_FIXED_ASSETS': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'FIXED_ASSETS', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_OPERATING_UNIT': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'OPERATING_UNIT', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_PARTY': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'PARTY', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_PROJECT': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'PROJECT', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_REFERENCE': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'REFERENCE', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_REGION': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'REGION', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_RESOURCE': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'RESOURCE', recs as FinanceDictionaryRecord[]),
+      'FIN_DIC_SOURCE_OF_FUND': async (id, name, by, recs) =>
+        await efService.insertFINDictionary(id, name, by, 'SOURCE_OF_FUND', recs as FinanceDictionaryRecord[]),
+      'FIN_TB_ACTUAL': async (id, name, by, recs) =>
+        await efService.insertFINTrialBalance(id, name, by, 'ACTUAL', recs as FinanceTrialBalanceRecord[]),
+      'FIN_TB_BUDGET': async (id, name, by, recs) =>
+        await efService.insertFINTrialBalance(id, name, by, 'BUDGET', recs as FinanceTrialBalanceRecord[])
     };
 
     const fileTypeUpper = fileTypeCode.toUpperCase();
 
     // HR types: overwrite previous data before insert
     const hrFileTypes = ['HR_EMPLOYEE_DATA', 'HR_BUDGET_VS_ACTUAL'];
+    const financeDictionaryFileTypes = [
+      'FIN_DIC_ACCOUNT',
+      'FIN_DIC_ACTIVITY',
+      'FIN_DIC_DEPARTMENT',
+      'FIN_DIC_FIXED_ASSETS',
+      'FIN_DIC_OPERATING_UNIT',
+      'FIN_DIC_PARTY',
+      'FIN_DIC_PROJECT',
+      'FIN_DIC_REFERENCE',
+      'FIN_DIC_REGION',
+      'FIN_DIC_RESOURCE',
+      'FIN_DIC_SOURCE_OF_FUND'
+    ];
     if (hrFileTypes.includes(fileTypeUpper)) {
       if (fileTypeUpper === 'HR_EMPLOYEE_DATA') {
         await efService.deleteAllHREmployeeData();
       } else {
         await efService.deleteAllHRBudgetVsActual();
       }
+    } else if (financeDictionaryFileTypes.includes(fileTypeUpper)) {
+      const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
+      await efService.deleteAllFINDictionaryByType(dictionaryType);
+    } else if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+      const tbType = fileTypeUpper === 'FIN_TB_ACTUAL' ? 'ACTUAL' : 'BUDGET';
+      await efService.deleteAllFINTrialBalanceByType(tbType);
     }
     const insertFunction = insertRegistry[fileTypeUpper];
 
