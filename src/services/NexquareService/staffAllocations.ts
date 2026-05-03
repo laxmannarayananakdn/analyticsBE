@@ -44,6 +44,12 @@ export async function getStaffAllocations(
       const queryParams = new URLSearchParams();
       queryParams.append('offset', offset.toString());
       queryParams.append('limit', limit.toString());
+      const staffAllocationTypes = 'subject,cohort,home room,lesson';
+      if (academicYear) {
+        queryParams.append('filter', `type=${staffAllocationTypes}&academicyear=${academicYear}`);
+      } else {
+        queryParams.append('filter', `type=${staffAllocationTypes}`);
+      }
 
       const url = `${endpoint}?${queryParams.toString()}`;
       const response = await this.makeRequest<Record<string, unknown>>(url, config);
@@ -143,7 +149,7 @@ export async function getStaffAllocations(
     for (const allocation of allAllocations) {
       const data = allocation as any;
       const staffSourcedId = data.sourcedId || data.staffSourcedId;
-      const academicYear = data.academicYear || null;
+      const allocationAcademicYear = academicYear || data.academicYear || null;
 
       if (!staffSourcedId) {
         continue;
@@ -163,7 +169,7 @@ export async function getStaffAllocations(
             staff_id: staffId,
             staff_sourced_id: staffSourcedId,
             school_id: schoolSourcedId,
-            academic_year: academicYear,
+            academic_year: allocationAcademicYear,
             // Nexquare staff subject payload typically uses `sourcedId` (not subjectSourcedId)
             subject_sourced_id: subject.subjectSourcedId || subject.subject_sourced_id || subject.sourcedId || null,
             subject_id: subject.subjectId || subject.subject_id || null,
@@ -185,7 +191,7 @@ export async function getStaffAllocations(
             staff_id: staffId,
             staff_sourced_id: staffSourcedId,
             school_id: schoolSourcedId,
-            academic_year: academicYear,
+            academic_year: allocationAcademicYear,
             cohort_sourced_id: cohort.sourcedId || cohort.sourced_id || null,
             cohort_id: cohort.cohortId || cohort.cohort_id || null,
             cohort_name: cohort.cohortName || cohort.cohort_name || null,
@@ -203,7 +209,7 @@ export async function getStaffAllocations(
             staff_id: staffId,
             staff_sourced_id: staffSourcedId,
             school_id: schoolSourcedId,
-            academic_year: academicYear,
+            academic_year: allocationAcademicYear,
             lesson_sourced_id: lesson.sourcedId || lesson.sourced_id || null,
             lesson_id: lesson.lessonId || lesson.lesson_id || null,
             lesson_name: lesson.lessonName || lesson.lesson_name || null,

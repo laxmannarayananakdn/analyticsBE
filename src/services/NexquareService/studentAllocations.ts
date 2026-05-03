@@ -56,6 +56,9 @@ export async function getStudentAllocations(
       const queryParams = new URLSearchParams();
       queryParams.append('offset', offset.toString());
       queryParams.append('limit', limit.toString());
+      if (academicYearParam) {
+        queryParams.append('filter', `academicYear=${academicYearParam}`);
+      }
 
       const url = `${endpoint}?${queryParams.toString()}`;
       const response = await this.makeRequest<Record<string, unknown>>(url, config);
@@ -425,8 +428,7 @@ export async function getStudentAllocations(
       }
     }
 
-    // Nexquare API returns current academic year data only (no year param in request).
-    // Use academic_year from the DATA for delete - e.g. "2025-2026" from first row / all rows.
+    // Use academic_year from payload/fallback param for delete (school + year replacement).
     const yearsToDelete = Array.from(new Set(recordsToInsert.map((r) => r.academic_year ?? null)));
 
     // Insert all received records - API already returns only current year data
