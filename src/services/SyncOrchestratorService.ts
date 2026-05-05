@@ -9,8 +9,7 @@ import { getConfigsForScope } from './SyncScopeService.js';
 import type { ManageBacConfig, NexquareConfig } from '../middleware/configLoader.js';
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
-import { databaseService } from './DatabaseService.js';
-import { triggerRefresh } from './RefreshService.js';
+import { triggerRefresh, buildStudentAssessmentsByAcademicYear } from './RefreshService.js';
 
 export interface RunSyncParams {
   /** Node ID(s) to sync. Required unless all is true. */
@@ -27,6 +26,8 @@ export interface RunSyncParams {
   loadRpSchema?: boolean;
   /** Include descendant nodes. */
   includeDescendants?: boolean;
+  /** After all sync work, execute BuildStudentAssessmentsByAcademicYear(academic_year, node). */
+  buildStudentAssessmentsByAcademicYear?: boolean;
   /** Sync all active configs (ignore nodeIds). */
   all?: boolean;
   /** Who triggered: "scheduler" or user email. */
@@ -130,6 +131,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
   const endpointsMb = params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL;
   const endpointsNex = params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL;
   const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
+  const runBuildStudentAssessmentsByAcademicYear = params.buildStudentAssessmentsByAcademicYear === true;
 
   // Pre-create all sync_run_schools rows and mark as running
   type ItemWithId = { item: typeof schoolItems[0]; schoolRunId: number };
@@ -363,54 +365,10 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
 
     await Promise.all(allTasks);
 
-    // When Load RP schema is checked but Student Assessments is NOT in endpoints:
-    // Delete RP rows for school+year, then sync from NEX.student_assessments to RP.student_assessments
-    if (loadRpSchema && !eps.includes('student-assessments') && trackItems.length > 0) {
-      for (let i = 0; i < trackItems.length; i++) {
-        if (schoolFailed.has(i)) continue;
-        const { item, schoolRunId } = trackItems[i];
-        const schoolId = item.schoolId;
-        if (!schoolId) continue;
-
-        const startedAt = new Date();
-        await executeQuery(
-          `UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt), current_endpoint = @endpoint WHERE id = @id`,
-          { startedAt, endpoint: 'rp-sync', id: schoolRunId }
-        );
-
-        try {
-          const { deleted, error: deleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolId, ay);
-          if (deleteError) {
-            throw new Error(`Delete RP failed: ${deleteError}`);
-          }
-          await nexquareService.syncStudentAssessmentsToRP(schoolId, ay);
-          const completedAt = new Date();
-          await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, null);
-          await executeQuery(
-            `UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`,
-            { completedAt, id: schoolRunId }
-          );
-          await updateRunCounts();
-
-          // Trigger RP refresh (fire-and-forget)
-          triggerRefresh({
-            school_id: schoolId,
-            academic_year: ay,
-            triggered_by: triggeredBy,
-          }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
-        } catch (err: any) {
-          const errMsg = err?.message || String(err);
-          const completedAt = new Date();
-          await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, errMsg);
-          schoolFailed.set(i, errMsg);
-          await executeQuery(
-            `UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`,
-            { completedAt, errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg, id: schoolRunId }
-          );
-          await updateRunCounts();
-        }
-      }
-    }
+    // IMPORTANT:
+    // Do not run rp-sync (delete + repopulate RP.student_assessments) unless
+    // the student-assessments endpoint is explicitly selected and executed.
+    // This avoids deleting RP data when student-assessments sync is skipped.
 
     return trackItems.map(({ item, schoolRunId }, i) => {
       const errMsg = schoolFailed.get(i);
@@ -516,6 +474,22 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
       failed++;
       const reason = (r as unknown as PromiseRejectedResult).reason;
       errors.push((reason as Error)?.message || 'Unknown error');
+    }
+  }
+
+  // Optional final step: run aggregate SP and wait for completion before marking sync run complete.
+  if (runBuildStudentAssessmentsByAcademicYear) {
+    try {
+      const nodeForProc = params.nodeIds?.length ? params.nodeIds[0] : nodeIdStr;
+      console.log(`[SyncOrchestrator] Running RP.BuildStudentAssessmentsByAcademicYear(academic_year='${academicYearStr}', node='${nodeForProc}')`);
+      await buildStudentAssessmentsByAcademicYear({
+        academic_year: academicYearStr,
+        node: nodeForProc,
+      });
+      console.log('[SyncOrchestrator] BuildStudentAssessmentsByAcademicYear completed successfully');
+    } catch (err: any) {
+      failed++;
+      errors.push(`BuildStudentAssessmentsByAcademicYear: ${err?.message || String(err)}`);
     }
   }
 

@@ -19,6 +19,7 @@ interface SyncScheduleRow {
   endpoints_mb: string | null;
   endpoints_nex: string | null;
   load_rp_schema: boolean | number;
+  build_student_assessments_by_academic_year: boolean | number;
   include_descendants: boolean | number;
 }
 
@@ -39,7 +40,9 @@ function parseEndpoints(json: string | null): string[] | null {
 async function loadActiveSchedules(): Promise<SyncScheduleRow[]> {
   const result = await executeQuery<SyncScheduleRow>(
     `SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
-            ISNULL(load_rp_schema, 1) AS load_rp_schema, include_descendants
+            ISNULL(load_rp_schema, 1) AS load_rp_schema,
+            ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
+            include_descendants
      FROM admin.sync_schedules
      WHERE is_active = 1
      ORDER BY id`
@@ -114,6 +117,7 @@ function registerSchedule(schedule: SyncScheduleRow): void {
           endpointsMb: endpointsMb ?? undefined,
           endpointsNex: endpointsNex ?? undefined,
           loadRpSchema: !!(schedule.load_rp_schema ?? true),
+          buildStudentAssessmentsByAcademicYear: !!(schedule.build_student_assessments_by_academic_year),
           includeDescendants: !!(schedule.include_descendants),
           triggeredBy: 'scheduler',
         });

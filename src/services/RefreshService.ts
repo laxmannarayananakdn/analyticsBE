@@ -149,3 +149,32 @@ export async function triggerRefresh(params: TriggerRefreshParams): Promise<{ jo
 
   return { job_run_id };
 }
+
+export interface BuildStudentAssessmentsByAcademicYearParams {
+  academic_year: string;
+  node: string;
+}
+
+/**
+ * Execute BuildStudentAssessmentsByAcademicYear stored procedure synchronously.
+ * Sync run completion should wait for this call when enabled.
+ */
+export async function buildStudentAssessmentsByAcademicYear(
+  params: BuildStudentAssessmentsByAcademicYearParams
+): Promise<void> {
+  const { academic_year, node } = params;
+  if (!academic_year?.trim()) {
+    throw new Error('academic_year is required for BuildStudentAssessmentsByAcademicYear.');
+  }
+  if (!node?.trim()) {
+    throw new Error('node is required for BuildStudentAssessmentsByAcademicYear.');
+  }
+
+  const pool = await getRefreshPool();
+  const request = pool.request();
+  // Parameter names must match the stored procedure definition exactly.
+  // RP.BuildStudentAssessmentsByAcademicYear(@AcademicYear, @Node_id)
+  request.input('AcademicYear', sql.NVarChar(100), academic_year.trim());
+  request.input('Node_id', sql.NVarChar(100), node.trim());
+  await request.execute('RP.BuildStudentAssessmentsByAcademicYear');
+}
