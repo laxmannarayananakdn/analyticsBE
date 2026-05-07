@@ -2534,8 +2534,21 @@ export class DatabaseService {
     try {
       const query = `
         MERGE NEX.students AS target
-        USING (SELECT @sourced_id AS sourced_id) AS source
+        USING (
+          SELECT
+            @sourced_id AS sourced_id,
+            @school_id AS school_id,
+            @academic_year AS academic_year
+        ) AS source
         ON target.sourced_id = source.sourced_id
+          AND (
+            target.school_id = source.school_id
+            OR (target.school_id IS NULL AND source.school_id IS NULL)
+          )
+          AND (
+            target.academic_year = source.academic_year
+            OR (target.academic_year IS NULL AND source.academic_year IS NULL)
+          )
         WHEN MATCHED THEN
           UPDATE SET
             school_id = @school_id,
@@ -2604,7 +2617,17 @@ export class DatabaseService {
             SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET()
           );
         
-        SELECT * FROM NEX.students WHERE sourced_id = @sourced_id;
+        SELECT *
+        FROM NEX.students
+        WHERE sourced_id = @sourced_id
+          AND (
+            school_id = @school_id
+            OR (school_id IS NULL AND @school_id IS NULL)
+          )
+          AND (
+            academic_year = @academic_year
+            OR (academic_year IS NULL AND @academic_year IS NULL)
+          );
       `;
 
       // Helper function to parse date strings
@@ -4408,8 +4431,21 @@ export class DatabaseService {
           const baseIndex = i + index;
           return `
             MERGE NEX.students AS target
-            USING (SELECT @sourcedId${baseIndex} AS sourced_id) AS source
+            USING (
+              SELECT
+                @sourcedId${baseIndex} AS sourced_id,
+                @schoolId${baseIndex} AS school_id,
+                @academicYear${baseIndex} AS academic_year
+            ) AS source
             ON target.sourced_id = source.sourced_id
+              AND (
+                target.school_id = source.school_id
+                OR (target.school_id IS NULL AND source.school_id IS NULL)
+              )
+              AND (
+                target.academic_year = source.academic_year
+                OR (target.academic_year IS NULL AND source.academic_year IS NULL)
+              )
             WHEN MATCHED THEN
               UPDATE SET
                 school_id = @schoolId${baseIndex}, identifier = @identifier${baseIndex}, full_name = @fullName${baseIndex},
