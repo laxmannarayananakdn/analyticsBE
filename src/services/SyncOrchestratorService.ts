@@ -305,13 +305,34 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         const completedAt = new Date();
         await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, null);
 
-        // When loadRpSchema and student-assessments just completed: trigger RP refresh (fire-and-forget)
+        // Trigger RP refresh segments based on which NEX endpoint finished.
+        // This avoids requiring student-assessments for student_profile/enrollment refresh.
+        if (endpointName === 'student-allocations' && rpSchema) {
+          triggerRefresh({
+            school_id: schoolId,
+            academic_year: ay,
+            triggered_by: triggeredBy,
+            mode: 'non_assessment_core',
+          }).catch((err) => console.error('[RefreshService] Non-assessment refresh trigger failed:', err?.message || err));
+        }
+
+        if (endpointName === 'daily-attendance' && rpSchema) {
+          triggerRefresh({
+            school_id: schoolId,
+            academic_year: ay,
+            triggered_by: triggeredBy,
+            mode: 'attendance_only',
+          }).catch((err) => console.error('[RefreshService] Attendance refresh trigger failed:', err?.message || err));
+        }
+
+        // Assessment-dependent RP procedures run only when student-assessments endpoint runs.
         if (endpointName === 'student-assessments' && rpSchema) {
           triggerRefresh({
             school_id: schoolId,
             academic_year: ay,
             triggered_by: triggeredBy,
-          }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
+            mode: 'assessment_dependent',
+          }).catch((err) => console.error('[RefreshService] Assessment refresh trigger failed:', err?.message || err));
         }
       } catch (err: any) {
         if (err?.name === 'AbortError' || signal?.aborted) {

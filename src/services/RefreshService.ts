@@ -9,7 +9,10 @@
 import sql from 'mssql';
 import { randomUUID } from 'crypto';
 
-const RP_REFRESH_STEPS: { proc: string; order: number }[] = [
+type RefreshStep = { proc: string; order: number };
+export type RefreshMode = 'full' | 'non_assessment_core' | 'attendance_only' | 'assessment_dependent';
+
+const RP_REFRESH_STEPS: RefreshStep[] = [
   { proc: 'RP.usp_refresh_student_group_membership', order: 1 },
   { proc: 'RP.usp_refresh_student_profile', order: 2 },
   { proc: 'RP.usp_refresh_enrollment_summary', order: 3 },
@@ -25,6 +28,7 @@ const RP_REFRESH_STEPS: { proc: string; order: number }[] = [
 ];
 
 let refreshPool: sql.ConnectionPool | null = null;
+const refreshQueues = new Map<string, Promise<void>>();
 
 function getRefreshPoolConfig(): sql.config {
   return {
@@ -73,6 +77,7 @@ export interface TriggerRefreshParams {
   /** Required. Same format as Sync Schedules (e.g. "2024 - 2025"). */
   academic_year: string;
   triggered_by?: string;
+  mode?: RefreshMode;
 }
 
 /**
@@ -105,7 +110,7 @@ export async function runRefreshPipeline(params: TriggerRefreshParams): Promise<
   const job_run_id = randomUUID();
   const pool = await getRefreshPool();
 
-  for (const { proc } of RP_REFRESH_STEPS) {
+  for (const { proc } of getStepsForMode('full')) {
     await execStep(pool, proc, {
       school_id,
       academic_year: academic_year.trim(),
@@ -122,32 +127,60 @@ export async function runRefreshPipeline(params: TriggerRefreshParams): Promise<
  * Called by SyncOrchestratorService when load_rp_schema is checked and sync completes.
  */
 export async function triggerRefresh(params: TriggerRefreshParams): Promise<{ job_run_id: string }> {
-  const { school_id, academic_year, triggered_by = 'system' } = params;
+  const { school_id, academic_year, triggered_by = 'system', mode = 'full' } = params;
   if (!academic_year?.trim()) {
     throw new Error('academic_year is required. Use the same format as Sync Schedules (e.g. "2024 - 2025").');
   }
 
   const job_run_id = randomUUID();
+  const normalizedAcademicYear = academic_year.trim();
+  const queueKey = `${school_id}::${normalizedAcademicYear}`;
+  const steps = getStepsForMode(mode);
 
-  setImmediate(async () => {
+  const previous = refreshQueues.get(queueKey) ?? Promise.resolve();
+  const next = previous.then(async () => {
     try {
       const pool = await getRefreshPool();
-      for (const { proc } of RP_REFRESH_STEPS) {
+      for (const { proc } of steps) {
         await execStep(pool, proc, {
           school_id,
-          academic_year: academic_year.trim(),
+          academic_year: normalizedAcademicYear,
           job_run_id,
           triggered_by,
         });
       }
-      console.log(`[RefreshService] RP refresh completed for school=${school_id} year=${academic_year} job=${job_run_id}`);
+      console.log(`[RefreshService] RP refresh (${mode}) completed for school=${school_id} year=${academic_year} job=${job_run_id}`);
     } catch (err: any) {
-      console.error(`[RefreshService] RP refresh failed for school=${school_id} job=${job_run_id}:`, err?.message || err);
+      console.error(`[RefreshService] RP refresh (${mode}) failed for school=${school_id} job=${job_run_id}:`, err?.message || err);
       // Error already logged to admin.refresh_job_log by the failing SP
     }
   });
+  refreshQueues.set(queueKey, next);
+  setImmediate(() => {
+    next.finally(() => {
+      if (refreshQueues.get(queueKey) === next) {
+        refreshQueues.delete(queueKey);
+      }
+    }).catch(() => {
+      // no-op: errors are already logged above
+    });
+  });
 
   return { job_run_id };
+}
+
+function getStepsForMode(mode: RefreshMode): RefreshStep[] {
+  switch (mode) {
+    case 'non_assessment_core':
+      return RP_REFRESH_STEPS.filter((s) => [1, 2, 3].includes(s.order));
+    case 'attendance_only':
+      return RP_REFRESH_STEPS.filter((s) => s.order === 9);
+    case 'assessment_dependent':
+      return RP_REFRESH_STEPS.filter((s) => [4, 5, 6, 7, 8, 10, 11, 12].includes(s.order));
+    case 'full':
+    default:
+      return RP_REFRESH_STEPS;
+  }
 }
 
 export interface BuildStudentAssessmentsByAcademicYearParams {
