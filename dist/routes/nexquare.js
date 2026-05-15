@@ -149,7 +149,8 @@ router.get('/sync-stream/:endpoint', loadNexquareConfig, async (req, res) => {
         if (endpoint === 'students') {
             const filter = req.query.filter;
             const fetchMode = req.query.fetchMode ? parseInt(req.query.fetchMode) : 1;
-            const students = await nexquareService.getStudents(req.nexquareConfig, schoolId, filter, fetchMode, (msg) => send({ type: 'log', msg }));
+            const academicYear = req.query.academicYear;
+            const students = await nexquareService.getStudents(req.nexquareConfig, schoolId, filter, fetchMode, (msg) => send({ type: 'log', msg }), academicYear);
             send({ type: 'done', data: students, count: students.length, success: true, schoolId: schoolId || nexquareService.getCurrentSchoolId() });
         }
         else if (endpoint === 'staff') {
@@ -216,11 +217,12 @@ router.get('/students', loadNexquareConfig, async (req, res) => {
         }
         const schoolId = req.query.schoolId;
         const filter = req.query.filter;
+        const academicYear = req.query.academicYear;
         const fetchMode = req.query.fetchMode
             ? parseInt(req.query.fetchMode)
             : 1; // 1=enrolled, 2=preadmission, 3=both
         console.log(`📥 Starting student fetch for school ${schoolId || 'default'}...`);
-        const students = await nexquareService.getStudents(req.nexquareConfig, schoolId, filter, fetchMode);
+        const students = await nexquareService.getStudents(req.nexquareConfig, schoolId, filter, fetchMode, undefined, academicYear);
         res.json({
             success: true,
             count: students.length,

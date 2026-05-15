@@ -18,6 +18,8 @@ export interface RunSyncParams {
     loadRpSchema?: boolean;
     /** Include descendant nodes. */
     includeDescendants?: boolean;
+    /** After all sync work, execute BuildStudentAssessmentsByAcademicYear(academic_year, node). */
+    buildStudentAssessmentsByAcademicYear?: boolean;
     /** Sync all active configs (ignore nodeIds). */
     all?: boolean;
     /** Who triggered: "scheduler" or user email. */

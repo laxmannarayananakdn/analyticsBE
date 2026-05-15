@@ -7,8 +7,7 @@ import { executeQuery } from '../config/database.js';
 import { getConfigsForScope } from './SyncScopeService.js';
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
-import { databaseService } from './DatabaseService.js';
-import { triggerRefresh } from './RefreshService.js';
+import { triggerRefresh, buildStudentAssessmentsByAcademicYear } from './RefreshService.js';
 // year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
 // memberships must run before term-grades: term grades use MB.class_memberships to find classes
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes', 'memberships', 'term-grades'];
@@ -71,6 +70,7 @@ export async function runSync(params) {
     const endpointsMb = params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL;
     const endpointsNex = params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL;
     const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
+    const runBuildStudentAssessmentsByAcademicYear = params.buildStudentAssessmentsByAcademicYear === true;
     const itemsWithIds = [];
     for (const item of schoolItems) {
         const schoolRunResult = await executeQuery(`INSERT INTO admin.sync_run_schools (sync_run_id, school_id, school_source, config_id, school_name, status)
@@ -199,13 +199,32 @@ export async function runSync(params) {
                 await runNexquareSingleEndpoint(config, schoolId, endpointName, { start, end, ay, loadRpSchema: rpSchema });
                 const completedAt = new Date();
                 await appendEndpointCompleted(schoolRunId, endpointName, startedAt, completedAt, null);
-                // When loadRpSchema and student-assessments just completed: trigger RP refresh (fire-and-forget)
+                // Trigger RP refresh segments based on which NEX endpoint finished.
+                // This avoids requiring student-assessments for student_profile/enrollment refresh.
+                if (endpointName === 'student-allocations' && rpSchema) {
+                    triggerRefresh({
+                        school_id: schoolId,
+                        academic_year: ay,
+                        triggered_by: triggeredBy,
+                        mode: 'non_assessment_core',
+                    }).catch((err) => console.error('[RefreshService] Non-assessment refresh trigger failed:', err?.message || err));
+                }
+                if (endpointName === 'daily-attendance' && rpSchema) {
+                    triggerRefresh({
+                        school_id: schoolId,
+                        academic_year: ay,
+                        triggered_by: triggeredBy,
+                        mode: 'attendance_only',
+                    }).catch((err) => console.error('[RefreshService] Attendance refresh trigger failed:', err?.message || err));
+                }
+                // Assessment-dependent RP procedures run only when student-assessments endpoint runs.
                 if (endpointName === 'student-assessments' && rpSchema) {
                     triggerRefresh({
                         school_id: schoolId,
                         academic_year: ay,
                         triggered_by: triggeredBy,
-                    }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
+                        mode: 'assessment_dependent',
+                    }).catch((err) => console.error('[RefreshService] Assessment refresh trigger failed:', err?.message || err));
                 }
             }
             catch (err) {
@@ -249,45 +268,10 @@ export async function runSync(params) {
             }
         }
         await Promise.all(allTasks);
-        // When Load RP schema is checked but Student Assessments is NOT in endpoints:
-        // Delete RP rows for school+year, then sync from NEX.student_assessments to RP.student_assessments
-        if (loadRpSchema && !eps.includes('student-assessments') && trackItems.length > 0) {
-            for (let i = 0; i < trackItems.length; i++) {
-                if (schoolFailed.has(i))
-                    continue;
-                const { item, schoolRunId } = trackItems[i];
-                const schoolId = item.schoolId;
-                if (!schoolId)
-                    continue;
-                const startedAt = new Date();
-                await executeQuery(`UPDATE admin.sync_run_schools SET status = 'running', started_at = COALESCE(started_at, @startedAt), current_endpoint = @endpoint WHERE id = @id`, { startedAt, endpoint: 'rp-sync', id: schoolRunId });
-                try {
-                    const { deleted, error: deleteError } = await databaseService.deleteRPStudentAssessmentsByYear(schoolId, ay);
-                    if (deleteError) {
-                        throw new Error(`Delete RP failed: ${deleteError}`);
-                    }
-                    await nexquareService.syncStudentAssessmentsToRP(schoolId, ay);
-                    const completedAt = new Date();
-                    await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, null);
-                    await executeQuery(`UPDATE admin.sync_run_schools SET status = 'completed', completed_at = @completedAt, current_endpoint = NULL WHERE id = @id`, { completedAt, id: schoolRunId });
-                    await updateRunCounts();
-                    // Trigger RP refresh (fire-and-forget)
-                    triggerRefresh({
-                        school_id: schoolId,
-                        academic_year: ay,
-                        triggered_by: triggeredBy,
-                    }).catch((err) => console.error('[RefreshService] Trigger failed:', err?.message || err));
-                }
-                catch (err) {
-                    const errMsg = err?.message || String(err);
-                    const completedAt = new Date();
-                    await appendEndpointCompleted(schoolRunId, 'rp-sync', startedAt, completedAt, errMsg);
-                    schoolFailed.set(i, errMsg);
-                    await executeQuery(`UPDATE admin.sync_run_schools SET status = 'failed', completed_at = @completedAt, error_message = @errMsg, current_endpoint = NULL WHERE id = @id`, { completedAt, errMsg: errMsg.length > 4000 ? errMsg.substring(0, 4000) : errMsg, id: schoolRunId });
-                    await updateRunCounts();
-                }
-            }
-        }
+        // IMPORTANT:
+        // Do not run rp-sync (delete + repopulate RP.student_assessments) unless
+        // the student-assessments endpoint is explicitly selected and executed.
+        // This avoids deleting RP data when student-assessments sync is skipped.
         return trackItems.map(({ item, schoolRunId }, i) => {
             const errMsg = schoolFailed.get(i);
             return {
@@ -375,6 +359,22 @@ export async function runSync(params) {
             failed++;
             const reason = r.reason;
             errors.push(reason?.message || 'Unknown error');
+        }
+    }
+    // Optional final step: run aggregate SP and wait for completion before marking sync run complete.
+    if (runBuildStudentAssessmentsByAcademicYear) {
+        try {
+            const nodeForProc = params.nodeIds?.length ? params.nodeIds[0] : nodeIdStr;
+            console.log(`[SyncOrchestrator] Running RP.BuildStudentAssessmentsByAcademicYear(academic_year='${academicYearStr}', node='${nodeForProc}')`);
+            await buildStudentAssessmentsByAcademicYear({
+                academic_year: academicYearStr,
+                node: nodeForProc,
+            });
+            console.log('[SyncOrchestrator] BuildStudentAssessmentsByAcademicYear completed successfully');
+        }
+        catch (err) {
+            failed++;
+            errors.push(`BuildStudentAssessmentsByAcademicYear: ${err?.message || String(err)}`);
         }
     }
     const status = failed > 0 && succeeded === 0 ? 'failed' : 'completed';

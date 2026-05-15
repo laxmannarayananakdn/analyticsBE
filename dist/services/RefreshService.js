@@ -22,6 +22,7 @@ const RP_REFRESH_STEPS = [
     { proc: 'RP.usp_truncate_nex_student_assessments', order: 12 },
 ];
 let refreshPool = null;
+const refreshQueues = new Map();
 function getRefreshPoolConfig() {
     return {
         server: process.env.AZURE_SQL_SERVER || '',
@@ -85,7 +86,7 @@ export async function runRefreshPipeline(params) {
     }
     const job_run_id = randomUUID();
     const pool = await getRefreshPool();
-    for (const { proc } of RP_REFRESH_STEPS) {
+    for (const { proc } of getStepsForMode('full')) {
         await execStep(pool, proc, {
             school_id,
             academic_year: academic_year.trim(),
@@ -100,29 +101,76 @@ export async function runRefreshPipeline(params) {
  * Called by SyncOrchestratorService when load_rp_schema is checked and sync completes.
  */
 export async function triggerRefresh(params) {
-    const { school_id, academic_year, triggered_by = 'system' } = params;
+    const { school_id, academic_year, triggered_by = 'system', mode = 'full' } = params;
     if (!academic_year?.trim()) {
         throw new Error('academic_year is required. Use the same format as Sync Schedules (e.g. "2024 - 2025").');
     }
     const job_run_id = randomUUID();
-    setImmediate(async () => {
+    const normalizedAcademicYear = academic_year.trim();
+    const queueKey = `${school_id}::${normalizedAcademicYear}`;
+    const steps = getStepsForMode(mode);
+    const previous = refreshQueues.get(queueKey) ?? Promise.resolve();
+    const next = previous.then(async () => {
         try {
             const pool = await getRefreshPool();
-            for (const { proc } of RP_REFRESH_STEPS) {
+            for (const { proc } of steps) {
                 await execStep(pool, proc, {
                     school_id,
-                    academic_year: academic_year.trim(),
+                    academic_year: normalizedAcademicYear,
                     job_run_id,
                     triggered_by,
                 });
             }
-            console.log(`[RefreshService] RP refresh completed for school=${school_id} year=${academic_year} job=${job_run_id}`);
+            console.log(`[RefreshService] RP refresh (${mode}) completed for school=${school_id} year=${academic_year} job=${job_run_id}`);
         }
         catch (err) {
-            console.error(`[RefreshService] RP refresh failed for school=${school_id} job=${job_run_id}:`, err?.message || err);
+            console.error(`[RefreshService] RP refresh (${mode}) failed for school=${school_id} job=${job_run_id}:`, err?.message || err);
             // Error already logged to admin.refresh_job_log by the failing SP
         }
     });
+    refreshQueues.set(queueKey, next);
+    setImmediate(() => {
+        next.finally(() => {
+            if (refreshQueues.get(queueKey) === next) {
+                refreshQueues.delete(queueKey);
+            }
+        }).catch(() => {
+            // no-op: errors are already logged above
+        });
+    });
     return { job_run_id };
+}
+function getStepsForMode(mode) {
+    switch (mode) {
+        case 'non_assessment_core':
+            return RP_REFRESH_STEPS.filter((s) => [1, 2, 3].includes(s.order));
+        case 'attendance_only':
+            return RP_REFRESH_STEPS.filter((s) => s.order === 9);
+        case 'assessment_dependent':
+            return RP_REFRESH_STEPS.filter((s) => [4, 5, 6, 7, 8, 10, 11, 12].includes(s.order));
+        case 'full':
+        default:
+            return RP_REFRESH_STEPS;
+    }
+}
+/**
+ * Execute BuildStudentAssessmentsByAcademicYear stored procedure synchronously.
+ * Sync run completion should wait for this call when enabled.
+ */
+export async function buildStudentAssessmentsByAcademicYear(params) {
+    const { academic_year, node } = params;
+    if (!academic_year?.trim()) {
+        throw new Error('academic_year is required for BuildStudentAssessmentsByAcademicYear.');
+    }
+    if (!node?.trim()) {
+        throw new Error('node is required for BuildStudentAssessmentsByAcademicYear.');
+    }
+    const pool = await getRefreshPool();
+    const request = pool.request();
+    // Parameter names must match the stored procedure definition exactly.
+    // RP.BuildStudentAssessmentsByAcademicYear(@AcademicYear, @Node_id)
+    request.input('AcademicYear', sql.NVarChar(100), academic_year.trim());
+    request.input('Node_id', sql.NVarChar(100), node.trim());
+    await request.execute('RP.BuildStudentAssessmentsByAcademicYear');
 }
 //# sourceMappingURL=RefreshService.js.map

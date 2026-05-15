@@ -15,6 +15,7 @@ academicYearParam) {
         console.log(msg);
         onLog?.(msg);
     };
+    const normalizedAcademicYear = academicYearParam?.trim() || undefined;
     try {
         const targetSchoolId = schoolId || this.getCurrentSchoolId();
         if (!targetSchoolId) {
@@ -33,6 +34,9 @@ academicYearParam) {
             queryParams.append('fetchMode', fetchMode.toString());
             if (filter) {
                 queryParams.append('filter', filter);
+            }
+            if (normalizedAcademicYear) {
+                queryParams.append('academicYear', normalizedAcademicYear);
             }
             const url = `${endpoint}?${queryParams.toString()}`;
             const response = await this.makeRequest(url, config);
@@ -101,7 +105,7 @@ academicYearParam) {
                     user_type: student.userType || 'student',
                     status: student.status || null,
                     date_last_modified: dateLastModified,
-                    academic_year: academicYearParam ? String(academicYearParam) : (studentData.academicYear ? String(studentData.academicYear) : null),
+                    academic_year: normalizedAcademicYear || (studentData.academicYear ? String(studentData.academicYear) : null),
                     metadata: metadataJson,
                     current_grade: studentData.currentGrade || null,
                     current_class: studentData.currentClass || studentData.currentClassName || null,

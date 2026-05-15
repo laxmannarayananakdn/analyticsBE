@@ -5,6 +5,7 @@
  * Triggered automatically when a Sync Schedule runs with "Run RP refresh after sync" checked.
  * Uses a separate connection pool with no command timeout per design guide Section 5.5.
  */
+export type RefreshMode = 'full' | 'non_assessment_core' | 'attendance_only' | 'assessment_dependent';
 /**
  * Close the refresh pool (for graceful shutdown).
  */
@@ -14,6 +15,7 @@ export interface TriggerRefreshParams {
     /** Required. Same format as Sync Schedules (e.g. "2024 - 2025"). */
     academic_year: string;
     triggered_by?: string;
+    mode?: RefreshMode;
 }
 /**
  * Run the full 12-step RP refresh pipeline.
@@ -30,4 +32,13 @@ export declare function runRefreshPipeline(params: TriggerRefreshParams): Promis
 export declare function triggerRefresh(params: TriggerRefreshParams): Promise<{
     job_run_id: string;
 }>;
+export interface BuildStudentAssessmentsByAcademicYearParams {
+    academic_year: string;
+    node: string;
+}
+/**
+ * Execute BuildStudentAssessmentsByAcademicYear stored procedure synchronously.
+ * Sync run completion should wait for this call when enabled.
+ */
+export declare function buildStudentAssessmentsByAcademicYear(params: BuildStudentAssessmentsByAcademicYearParams): Promise<void>;
 //# sourceMappingURL=RefreshService.d.ts.map

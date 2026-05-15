@@ -34,5 +34,19 @@ export declare function executeProcedure<T = any>(procedureName: string, params?
     data: null;
     error: string;
 }>;
+/**
+ * Atomically claim a scheduled sync run for schedule_id across all app instances.
+ * Uses sp_getapplock (transaction-scoped) + INSERT in one transaction so parallel
+ * API workers (e.g. multiple Azure instances each running startSyncScheduler) cannot
+ * all pass a SELECT-then-INSERT race.
+ *
+ * @returns sync_runs.id to pass as existingRunId to runSync, or null if skipped.
+ */
+export declare function claimSyncRunForSchedule(params: {
+    scheduleId: number;
+    nodeId: string;
+    academicYear: string;
+    triggeredBy: string;
+}): Promise<number | null>;
 export { sql };
 //# sourceMappingURL=database.d.ts.map

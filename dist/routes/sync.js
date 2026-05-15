@@ -138,7 +138,9 @@ router.get('/runs/:id/schools', async (req, res) => {
 router.get('/schedules', async (req, res) => {
     try {
         const result = await executeQuery(`SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
-              ISNULL(load_rp_schema, 1) AS load_rp_schema, include_descendants, is_active, created_at, updated_at, created_by
+              ISNULL(load_rp_schema, 1) AS load_rp_schema,
+              ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
+              include_descendants, is_active, created_at, updated_at, created_by
        FROM admin.sync_schedules
        ORDER BY node_id, academic_year`);
         if (result.error) {
@@ -160,19 +162,20 @@ router.get('/schedules', async (req, res) => {
  */
 router.post('/schedules', async (req, res) => {
     try {
-        const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, include_descendants, created_by } = req.body;
+        const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, created_by } = req.body;
         if (!node_id || !academic_year || !cron_expression) {
             return res.status(400).json({ error: 'node_id, academic_year, and cron_expression are required' });
         }
-        const result = await executeQuery(`INSERT INTO admin.sync_schedules (node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, include_descendants, created_by)
+        const result = await executeQuery(`INSERT INTO admin.sync_schedules (node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, created_by)
        OUTPUT INSERTED.id, INSERTED.node_id, INSERTED.academic_year, INSERTED.cron_expression
-       VALUES (@node_id, @academic_year, @cron_expression, @endpoints_mb, @endpoints_nex, @load_rp_schema, @include_descendants, @created_by)`, {
+       VALUES (@node_id, @academic_year, @cron_expression, @endpoints_mb, @endpoints_nex, @load_rp_schema, @build_student_assessments_by_academic_year, @include_descendants, @created_by)`, {
             node_id,
             academic_year,
             cron_expression,
             endpoints_mb: endpoints_mb ? JSON.stringify(endpoints_mb) : null,
             endpoints_nex: endpoints_nex ? JSON.stringify(endpoints_nex) : null,
             load_rp_schema: load_rp_schema !== false ? 1 : 0,
+            build_student_assessments_by_academic_year: build_student_assessments_by_academic_year ? 1 : 0,
             include_descendants: include_descendants ? 1 : 0,
             created_by: created_by || req.user?.email || null,
         });
@@ -200,7 +203,7 @@ router.put('/schedules/:id', async (req, res) => {
         if (isNaN(id)) {
             return res.status(400).json({ error: 'Invalid schedule ID' });
         }
-        const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, include_descendants, is_active } = req.body;
+        const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, is_active } = req.body;
         const updates = [];
         const params = { id };
         if (node_id !== undefined) {
@@ -227,6 +230,10 @@ router.put('/schedules/:id', async (req, res) => {
             updates.push('load_rp_schema = @load_rp_schema');
             params.load_rp_schema = load_rp_schema !== false ? 1 : 0;
         }
+        if (build_student_assessments_by_academic_year !== undefined) {
+            updates.push('build_student_assessments_by_academic_year = @build_student_assessments_by_academic_year');
+            params.build_student_assessments_by_academic_year = build_student_assessments_by_academic_year ? 1 : 0;
+        }
         if (include_descendants !== undefined) {
             updates.push('include_descendants = @include_descendants');
             params.include_descendants = include_descendants ? 1 : 0;
@@ -244,7 +251,9 @@ router.put('/schedules/:id', async (req, res) => {
             return res.status(500).json({ error: result.error });
         }
         const selectResult = await executeQuery(`SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
-              ISNULL(load_rp_schema, 1) AS load_rp_schema, include_descendants, is_active, updated_at
+              ISNULL(load_rp_schema, 1) AS load_rp_schema,
+              ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
+              include_descendants, is_active, updated_at
        FROM admin.sync_schedules WHERE id = @id`, { id });
         if (!selectResult.data?.[0]) {
             return res.status(404).json({ error: 'Schedule not found' });
@@ -294,7 +303,7 @@ router.delete('/schedules/:id', async (req, res) => {
  */
 router.post('/trigger', async (req, res) => {
     try {
-        const { nodeIds, nodeId, academicYear, all, includeDescendants, endpointsMb, endpointsNex, loadRpSchema } = req.body;
+        const { nodeIds, nodeId, academicYear, all, includeDescendants, endpointsMb, endpointsNex, loadRpSchema, buildStudentAssessmentsByAcademicYear } = req.body;
         const triggeredBy = req.user?.email || 'manual';
         const resolvedNodeIds = nodeIds ?? (nodeId ? [nodeId] : undefined);
         if (!all && (!resolvedNodeIds || resolvedNodeIds.length === 0)) {
@@ -326,6 +335,7 @@ router.post('/trigger', async (req, res) => {
                     endpointsMb: Array.isArray(endpointsMb) && endpointsMb.length > 0 ? endpointsMb : undefined,
                     endpointsNex: Array.isArray(endpointsNex) && endpointsNex.length > 0 ? endpointsNex : undefined,
                     loadRpSchema: loadRpSchema !== false,
+                    buildStudentAssessmentsByAcademicYear: !!buildStudentAssessmentsByAcademicYear,
                 });
                 console.log(`✅ Sync run ${result.runId} ${result.status}: ${result.schoolsSucceeded} succeeded, ${result.schoolsFailed} failed`);
             }

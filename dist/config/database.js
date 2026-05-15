@@ -142,5 +142,70 @@ export async function executeProcedure(procedureName, params) {
         return { data: null, error: error.message || 'Stored procedure execution failed' };
     }
 }
+/**
+ * Atomically claim a scheduled sync run for schedule_id across all app instances.
+ * Uses sp_getapplock (transaction-scoped) + INSERT in one transaction so parallel
+ * API workers (e.g. multiple Azure instances each running startSyncScheduler) cannot
+ * all pass a SELECT-then-INSERT race.
+ *
+ * @returns sync_runs.id to pass as existingRunId to runSync, or null if skipped.
+ */
+export async function claimSyncRunForSchedule(params) {
+    let transaction = null;
+    try {
+        const pool = await getConnection();
+        transaction = new sql.Transaction(pool);
+        await transaction.begin();
+        const request = new sql.Request(transaction);
+        request.input('scheduleId', sql.Int, params.scheduleId);
+        request.input('nodeId', sql.NVarChar(500), params.nodeId);
+        request.input('academicYear', sql.NVarChar(200), params.academicYear);
+        request.input('triggeredBy', sql.NVarChar(200), params.triggeredBy);
+        const result = await request.query(`DECLARE @lr int;
+       DECLARE @lockName nvarchar(200) = CONCAT(N'SyncSchedule_', CAST(@scheduleId AS nvarchar(20)));
+       EXEC @lr = sp_getapplock @Resource = @lockName, @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 0;
+
+       DECLARE @runId int = NULL;
+       DECLARE @ids TABLE (id int);
+
+       IF (@lr = 0 OR @lr = 1)
+       BEGIN
+         IF NOT EXISTS (
+           SELECT 1 FROM admin.sync_runs
+           WHERE schedule_id = @scheduleId
+             AND (status IN (N'running', N'pending')
+                  OR started_at >= DATEADD(minute, -2, SYSDATETIMEOFFSET()))
+         )
+         BEGIN
+           INSERT INTO admin.sync_runs (schedule_id, node_id, academic_year, status, started_at, total_schools, schools_succeeded, schools_failed, triggered_by)
+           OUTPUT INSERTED.id INTO @ids(id)
+           VALUES (@scheduleId, @nodeId, @academicYear, N'running', SYSDATETIMEOFFSET(), 0, 0, 0, @triggeredBy);
+           SELECT TOP 1 @runId = id FROM @ids;
+         END
+       END
+
+       SELECT @runId AS run_id;`);
+        const row = result.recordset?.[0];
+        const runId = row?.run_id != null ? Number(row.run_id) : null;
+        if (runId != null && !Number.isNaN(runId)) {
+            await transaction.commit();
+            return runId;
+        }
+        await transaction.rollback();
+        return null;
+    }
+    catch (error) {
+        console.error('❌ claimSyncRunForSchedule failed:', error);
+        if (transaction) {
+            try {
+                await transaction.rollback();
+            }
+            catch {
+                /* ignore */
+            }
+        }
+        return null;
+    }
+}
 export { sql };
 //# sourceMappingURL=database.js.map
