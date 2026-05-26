@@ -1,8 +1,8 @@
 /**
  * Low-level SFTP client for FIS file folders.
  */
-import { readFileSync } from 'fs';
 import SftpClient from 'ssh2-sftp-client';
+import { loadFisSftpPrivateKey } from '../config/fisSftpKey.js';
 function isFileEntry(entry) {
     if (entry.name === '.' || entry.name === '..')
         return false;
@@ -19,7 +19,7 @@ export class FisSftpService {
         this.config = config;
     }
     async connect() {
-        const privateKey = readFileSync(this.config.privateKeyPath, 'utf8');
+        const privateKey = loadFisSftpPrivateKey(this.config.privateKeyPath);
         await this.client.connect({
             host: this.config.host,
             port: this.config.port,

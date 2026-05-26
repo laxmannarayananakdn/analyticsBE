@@ -32,7 +32,12 @@ export async function startFisSftpScheduler() {
     }, { timezone });
     console.log(`📁 FIS SFTP poller scheduled (${cronExpression}, ${timezone}) – host ${config.host}, user ${config.username}`);
     if (process.env.FIS_SFTP_RUN_ON_STARTUP !== 'false') {
-        await pollFisSftpUnprocessedFiles();
+        try {
+            await pollFisSftpUnprocessedFiles();
+        }
+        catch (err) {
+            console.error('[FisSftp] Startup poll failed (API remains up):', err);
+        }
     }
 }
 export function stopFisSftpScheduler() {

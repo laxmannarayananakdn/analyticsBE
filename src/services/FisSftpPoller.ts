@@ -81,6 +81,10 @@ export async function pollFisSftpUnprocessedFiles(): Promise<FisSftpPollResult> 
     console.log(
       `[FisSftp] Poll complete in ${elapsedMs}ms – scanned=${result.scanned}, processed=${result.movedToProcessed}, error=${result.movedToError}, skipped=${result.skipped}`
     );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    result.errors.push({ file: '*', message });
+    console.error('[FisSftp] Poll failed:', message);
   } finally {
     pollInProgress = false;
   }

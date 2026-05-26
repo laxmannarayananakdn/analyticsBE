@@ -47,6 +47,7 @@ When the backend starts and the poller is enabled, it registers a cron job (defa
 
 ## Azure deployment
 
-- Store the private key in App Settings / Key Vault and mount or write to a path the app can read.
-- Set `FIS_SFTP_PRIVATE_KEY_PATH` to that path.
+- Store the private key in Key Vault as a secret with **real line breaks** (multi-line PEM). Do not paste a single line with `\n` text — that causes `Unsupported key format`.
+- Use a Key Vault reference on `FIS_SFTP_PRIVATE_KEY` (versioned `SecretUri` if needed).
+- Optional startup command writes the env value to `FIS_SFTP_PRIVATE_KEY_PATH`; the app also reads `FIS_SFTP_PRIVATE_KEY` directly when set.
 - Never commit `.pem` files to git.

@@ -52,7 +52,11 @@ export async function startFisSftpScheduler(): Promise<void> {
   );
 
   if (process.env.FIS_SFTP_RUN_ON_STARTUP !== 'false') {
-    await pollFisSftpUnprocessedFiles();
+    try {
+      await pollFisSftpUnprocessedFiles();
+    } catch (err) {
+      console.error('[FisSftp] Startup poll failed (API remains up):', err);
+    }
   }
 }
 

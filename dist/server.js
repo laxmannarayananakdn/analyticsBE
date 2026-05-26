@@ -165,8 +165,13 @@ async function startServer() {
     catch (error) {
         console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
     }
-    // FIS SFTP poller does not require the database
-    await startFisSftpScheduler();
+    // FIS SFTP poller does not require the database; must not take down the API on SFTP errors
+    try {
+        await startFisSftpScheduler();
+    }
+    catch (error) {
+        console.error('⚠️ FIS SFTP scheduler failed to start (API remains up):', error);
+    }
 }
 // Graceful shutdown
 process.on('SIGTERM', async () => {
