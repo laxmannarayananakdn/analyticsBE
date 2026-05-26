@@ -641,24 +641,21 @@ router.get('/term-grades', loadManageBacConfig, async (req, res) => {
 });
 /**
  * POST /api/managebac/sync-to-rp
- * Populate RP.student_assessments from MB data (one-time or manual trigger).
- * Body: { school_id: string, academic_year: string }
- * school_id = MB.schools.id as string (e.g. "123")
- * academic_year = MB.academic_years.name (e.g. "2024-2025")
+ * Load RP.student_assessments from MB term grades via RP.usp_load_mb_term_grades.
+ * Body: { school_id?: string, academic_year?: string }
+ * school_id = MB.schools.id as string (e.g. "123"); omit to load all configured schools
+ * academic_year = MB academic year name (e.g. "2024-2025"); omit to load all years
  */
 router.post('/sync-to-rp', async (req, res) => {
     try {
         const { school_id, academic_year } = req.body || {};
-        if (!school_id || !academic_year) {
-            return res.status(400).json({
-                error: 'school_id and academic_year are required in request body',
-            });
-        }
-        const rows = await manageBacService.syncManageBacToRP(String(school_id), String(academic_year));
+        const result = await manageBacService.syncManageBacToRP(school_id != null ? String(school_id) : undefined, academic_year != null ? String(academic_year) : undefined);
         res.json({
             success: true,
-            rowsInserted: rows,
-            message: `Synced ${rows} row(s) to RP.student_assessments. Run RP refresh for downstream tables.`,
+            rowsInserted: result.rows_affected,
+            rubricRowsInserted: result.rubric_rows_inserted,
+            classGradeRowsInserted: result.class_grade_rows_inserted,
+            message: `Inserted ${result.rows_affected} row(s) into RP.student_assessments. Run RP refresh for downstream tables.`,
         });
     }
     catch (error) {

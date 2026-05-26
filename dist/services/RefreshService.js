@@ -86,13 +86,21 @@ export async function runRefreshPipeline(params) {
     }
     const job_run_id = randomUUID();
     const pool = await getRefreshPool();
-    for (const { proc } of getStepsForMode('full')) {
-        await execStep(pool, proc, {
-            school_id,
-            academic_year: academic_year.trim(),
-            job_run_id,
-            triggered_by,
-        });
+    let failedProc;
+    try {
+        for (const { proc } of getStepsForMode('full')) {
+            failedProc = proc;
+            await execStep(pool, proc, {
+                school_id,
+                academic_year: academic_year.trim(),
+                job_run_id,
+                triggered_by,
+            });
+        }
+    }
+    catch (err) {
+        const procHint = failedProc ? ` at ${failedProc}` : '';
+        throw new Error(`${err?.message || err}${procHint}`, { cause: err });
     }
     return { job_run_id };
 }
@@ -111,9 +119,11 @@ export async function triggerRefresh(params) {
     const steps = getStepsForMode(mode);
     const previous = refreshQueues.get(queueKey) ?? Promise.resolve();
     const next = previous.then(async () => {
+        let failedProc;
         try {
             const pool = await getRefreshPool();
             for (const { proc } of steps) {
+                failedProc = proc;
                 await execStep(pool, proc, {
                     school_id,
                     academic_year: normalizedAcademicYear,
@@ -124,7 +134,8 @@ export async function triggerRefresh(params) {
             console.log(`[RefreshService] RP refresh (${mode}) completed for school=${school_id} year=${academic_year} job=${job_run_id}`);
         }
         catch (err) {
-            console.error(`[RefreshService] RP refresh (${mode}) failed for school=${school_id} job=${job_run_id}:`, err?.message || err);
+            const procHint = failedProc ? ` at ${failedProc}` : '';
+            console.error(`[RefreshService] RP refresh (${mode}) failed for school=${school_id} job=${job_run_id}${procHint}:`, err?.message || err);
             // Error already logged to admin.refresh_job_log by the failing SP
         }
     });

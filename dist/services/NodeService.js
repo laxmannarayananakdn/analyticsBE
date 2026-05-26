@@ -190,9 +190,9 @@ export async function updateNode(nodeId, updateRequest) {
             if (updateRequest.parentNodeId === nodeId) {
                 throw new Error('Node cannot be its own parent');
             }
-            // Check if this would create a circular reference
-            const descendants = await getNodeDescendants(updateRequest.parentNodeId);
-            if (descendants.includes(nodeId)) {
+            // Cycle if the new parent is under this node (node → … → new parent → node)
+            const descendants = await getNodeDescendants(nodeId);
+            if (descendants.includes(updateRequest.parentNodeId)) {
                 throw new Error('Cannot set parent: would create circular reference');
             }
         }

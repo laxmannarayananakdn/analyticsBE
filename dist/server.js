@@ -38,6 +38,7 @@ import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 import syncRoutes from './routes/sync.js';
 import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
+import { startFisSftpScheduler, stopFisSftpScheduler } from './scheduler/FisSftpScheduler.js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -164,11 +165,14 @@ async function startServer() {
     catch (error) {
         console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
     }
+    // FIS SFTP poller does not require the database
+    await startFisSftpScheduler();
 }
 // Graceful shutdown
 process.on('SIGTERM', async () => {
     console.log('SIGTERM received, shutting down gracefully...');
     stopSyncScheduler();
+    stopFisSftpScheduler();
     await closeRefreshPool();
     await closeConnection();
     process.exit(0);
@@ -176,6 +180,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
     console.log('SIGINT received, shutting down gracefully...');
     stopSyncScheduler();
+    stopFisSftpScheduler();
     await closeRefreshPool();
     await closeConnection();
     process.exit(0);

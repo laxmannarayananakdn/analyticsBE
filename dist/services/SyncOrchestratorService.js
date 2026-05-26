@@ -124,8 +124,10 @@ export async function runSync(params) {
                 if (loadRpSchema && endpointsMb.includes('term-grades') && item.schoolId) {
                     await setCurrentEndpoint('rp-sync');
                     try {
-                        const rows = await mbService.syncManageBacToRP(item.schoolId, ay);
-                        console.log(`   [MB->RP] Synced ${rows} row(s) to RP.student_assessments for school=${item.schoolId}`);
+                        const loadResult = await mbService.syncManageBacToRP(item.schoolId, ay);
+                        console.log(`   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
+                            `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
+                            `for school=${item.schoolId} academic_year=${ay}`);
                         triggerRefresh({
                             school_id: item.schoolId,
                             academic_year: ay,
