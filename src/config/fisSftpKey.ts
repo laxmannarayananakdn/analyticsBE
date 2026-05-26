@@ -24,6 +24,7 @@ export function isValidPrivateKeyPem(key: string): boolean {
  */
 export function loadFisSftpPrivateKey(privateKeyPath: string): string {
   const fromEnv = process.env.FIS_SFTP_PRIVATE_KEY;
+  
   if (fromEnv?.trim()) {
     const key = normalizePrivateKey(fromEnv);
     if (isValidPrivateKeyPem(key)) {
