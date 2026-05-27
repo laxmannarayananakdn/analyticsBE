@@ -1606,15 +1606,9 @@ export class DatabaseService {
         if (!termGrades || termGrades.length === 0) {
             return { data: [], error: null };
         }
-        // Filter out entries where both grade and average_percent are null
-        // Only save entries where at least one of them has a value
-        const validTermGrades = termGrades.filter(tg => (tg.grade != null) || (tg.average_percent != null));
-        if (validTermGrades.length === 0) {
-            return { data: [], error: null };
-        }
         const results = [];
         const errors = [];
-        for (const termGrade of validTermGrades) {
+        for (const termGrade of termGrades) {
             // First, try to get existing term_grade_id
             const checkQuery = `
         SELECT id, student_id, class_id, term_id, grade, average_percent, comments, created_at, updated_at
@@ -1718,7 +1712,7 @@ export class DatabaseService {
                 term_grade_id: rubric.term_grade_id,
                 rubric_id: rubric.rubric_id,
                 title: rubric.title,
-                grade: rubric.grade || null
+                grade: rubric.grade == null || String(rubric.grade).trim() === '' ? null : String(rubric.grade)
             });
             if (result.error) {
                 errors.push(`TermGradeRubric ${rubric.term_grade_id}-${rubric.rubric_id}: ${result.error}`);

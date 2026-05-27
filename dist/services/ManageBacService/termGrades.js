@@ -108,6 +108,8 @@ export async function getTermGrades(apiKey, classId, termId, baseUrl, options) {
                             }
                         });
                         if (rubrics.length > 0) {
+                            const nonNullRubrics = rubrics.filter((r) => r.grade != null && String(r.grade).trim() !== '').length;
+                            console.log(`   ↳ Rubrics with non-null grade: ${nonNullRubrics}/${rubrics.length}`);
                             console.log(`💾 Saving ${rubrics.length} term grade rubrics to database...`);
                             const { error: rubricsError } = await databaseService.upsertTermGradeRubrics(rubrics);
                             if (rubricsError) {
