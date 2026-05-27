@@ -38,6 +38,7 @@ export function loadFisSftpPrivateKey(privateKeyPath: string): string {
   }
 
   const key = normalizePrivateKey(readFileSync(privateKeyPath, 'utf8'));
+
   
   if (!isValidPrivateKeyPem(key)) {
     throw new Error(
