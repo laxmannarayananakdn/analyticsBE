@@ -12,10 +12,14 @@ export type SyncAllTermGradesOptions = {
     term_id?: number;
     class_id?: number;
     school_id?: number;
+    /** Sync schedule / manual run academic year (matches admin.mb_term_grade_rubric_config) */
+    academic_year?: string;
     /** Optional: extra program filter; leave empty to scope by grade_number only */
     program_codes?: string[];
     /** Apply default grade 13 scope using currentSchoolId when true */
     dp_grade_13_only?: boolean;
+    /** Explicit term allow-list; overrides config lookup when set */
+    allowed_term_ids?: number[];
 };
 export declare function syncAllTermGrades(this: BaseManageBacService, apiKey: string, baseUrl?: string, options?: SyncAllTermGradesOptions): Promise<{
     classesProcessed: number;

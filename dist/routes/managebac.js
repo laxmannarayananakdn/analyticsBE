@@ -610,6 +610,7 @@ router.get('/term-grades', loadManageBacConfig, async (req, res) => {
             apiKey = directKey;
         }
         const allGrades = req.query.all_grades === 'true';
+        const academicYear = req.query.academic_year ? String(req.query.academic_year) : undefined;
         const gradeNumber = req.query.grade_number ? parseInt(req.query.grade_number, 10) : undefined;
         const termId = req.query.term_id ? parseInt(req.query.term_id, 10) : undefined;
         const classId = req.query.class_id ? parseInt(req.query.class_id, 10) : undefined;
@@ -623,6 +624,8 @@ router.get('/term-grades', loadManageBacConfig, async (req, res) => {
             options.term_id = termId;
         if (classId != null)
             options.class_id = classId;
+        if (academicYear)
+            options.academic_year = academicYear;
         if (!allGrades) {
             if (gradeNumber != null && schoolId != null) {
                 options.grade_number = gradeNumber;

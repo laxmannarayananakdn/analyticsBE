@@ -578,6 +578,92 @@ export class DatabaseService {
         return result.data.map((r) => r.student_id);
     }
     /**
+     * Distinct term_ids from admin.mb_term_grade_rubric_config for school + AY + grade.
+     * Returns null when no config rows match (caller may fall back to full class term range).
+     */
+    async getMbTermGradeConfigTermIds(params) {
+        const ayHint = params.academic_year.trim();
+        const ayLike = `%${ayHint}%`;
+        const resolveYear = await executeQuery(`SELECT TOP 1 cfg.academic_year
+       FROM admin.mb_term_grade_rubric_config cfg
+       WHERE cfg.school_id = @school_id
+         AND cfg.grade_number = @grade_number
+         AND (
+           cfg.academic_year = @academic_year
+           OR cfg.academic_year LIKE @academic_year_like
+           OR @academic_year LIKE '%' + cfg.academic_year + '%'
+         )
+       ORDER BY CASE WHEN cfg.academic_year = @academic_year THEN 0 ELSE 1 END,
+                cfg.academic_year`, {
+            school_id: params.school_id,
+            grade_number: params.grade_number,
+            academic_year: ayHint,
+            academic_year_like: ayLike,
+        });
+        let resolvedYear = resolveYear.data?.[0]?.academic_year;
+        if (!resolvedYear) {
+            const fromMb = await executeQuery(`SELECT TOP 1 name
+         FROM MB.academic_years
+         WHERE school_id = @school_id
+           AND (name = @academic_year OR name LIKE @academic_year_like)
+         ORDER BY CASE WHEN name = @academic_year THEN 0 ELSE 1 END, name DESC`, {
+                school_id: params.school_id,
+                academic_year: ayHint,
+                academic_year_like: ayLike,
+            });
+            const mbYearName = fromMb.data?.[0]?.name;
+            if (mbYearName) {
+                const retry = await executeQuery(`SELECT TOP 1 academic_year
+           FROM admin.mb_term_grade_rubric_config
+           WHERE school_id = @school_id
+             AND grade_number = @grade_number
+             AND academic_year = @academic_year`, {
+                    school_id: params.school_id,
+                    grade_number: params.grade_number,
+                    academic_year: mbYearName,
+                });
+                resolvedYear = retry.data?.[0]?.academic_year;
+            }
+        }
+        if (!resolvedYear)
+            return null;
+        const termsResult = await executeQuery(`SELECT term_id, COUNT(*) AS rubric_count
+       FROM admin.mb_term_grade_rubric_config
+       WHERE school_id = @school_id
+         AND academic_year = @academic_year
+         AND grade_number = @grade_number
+       GROUP BY term_id
+       ORDER BY term_id`, {
+            school_id: params.school_id,
+            academic_year: resolvedYear,
+            grade_number: params.grade_number,
+        });
+        if (termsResult.error || !termsResult.data?.length)
+            return null;
+        const term_ids = termsResult.data.map((r) => Number(r.term_id));
+        const rubric_count = termsResult.data.reduce((sum, r) => sum + Number(r.rubric_count), 0);
+        return { academic_year: resolvedYear, term_ids, rubric_count };
+    }
+    /**
+     * Load academic term metadata for a set of term IDs (config-driven sync).
+     */
+    async getAcademicTermsByIds(termIds) {
+        if (!termIds.length)
+            return [];
+        const placeholders = termIds.map((_, i) => `@term_id_${i}`).join(', ');
+        const queryParams = {};
+        termIds.forEach((id, i) => {
+            queryParams[`term_id_${i}`] = id;
+        });
+        const result = await executeQuery(`SELECT at.*
+       FROM MB.academic_terms at
+       WHERE at.id IN (${placeholders})
+       ORDER BY at.starts_on`, queryParams);
+        if (result.error || !result.data)
+            return [];
+        return result.data;
+    }
+    /**
      * Get distinct class IDs that have at least one membership (for term grades sync)
      * @param filters - Optional: grade_number + school_id (+ program_codes for DP), or class_id alone
      */

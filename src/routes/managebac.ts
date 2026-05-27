@@ -647,6 +647,7 @@ router.get('/term-grades', loadManageBacConfig, async (req: Request, res: Respon
     }
 
     const allGrades = req.query.all_grades === 'true';
+    const academicYear = req.query.academic_year ? String(req.query.academic_year) : undefined;
     const gradeNumber = req.query.grade_number ? parseInt(req.query.grade_number as string, 10) : undefined;
     const termId = req.query.term_id ? parseInt(req.query.term_id as string, 10) : undefined;
     const classId = req.query.class_id ? parseInt(req.query.class_id as string, 10) : undefined;
@@ -660,6 +661,7 @@ router.get('/term-grades', loadManageBacConfig, async (req: Request, res: Respon
     const options: Parameters<typeof manageBacService.syncAllTermGrades>[2] = {};
     if (termId != null) options.term_id = termId;
     if (classId != null) options.class_id = classId;
+    if (academicYear) options.academic_year = academicYear;
 
     if (!allGrades) {
       if (gradeNumber != null && schoolId != null) {

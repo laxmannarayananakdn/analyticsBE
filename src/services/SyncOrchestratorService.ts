@@ -618,6 +618,7 @@ async function syncManageBacSchool(
     await run('term-grades', () =>
       svc.syncAllTermGrades(apiKey, baseUrl, {
         dp_grade_13_only: true,
+        academic_year: options?.academicYear,
         ...(config.school_id != null ? { school_id: config.school_id } : {}),
       })
     );

@@ -231,6 +231,23 @@ export declare class DatabaseService {
         program_codes?: string[];
     }): Promise<number[]>;
     /**
+     * Distinct term_ids from admin.mb_term_grade_rubric_config for school + AY + grade.
+     * Returns null when no config rows match (caller may fall back to full class term range).
+     */
+    getMbTermGradeConfigTermIds(params: {
+        school_id: number;
+        academic_year: string;
+        grade_number: number;
+    }): Promise<{
+        academic_year: string;
+        term_ids: number[];
+        rubric_count: number;
+    } | null>;
+    /**
+     * Load academic term metadata for a set of term IDs (config-driven sync).
+     */
+    getAcademicTermsByIds(termIds: number[]): Promise<AcademicTermRecord[]>;
+    /**
      * Get distinct class IDs that have at least one membership (for term grades sync)
      * @param filters - Optional: grade_number + school_id (+ program_codes for DP), or class_id alone
      */

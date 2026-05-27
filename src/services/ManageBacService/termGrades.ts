@@ -166,10 +166,14 @@ export type SyncAllTermGradesOptions = {
   term_id?: number;
   class_id?: number;
   school_id?: number;
+  /** Sync schedule / manual run academic year (matches admin.mb_term_grade_rubric_config) */
+  academic_year?: string;
   /** Optional: extra program filter; leave empty to scope by grade_number only */
   program_codes?: string[];
   /** Apply default grade 13 scope using currentSchoolId when true */
   dp_grade_13_only?: boolean;
+  /** Explicit term allow-list; overrides config lookup when set */
+  allowed_term_ids?: number[];
 };
 
 export async function syncAllTermGrades(
@@ -232,6 +236,45 @@ export async function syncAllTermGrades(
     );
   }
 
+  let allowedTermIds: Set<number> | undefined;
+  let configTermMeta = new Map<number, { id: number; name: string }>();
+
+  if (options?.allowed_term_ids?.length) {
+    allowedTermIds = new Set(options.allowed_term_ids);
+    const meta = await databaseService.getAcademicTermsByIds([...allowedTermIds]);
+    for (const t of meta) {
+      configTermMeta.set(t.id, { id: t.id, name: t.name });
+    }
+    console.log(
+      `📋 Term filter: ${allowedTermIds.size} term_id(s) from options.allowed_term_ids`
+    );
+  } else if (schoolId != null && gradeNumber != null && options?.academic_year) {
+    const configTerms = await databaseService.getMbTermGradeConfigTermIds({
+      school_id: schoolId,
+      academic_year: options.academic_year,
+      grade_number: gradeNumber,
+    });
+    if (configTerms) {
+      allowedTermIds = new Set(configTerms.term_ids);
+      const meta = await databaseService.getAcademicTermsByIds(configTerms.term_ids);
+      for (const t of meta) {
+        configTermMeta.set(t.id, { id: t.id, name: t.name });
+      }
+      console.log(
+        `📋 Term filter from admin.mb_term_grade_rubric_config: school=${schoolId}, ` +
+          `academic_year="${configTerms.academic_year}", grade_number=${gradeNumber} → ` +
+          `${configTerms.term_ids.length} term_id(s), ${configTerms.rubric_count} rubric row(s) ` +
+          `[${configTerms.term_ids.join(', ')}]`
+      );
+    } else {
+      console.warn(
+        `⚠️ No admin.mb_term_grade_rubric_config for school=${schoolId}, ` +
+          `academic_year="${options.academic_year}", grade_number=${gradeNumber}. ` +
+          `Falling back to all terms in each class start_term_id..end_term_id range.`
+      );
+    }
+  }
+
   console.log('📋 syncAllTermGrades: fetching classes with memberships...', filters && Object.keys(filters).length ? `(filters: ${JSON.stringify(filters)})` : '');
   const classIds = await databaseService.getDistinctClassesWithMemberships(Object.keys(filters).length ? filters : undefined);
   console.log(`📋 syncAllTermGrades: found ${classIds.length} classes with memberships`);
@@ -287,6 +330,19 @@ export async function syncAllTermGrades(
       if (!termInRange) continue;
       const singleTerm = await databaseService.getAcademicTermsInRange(termIdFilter, termIdFilter);
       terms = singleTerm.length > 0 ? singleTerm : [{ id: termIdFilter, name: `Term ${termIdFilter}` }];
+    } else if (allowedTermIds && allowedTermIds.size > 0) {
+      terms = [...allowedTermIds]
+        .filter(
+          (id) =>
+            classDetails!.start_term_id != null &&
+            classDetails!.end_term_id != null &&
+            id >= classDetails!.start_term_id! &&
+            id <= classDetails!.end_term_id!
+        )
+        .map((id) => {
+          const meta = configTermMeta.get(id);
+          return { id, name: meta?.name ?? `Term ${id}` };
+        });
     } else {
       terms = await databaseService.getAcademicTermsInRange(
         classDetails.start_term_id,
