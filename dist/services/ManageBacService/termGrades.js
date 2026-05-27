@@ -35,13 +35,20 @@ export async function getTermGrades(apiKey, classId, termId, baseUrl, options) {
         const studentsData = validatedData?.students ?? responseObj?.students ?? [];
         let studentsArray = Array.isArray(studentsData) ? studentsData : [];
         if (options?.allowedStudentIds && options.allowedStudentIds.size > 0) {
+            const originalStudents = studentsArray;
             const before = studentsArray.length;
             studentsArray = studentsArray.filter((student) => {
                 const s = student;
                 const id = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
                 return options.allowedStudentIds.has(id);
             });
-            if (before > studentsArray.length) {
+            if (studentsArray.length === 0 && before > 0) {
+                // Guardrail: if cohort mapping is stale/misaligned, do not drop all API data.
+                // Class selection is already grade-scoped upstream.
+                console.warn(`⚠️ Student scope matched 0/${before}; falling back to unfiltered class-term payload to avoid data loss`);
+                studentsArray = originalStudents;
+            }
+            else if (before > studentsArray.length) {
                 console.log(`  ℹ️ Term grades: kept ${studentsArray.length}/${before} students (DP grade ${MB_TERM_GRADES_DEFAULT_GRADE_NUMBER} scope)`);
             }
         }
