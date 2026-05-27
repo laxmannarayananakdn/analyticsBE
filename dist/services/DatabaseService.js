@@ -584,6 +584,9 @@ export class DatabaseService {
     async getMbTermGradeConfigTermIds(params) {
         const ayHint = params.academic_year.trim();
         const ayLike = `%${ayHint}%`;
+        const ayNormExpr = `LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(%s)), NCHAR(160), N''), N' ', N''), N'-', N''), N'–', N''), N'—', N''))`;
+        const cfgAyNorm = ayNormExpr.replace('%s', 'cfg.academic_year');
+        const paramAyNorm = ayNormExpr.replace('%s', '@academic_year');
         const resolveYear = await executeQuery(`SELECT TOP 1 cfg.academic_year
        FROM admin.mb_term_grade_rubric_config cfg
        WHERE cfg.school_id = @school_id
@@ -592,6 +595,7 @@ export class DatabaseService {
            cfg.academic_year = @academic_year
            OR cfg.academic_year LIKE @academic_year_like
            OR @academic_year LIKE '%' + cfg.academic_year + '%'
+           OR ${cfgAyNorm} = ${paramAyNorm}
          )
        ORDER BY CASE WHEN cfg.academic_year = @academic_year THEN 0 ELSE 1 END,
                 cfg.academic_year`, {
@@ -602,10 +606,15 @@ export class DatabaseService {
         });
         let resolvedYear = resolveYear.data?.[0]?.academic_year;
         if (!resolvedYear) {
+            const mbAyNorm = ayNormExpr.replace('%s', 'name');
             const fromMb = await executeQuery(`SELECT TOP 1 name
          FROM MB.academic_years
          WHERE school_id = @school_id
-           AND (name = @academic_year OR name LIKE @academic_year_like)
+           AND (
+             name = @academic_year
+             OR name LIKE @academic_year_like
+             OR ${mbAyNorm} = ${paramAyNorm}
+           )
          ORDER BY CASE WHEN name = @academic_year THEN 0 ELSE 1 END, name DESC`, {
                 school_id: params.school_id,
                 academic_year: ayHint,
@@ -613,11 +622,16 @@ export class DatabaseService {
             });
             const mbYearName = fromMb.data?.[0]?.name;
             if (mbYearName) {
+                const cfgAyNorm2 = ayNormExpr.replace('%s', 'academic_year');
+                const mbYearNormExpr = ayNormExpr.replace('%s', '@academic_year');
                 const retry = await executeQuery(`SELECT TOP 1 academic_year
            FROM admin.mb_term_grade_rubric_config
            WHERE school_id = @school_id
              AND grade_number = @grade_number
-             AND academic_year = @academic_year`, {
+             AND (
+               academic_year = @academic_year
+               OR ${cfgAyNorm2} = ${mbYearNormExpr}
+             )`, {
                     school_id: params.school_id,
                     grade_number: params.grade_number,
                     academic_year: mbYearName,
