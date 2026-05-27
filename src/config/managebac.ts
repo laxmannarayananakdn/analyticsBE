@@ -10,6 +10,12 @@ export const MANAGEBAC_CONFIG = {
   DEFAULT_BASE_URL: 'https://api.managebac.com', // Default if not provided in config
 } as const;
 
+/** IB DP year-2 cohort — maps to RP grade_name via CAST(grade_number AS NVARCHAR) */
+export const MB_TERM_GRADES_DEFAULT_GRADE_NUMBER = 13;
+
+/** ManageBac program_code values for Diploma Programme (MB.grades.program_code) */
+export const MB_DP_PROGRAM_CODES = ['diploma', 'dp', 'ibdp', 'ib'] as const;
+
 export const MANAGEBAC_ENDPOINTS = {
   SCHOOL: '/school',
   ACADEMIC_YEARS: '/school/academic-years',

@@ -459,7 +459,10 @@ async function syncManageBacSchool(config, options) {
     }
     throwIfAborted(signal);
     if (eps.includes('term-grades')) {
-        await run('term-grades', () => svc.syncAllTermGrades(apiKey, baseUrl));
+        await run('term-grades', () => svc.syncAllTermGrades(apiKey, baseUrl, {
+            dp_grade_13_only: true,
+            ...(config.school_id != null ? { school_id: config.school_id } : {}),
+        }));
     }
 }
 /**

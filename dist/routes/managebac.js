@@ -591,7 +591,7 @@ router.get('/memberships', loadManageBacConfig, async (req, res) => {
 /**
  * GET /api/managebac/term-grades
  * Sync term grades for classes with memberships.
- * Query params: grade_number (default 13), term_id (optional), class_id (optional).
+ * Query params: grade_number (default DP scope uses 13), term_id, class_id, all_grades=true (no DP filter).
  * Run "Get Memberships" first to populate class memberships.
  */
 router.get('/term-grades', loadManageBacConfig, async (req, res) => {
@@ -609,28 +609,39 @@ router.get('/term-grades', loadManageBacConfig, async (req, res) => {
             }
             apiKey = directKey;
         }
+        const allGrades = req.query.all_grades === 'true';
         const gradeNumber = req.query.grade_number ? parseInt(req.query.grade_number, 10) : undefined;
         const termId = req.query.term_id ? parseInt(req.query.term_id, 10) : undefined;
         const classId = req.query.class_id ? parseInt(req.query.class_id, 10) : undefined;
         let schoolId = req.manageBacConfig?.school_id ?? undefined;
-        if (gradeNumber != null && !schoolId && req.manageBacConfig) {
+        if (!schoolId && req.manageBacConfig) {
             const school = await manageBacService.getSchoolDetails(apiKey, baseUrl);
             schoolId = school?.id;
-            if (!schoolId) {
-                return res.status(400).json({
-                    error: 'Grade filter requires school ID. Run "Authenticate" or "Get School Details" first, or ensure config has school_id set.',
-                });
-            }
         }
         const options = {};
-        if (gradeNumber != null && schoolId != null) {
-            options.grade_number = gradeNumber;
-            options.school_id = schoolId;
-        }
         if (termId != null)
             options.term_id = termId;
         if (classId != null)
             options.class_id = classId;
+        if (!allGrades) {
+            if (gradeNumber != null && schoolId != null) {
+                options.grade_number = gradeNumber;
+                options.school_id = schoolId;
+            }
+            else if (schoolId != null) {
+                options.dp_grade_13_only = true;
+                options.school_id = schoolId;
+            }
+            else if (gradeNumber != null || classId == null) {
+                return res.status(400).json({
+                    error: 'DP term-grade scope requires school_id on config (or run Get School Details). Pass all_grades=true to sync every class.',
+                });
+            }
+        }
+        else if (gradeNumber != null && schoolId != null) {
+            options.grade_number = gradeNumber;
+            options.school_id = schoolId;
+        }
         const result = await manageBacService.syncAllTermGrades(apiKey, baseUrl, Object.keys(options).length ? options : undefined);
         res.json(result);
     }

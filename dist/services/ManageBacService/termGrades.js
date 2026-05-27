@@ -2,10 +2,10 @@
  * Term Grades Methods
  * Handles fetching and saving term grades from ManageBac API
  */
-import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG } from '../../config/managebac.js';
+import { getManageBacHeaders, MANAGEBAC_ENDPOINTS, MANAGEBAC_CONFIG, MB_TERM_GRADES_DEFAULT_GRADE_NUMBER, } from '../../config/managebac.js';
 import { retryOperation, validateApiResponse } from '../../utils/apiUtils.js';
 import { databaseService } from '../DatabaseService.js';
-export async function getTermGrades(apiKey, classId, termId, baseUrl) {
+export async function getTermGrades(apiKey, classId, termId, baseUrl, options) {
     try {
         const endpoint = MANAGEBAC_ENDPOINTS.TERM_GRADES
             .replace(':class_id', classId.toString())
@@ -33,7 +33,18 @@ export async function getTermGrades(apiKey, classId, termId, baseUrl) {
         console.log('  - validated.data keys:', validated.data ? Object.keys(validatedData) : 'null');
         console.log('  - Has students?', !!validatedData?.students);
         const studentsData = validatedData?.students ?? responseObj?.students ?? [];
-        const studentsArray = Array.isArray(studentsData) ? studentsData : [];
+        let studentsArray = Array.isArray(studentsData) ? studentsData : [];
+        if (options?.allowedStudentIds && options.allowedStudentIds.size > 0) {
+            const before = studentsArray.length;
+            studentsArray = studentsArray.filter((student) => {
+                const s = student;
+                const id = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
+                return options.allowedStudentIds.has(id);
+            });
+            if (before > studentsArray.length) {
+                console.log(`  ℹ️ Term grades: kept ${studentsArray.length}/${before} students (DP grade ${MB_TERM_GRADES_DEFAULT_GRADE_NUMBER} scope)`);
+            }
+        }
         if (studentsArray.length > 0) {
             const firstStudent = studentsArray[0];
             const termGrade = firstStudent?.term_grade;
@@ -118,16 +129,47 @@ export async function getTermGrades(apiKey, classId, termId, baseUrl) {
     }
 }
 export async function syncAllTermGrades(apiKey, baseUrl, options) {
-    const gradeNumber = options?.grade_number;
+    let scope;
+    if (options?.dp_grade_13_only) {
+        const schoolId = options.school_id ?? this.currentSchoolId;
+        if (schoolId == null) {
+            throw new Error('Grade 13 term-grade sync requires school_id (set on ManageBac config or pass in options)');
+        }
+        scope = {
+            school_id: schoolId,
+            grade_number: MB_TERM_GRADES_DEFAULT_GRADE_NUMBER,
+        };
+    }
+    else if (options?.grade_number != null && options?.school_id != null) {
+        scope = {
+            school_id: options.school_id,
+            grade_number: options.grade_number,
+            ...(options.program_codes?.length ? { program_codes: options.program_codes } : {}),
+        };
+    }
+    const gradeNumber = scope?.grade_number ?? options?.grade_number;
     const termIdFilter = options?.term_id;
     const classIdFilter = options?.class_id;
-    const schoolId = options?.school_id;
+    const schoolId = scope?.school_id ?? options?.school_id;
+    const programCodes = scope?.program_codes ?? options?.program_codes;
     const filters = {};
     if (classIdFilter != null)
         filters.class_id = classIdFilter;
     if (gradeNumber != null && schoolId != null) {
         filters.grade_number = gradeNumber;
         filters.school_id = schoolId;
+        if (programCodes?.length)
+            filters.program_codes = programCodes;
+    }
+    let allowedStudentIds;
+    if (gradeNumber != null && schoolId != null) {
+        const ids = await databaseService.getStudentIdsInDpYearGroups({
+            school_id: schoolId,
+            grade_number: gradeNumber,
+            ...(programCodes?.length ? { program_codes: programCodes } : {}),
+        });
+        allowedStudentIds = new Set(ids);
+        console.log(`📋 Term-grade scope: grade_number=${gradeNumber}, school_id=${schoolId} → ${ids.length} student(s)`);
     }
     console.log('📋 syncAllTermGrades: fetching classes with memberships...', filters && Object.keys(filters).length ? `(filters: ${JSON.stringify(filters)})` : '');
     const classIds = await databaseService.getDistinctClassesWithMemberships(Object.keys(filters).length ? filters : undefined);
@@ -204,7 +246,9 @@ export async function syncAllTermGrades(apiKey, baseUrl, options) {
         const { classId, className, termId, termName } = combinations[i];
         const completed = i + 1;
         try {
-            const response = await this.getTermGrades(apiKey, classId, termId, baseUrl);
+            const response = await this.getTermGrades(apiKey, classId, termId, baseUrl, {
+                allowedStudentIds,
+            });
             const count = response?.students?.length ?? 0;
             totalFetched += count;
             details.push({ classId, className, termId, termName, count });

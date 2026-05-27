@@ -8,6 +8,10 @@ export declare const MANAGEBAC_CONFIG: {
     readonly RETRY_ATTEMPTS: 3;
     readonly DEFAULT_BASE_URL: "https://api.managebac.com";
 };
+/** IB DP year-2 cohort — maps to RP grade_name via CAST(grade_number AS NVARCHAR) */
+export declare const MB_TERM_GRADES_DEFAULT_GRADE_NUMBER = 13;
+/** ManageBac program_code values for Diploma Programme (MB.grades.program_code) */
+export declare const MB_DP_PROGRAM_CODES: readonly ["diploma", "dp", "ibdp", "ib"];
 export declare const MANAGEBAC_ENDPOINTS: {
     readonly SCHOOL: "/school";
     readonly ACADEMIC_YEARS: "/school/academic-years";

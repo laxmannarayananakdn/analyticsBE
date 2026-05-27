@@ -3,6 +3,7 @@
  * Handles all database operations with Azure SQL Database
  */
 import { executeQuery, getConnection, sql } from '../config/database.js';
+import { yearGroupDpProgramSql } from '../utils/mbTermGradeScope.js';
 export class DatabaseService {
     gradesConstraintChecked = false;
     /**
@@ -553,8 +554,32 @@ export class DatabaseService {
         return result.data;
     }
     /**
+     * Student IDs in year groups matching grade_number + DP program (for term-grade row filter).
+     */
+    async getStudentIdsInDpYearGroups(filters) {
+        const programClause = filters.program_codes?.length
+            ? `AND ${yearGroupDpProgramSql('yg', filters.program_codes)}`
+            : '';
+        const query = `
+      SELECT DISTINCT ygs.student_id
+      FROM MB.year_group_students ygs
+      INNER JOIN MB.year_groups yg ON ygs.year_group_id = yg.id
+      WHERE yg.school_id = @school_id
+        AND yg.grade_number = @grade_number
+        ${programClause}
+      ORDER BY ygs.student_id
+    `;
+        const result = await executeQuery(query, {
+            school_id: filters.school_id,
+            grade_number: filters.grade_number,
+        });
+        if (result.error || !result.data)
+            return [];
+        return result.data.map((r) => r.student_id);
+    }
+    /**
      * Get distinct class IDs that have at least one membership (for term grades sync)
-     * @param filters - Optional: grade_number (filter by year groups with this grade), class_id (single class only), school_id (required when grade_number used)
+     * @param filters - Optional: grade_number + school_id (+ program_codes for DP), or class_id alone
      */
     async getDistinctClassesWithMemberships(filters) {
         if (filters?.class_id != null) {
@@ -564,12 +589,17 @@ export class DatabaseService {
             return [filters.class_id];
         }
         if (filters?.grade_number != null && filters?.school_id != null) {
+            const programClause = filters.program_codes?.length
+                ? `AND ${yearGroupDpProgramSql('yg', filters.program_codes)}`
+                : '';
             const query = `
         SELECT DISTINCT cm.class_id
         FROM MB.class_memberships cm
         INNER JOIN MB.year_group_students ygs ON cm.user_id = ygs.student_id
         INNER JOIN MB.year_groups yg ON ygs.year_group_id = yg.id
-        WHERE yg.grade_number = @grade_number AND yg.school_id = @school_id
+        WHERE yg.grade_number = @grade_number
+          AND yg.school_id = @school_id
+          ${programClause}
         ORDER BY cm.class_id
       `;
             const result = await executeQuery(query, {

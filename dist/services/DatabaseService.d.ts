@@ -223,13 +223,22 @@ export declare class DatabaseService {
      */
     getAcademicTermsForSchool(schoolId: number): Promise<AcademicTermRecord[]>;
     /**
+     * Student IDs in year groups matching grade_number + DP program (for term-grade row filter).
+     */
+    getStudentIdsInDpYearGroups(filters: {
+        school_id: number;
+        grade_number: number;
+        program_codes?: string[];
+    }): Promise<number[]>;
+    /**
      * Get distinct class IDs that have at least one membership (for term grades sync)
-     * @param filters - Optional: grade_number (filter by year groups with this grade), class_id (single class only), school_id (required when grade_number used)
+     * @param filters - Optional: grade_number + school_id (+ program_codes for DP), or class_id alone
      */
     getDistinctClassesWithMemberships(filters?: {
         grade_number?: number;
         class_id?: number;
         school_id?: number;
+        program_codes?: string[];
     }): Promise<number[]>;
     /**
      * Get class memberships for students in a year group (limited to first N students)

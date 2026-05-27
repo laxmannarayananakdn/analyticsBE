@@ -4,13 +4,20 @@
  */
 import type { TermGradeResponse } from '../../types/managebac.js';
 import type { BaseManageBacService } from './BaseManageBacService.js';
-export declare function getTermGrades(this: BaseManageBacService, apiKey: string, classId: number, termId: number, baseUrl?: string): Promise<TermGradeResponse>;
-export declare function syncAllTermGrades(this: BaseManageBacService, apiKey: string, baseUrl?: string, options?: {
+export declare function getTermGrades(this: BaseManageBacService, apiKey: string, classId: number, termId: number, baseUrl?: string, options?: {
+    allowedStudentIds?: Set<number>;
+}): Promise<TermGradeResponse>;
+export type SyncAllTermGradesOptions = {
     grade_number?: number;
     term_id?: number;
     class_id?: number;
     school_id?: number;
-}): Promise<{
+    /** Optional: extra program filter; leave empty to scope by grade_number only */
+    program_codes?: string[];
+    /** Apply default grade 13 scope using currentSchoolId when true */
+    dp_grade_13_only?: boolean;
+};
+export declare function syncAllTermGrades(this: BaseManageBacService, apiKey: string, baseUrl?: string, options?: SyncAllTermGradesOptions): Promise<{
     classesProcessed: number;
     classesSkipped: number;
     totalCombinations: number;

@@ -40,13 +40,10 @@ export declare class ManageBacService extends BaseManageBacService {
     getYearGroupStudents: (apiKey: string, yearGroupId: string, academicYearId?: string | undefined, termId?: string | undefined, baseUrl?: string | undefined) => Promise<any>;
     getAllYearGroupStudents: (apiKey: string, academicYearId?: string | undefined, termId?: string | undefined, baseUrl?: string | undefined) => Promise<any>;
     getMemberships: (apiKey: string, userIds: number[], academicYearId?: string | undefined, termId?: string | undefined, baseUrl?: string | undefined, gradeNumber?: number | undefined) => Promise<any>;
-    getTermGrades: (apiKey: string, classId: number, termId: number, baseUrl?: string | undefined) => Promise<import("../../types/managebac.js").TermGradeResponse>;
-    syncAllTermGrades: (apiKey: string, baseUrl?: string | undefined, options?: {
-        grade_number?: number;
-        term_id?: number;
-        class_id?: number;
-        school_id?: number;
-    } | undefined) => Promise<{
+    getTermGrades: (apiKey: string, classId: number, termId: number, baseUrl?: string | undefined, options?: {
+        allowedStudentIds?: Set<number>;
+    } | undefined) => Promise<import("../../types/managebac.js").TermGradeResponse>;
+    syncAllTermGrades: (apiKey: string, baseUrl?: string | undefined, options?: import("./termGrades.js").SyncAllTermGradesOptions | undefined) => Promise<{
         classesProcessed: number;
         classesSkipped: number;
         totalCombinations: number;
