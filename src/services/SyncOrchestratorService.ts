@@ -10,6 +10,7 @@ import type { ManageBacConfig, NexquareConfig } from '../middleware/configLoader
 import { ManageBacService, manageBacService } from './ManageBacService/index.js';
 import { nexquareService } from './NexquareService/index.js';
 import { triggerRefresh, buildStudentAssessmentsByAcademicYear } from './RefreshService.js';
+import { databaseService } from './DatabaseService.js';
 
 export interface RunSyncParams {
   /** Node ID(s) to sync. Required unless all is true. */
@@ -55,6 +56,75 @@ export interface RunSyncResult {
 // memberships must run before term-grades: term grades use MB.class_memberships to find classes
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes', 'memberships', 'term-grades'];
 const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function getAcademicYearCandidates(raw?: string): string[] {
+  const input = normalizeWhitespace(raw || '');
+  if (!input) return [];
+
+  const candidates: string[] = [];
+  const push = (value?: string) => {
+    const v = normalizeWhitespace(value || '');
+    if (!v) return;
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+
+  // Preserve caller-provided format first.
+  push(input);
+
+  // Extract years from labels like "August 2025 - July 2026".
+  const years = input.match(/\b(19|20)\d{2}\b/g) || [];
+  if (years.length >= 2) {
+    push(`${years[0]}-${years[1]}`);
+    push(`${years[0]} - ${years[1]}`);
+    push(years[0]);
+  } else if (years.length === 1) {
+    push(years[0]);
+  }
+
+  return candidates;
+}
+
+function getPreferredAcademicYear(raw?: string): string {
+  const candidates = getAcademicYearCandidates(raw);
+  return candidates[0] || new Date().getFullYear().toString();
+}
+
+async function syncManageBacToRpWithAcademicYearFallback(
+  mbService: ManageBacService,
+  schoolId: string,
+  rawAcademicYear?: string
+): Promise<{
+  loadResult: Awaited<ReturnType<ManageBacService['syncManageBacToRP']>>;
+  usedAcademicYear?: string;
+}> {
+  const candidates = getAcademicYearCandidates(rawAcademicYear);
+
+  if (candidates.length === 0) {
+    const loadResult = await mbService.syncManageBacToRP(schoolId, undefined);
+    return { loadResult, usedAcademicYear: undefined };
+  }
+
+  let lastResult: Awaited<ReturnType<ManageBacService['syncManageBacToRP']>> | undefined;
+  let usedAcademicYear = candidates[0];
+
+  for (const ay of candidates) {
+    const result = await mbService.syncManageBacToRP(schoolId, ay);
+    lastResult = result;
+    usedAcademicYear = ay;
+    if (result.rows_affected > 0) {
+      return { loadResult: result, usedAcademicYear: ay };
+    }
+  }
+
+  return {
+    loadResult: lastResult || { rows_affected: 0, rubric_rows_inserted: 0, class_grade_rows_inserted: 0 },
+    usedAcademicYear,
+  };
+}
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
@@ -169,6 +239,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
   // Nex: pipeline mode - school N can start endpoint E as soon as school N-1 finishes E and school N finishes E-1
   const mbItemsWithIds = itemsWithIds.filter((x) => x.item.source === 'mb');
   const nexItemsWithIds = itemsWithIds.filter((x) => x.item.source === 'nex');
+  const mbResolvedRpAcademicYears = new Set<string>();
 
   const runMbTrackSerially = async (
     trackItems: ItemWithId[]
@@ -205,19 +276,35 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         });
 
         // When loadRpSchema and term-grades ran: sync MB -> RP.student_assessments, then trigger RP refresh
-        const ay = params.academicYear || new Date().getFullYear().toString();
+        const mbAyRaw = params.academicYear || new Date().getFullYear().toString();
+        let ayForRefresh = getPreferredAcademicYear(mbAyRaw);
+        const schoolIdAsNumber = Number(item.schoolId);
+        if (Number.isFinite(schoolIdAsNumber)) {
+          const configuredRpAy = await databaseService.getMbTermGradeConfigRpAcademicYear({
+            school_id: schoolIdAsNumber,
+            academic_year: mbAyRaw,
+          });
+          if (configuredRpAy) {
+            ayForRefresh = configuredRpAy;
+          }
+        }
+        mbResolvedRpAcademicYears.add(ayForRefresh);
         if (loadRpSchema && endpointsMb.includes('term-grades') && item.schoolId) {
           await setCurrentEndpoint('rp-sync');
           try {
-            const loadResult = await mbService.syncManageBacToRP(item.schoolId, ay);
+            const { loadResult, usedAcademicYear } = await syncManageBacToRpWithAcademicYearFallback(
+              mbService,
+              item.schoolId,
+              params.academicYear
+            );
             console.log(
               `   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
                 `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
-                `for school=${item.schoolId} academic_year=${ay}`
+                `for school=${item.schoolId} academic_year=${usedAcademicYear || '(all)'}`
             );
             triggerRefresh({
               school_id: item.schoolId,
-              academic_year: ay,
+              academic_year: ayForRefresh,
               triggered_by: params.triggeredBy || 'scheduler',
             }).catch((err) => console.error('[RefreshService] MB trigger failed:', err?.message || err));
           } catch (rpErr: any) {
@@ -506,9 +593,19 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
   if (runBuildStudentAssessmentsByAcademicYear) {
     try {
       const nodeForProc = params.nodeIds?.length ? params.nodeIds[0] : nodeIdStr;
-      console.log(`[SyncOrchestrator] Running RP.BuildStudentAssessmentsByAcademicYear(academic_year='${academicYearStr}', node='${nodeForProc}')`);
+      const hasMbSchoolsInRun = mbItemsWithIds.length > 0;
+      let buildAcademicYear = hasMbSchoolsInRun ? getPreferredAcademicYear(params.academicYear) : academicYearStr;
+      if (hasMbSchoolsInRun && mbResolvedRpAcademicYears.size === 1) {
+        buildAcademicYear = [...mbResolvedRpAcademicYears][0];
+      } else if (hasMbSchoolsInRun && mbResolvedRpAcademicYears.size > 1) {
+        console.warn(
+          `[SyncOrchestrator] Multiple MB academic_year_rp values resolved for this run (${[...mbResolvedRpAcademicYears].join(', ')}). ` +
+          `Using '${buildAcademicYear}' for BuildStudentAssessmentsByAcademicYear.`
+        );
+      }
+      console.log(`[SyncOrchestrator] Running RP.BuildStudentAssessmentsByAcademicYear(academic_year='${buildAcademicYear}', node='${nodeForProc}')`);
       await buildStudentAssessmentsByAcademicYear({
-        academic_year: academicYearStr,
+        academic_year: buildAcademicYear,
         node: nodeForProc,
       });
       console.log('[SyncOrchestrator] BuildStudentAssessmentsByAcademicYear completed successfully');

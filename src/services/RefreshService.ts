@@ -90,7 +90,8 @@ async function execStep(
 ): Promise<void> {
   const request = pool.request();
   request.input('school_id', sql.NVarChar(50), params.school_id);
-  request.input('academic_year', sql.NVarChar(20), params.academic_year);
+  // Keep input length aligned with flexible academic-year labels (e.g. "August 2025 - July 2026").
+  request.input('academic_year', sql.NVarChar(200), params.academic_year);
   request.input('job_run_id', sql.UniqueIdentifier, params.job_run_id);
   request.input('triggered_by', sql.NVarChar(200), params.triggered_by);
   await request.execute(procName);

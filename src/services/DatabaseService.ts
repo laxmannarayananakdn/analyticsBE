@@ -941,6 +941,47 @@ export class DatabaseService {
   }
 
   /**
+   * Resolve RP academic year from term-grade rubric config for a school + MB academic year label.
+   * Uses fuzzy AY matching to tolerate label variations (e.g. "August 2025 - July 2026").
+   */
+  async getMbTermGradeConfigRpAcademicYear(params: {
+    school_id: number;
+    academic_year: string;
+  }): Promise<string | null> {
+    const ayHint = params.academic_year.trim();
+    if (!ayHint) return null;
+
+    const ayLike = `%${ayHint}%`;
+    const ayNormExpr = `LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(%s)), NCHAR(160), N''), N' ', N''), N'-', N''), N'–', N''), N'—', N''))`;
+    const cfgAyNorm = ayNormExpr.replace('%s', 'cfg.academic_year');
+    const paramAyNorm = ayNormExpr.replace('%s', '@academic_year');
+
+    const result = await executeQuery<{ academic_year_rp: string }>(
+      `SELECT TOP 1 cfg.academic_year_rp
+       FROM admin.mb_term_grade_rubric_config cfg
+       WHERE cfg.school_id = @school_id
+         AND cfg.academic_year_rp IS NOT NULL
+         AND LTRIM(RTRIM(cfg.academic_year_rp)) <> ''
+         AND (
+           cfg.academic_year = @academic_year
+           OR cfg.academic_year LIKE @academic_year_like
+           OR @academic_year LIKE '%' + cfg.academic_year + '%'
+           OR ${cfgAyNorm} = ${paramAyNorm}
+         )
+       GROUP BY cfg.academic_year_rp
+       ORDER BY cfg.academic_year_rp DESC`,
+      {
+        school_id: params.school_id,
+        academic_year: ayHint,
+        academic_year_like: ayLike,
+      }
+    );
+
+    if (result.error) return null;
+    return result.data?.[0]?.academic_year_rp || null;
+  }
+
+  /**
    * Load academic term metadata for a set of term IDs (config-driven sync).
    */
   async getAcademicTermsByIds(termIds: number[]): Promise<AcademicTermRecord[]> {
