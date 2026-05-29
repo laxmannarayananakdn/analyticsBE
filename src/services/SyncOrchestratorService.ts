@@ -96,12 +96,23 @@ function getPreferredAcademicYear(raw?: string): string {
 async function syncManageBacToRpWithAcademicYearFallback(
   mbService: ManageBacService,
   schoolId: string,
-  rawAcademicYear?: string
+  rawAcademicYear?: string,
+  preferredMbAcademicYear?: string
 ): Promise<{
   loadResult: Awaited<ReturnType<ManageBacService['syncManageBacToRP']>>;
   usedAcademicYear?: string;
 }> {
-  const candidates = getAcademicYearCandidates(rawAcademicYear);
+  const candidates: string[] = [];
+  const push = (value?: string) => {
+    const v = normalizeWhitespace(value || '');
+    if (!v) return;
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+  // MB.vw_term_grades.academic_year must match config MB label, not academic_year_rp.
+  push(preferredMbAcademicYear);
+  for (const ay of getAcademicYearCandidates(rawAcademicYear)) {
+    push(ay);
+  }
 
   if (candidates.length === 0) {
     const loadResult = await mbService.syncManageBacToRP(schoolId, undefined);
@@ -278,8 +289,14 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         // When loadRpSchema and term-grades ran: sync MB -> RP.student_assessments, then trigger RP refresh
         const mbAyRaw = params.academicYear || new Date().getFullYear().toString();
         let ayForRefresh = getPreferredAcademicYear(mbAyRaw);
+        let configuredMbAy: string | undefined;
         const schoolIdAsNumber = Number(item.schoolId);
         if (Number.isFinite(schoolIdAsNumber)) {
+          configuredMbAy =
+            (await databaseService.getMbTermGradeConfigMbAcademicYear({
+              school_id: schoolIdAsNumber,
+              academic_year: mbAyRaw,
+            })) || undefined;
           const configuredRpAy = await databaseService.getMbTermGradeConfigRpAcademicYear({
             school_id: schoolIdAsNumber,
             academic_year: mbAyRaw,
@@ -295,7 +312,8 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
             const { loadResult, usedAcademicYear } = await syncManageBacToRpWithAcademicYearFallback(
               mbService,
               item.schoolId,
-              params.academicYear
+              params.academicYear,
+              configuredMbAy
             );
             console.log(
               `   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
