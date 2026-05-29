@@ -13,9 +13,13 @@ export interface LoadMbTermGradesResult {
 }
 
 export interface LoadMbTermGradesOptions {
-  /** MB.vw_term_grades.academic_year exact match (legacy) */
+  /** Legacy filter: exact match on MB.vw_term_grades.academic_year */
   academic_year?: string;
-  /** Canonical RP year from admin.mb_term_grade_rubric_config (preferred for MB schools) */
+  /**
+   * Canonical RP year from config (e.g. "2025 - 2026").
+   * On insert: stored in RP.student_assessments.academic_year;
+   * MB label from the view is stored in academic_year_rp.
+   */
   academic_year_rp?: string;
 }
 
