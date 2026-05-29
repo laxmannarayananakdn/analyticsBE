@@ -97,43 +97,46 @@ async function syncManageBacToRpWithAcademicYearFallback(
   mbService: ManageBacService,
   schoolId: string,
   rawAcademicYear?: string,
-  preferredMbAcademicYear?: string
+  options?: { academic_year_rp?: string; academic_year_mb?: string }
 ): Promise<{
   loadResult: Awaited<ReturnType<ManageBacService['syncManageBacToRP']>>;
-  usedAcademicYear?: string;
+  usedAcademicYearRp?: string;
 }> {
-  const candidates: string[] = [];
-  const push = (value?: string) => {
-    const v = normalizeWhitespace(value || '');
-    if (!v) return;
-    if (!candidates.includes(v)) candidates.push(v);
-  };
-  // MB.vw_term_grades.academic_year must match config MB label, not academic_year_rp.
-  push(preferredMbAcademicYear);
-  for (const ay of getAcademicYearCandidates(rawAcademicYear)) {
-    push(ay);
+  if (options?.academic_year_rp) {
+    const loadResult = await mbService.syncManageBacToRP(schoolId, {
+      academic_year_rp: options.academic_year_rp,
+      academic_year: options.academic_year_mb,
+    });
+    return { loadResult, usedAcademicYearRp: options.academic_year_rp };
   }
 
-  if (candidates.length === 0) {
-    const loadResult = await mbService.syncManageBacToRP(schoolId, undefined);
-    return { loadResult, usedAcademicYear: undefined };
+  const mbLabelCandidates: string[] = [];
+  const pushMb = (value?: string) => {
+    const v = normalizeWhitespace(value || '');
+    if (!v) return;
+    if (!mbLabelCandidates.includes(v)) mbLabelCandidates.push(v);
+  };
+  pushMb(options?.academic_year_mb);
+  for (const ay of getAcademicYearCandidates(rawAcademicYear)) {
+    pushMb(ay);
   }
 
   let lastResult: Awaited<ReturnType<ManageBacService['syncManageBacToRP']>> | undefined;
-  let usedAcademicYear = candidates[0];
+  let usedAcademicYearRp: string | undefined;
 
-  for (const ay of candidates) {
-    const result = await mbService.syncManageBacToRP(schoolId, ay);
+  for (const ay of mbLabelCandidates) {
+    const result = await mbService.syncManageBacToRP(schoolId, { academic_year: ay });
     lastResult = result;
-    usedAcademicYear = ay;
+    usedAcademicYearRp = ay;
     if (result.rows_affected > 0) {
-      return { loadResult: result, usedAcademicYear: ay };
+      return { loadResult: result, usedAcademicYearRp: ay };
     }
   }
 
+  const loadResult = await mbService.syncManageBacToRP(schoolId, {});
   return {
-    loadResult: lastResult || { rows_affected: 0, rubric_rows_inserted: 0, class_grade_rows_inserted: 0 },
-    usedAcademicYear,
+    loadResult: lastResult?.rows_affected ? lastResult : loadResult,
+    usedAcademicYearRp,
   };
 }
 
@@ -290,6 +293,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         const mbAyRaw = params.academicYear || new Date().getFullYear().toString();
         let ayForRefresh = getPreferredAcademicYear(mbAyRaw);
         let configuredMbAy: string | undefined;
+        let configuredRpAy: string | undefined;
         const schoolIdAsNumber = Number(item.schoolId);
         if (Number.isFinite(schoolIdAsNumber)) {
           configuredMbAy =
@@ -297,10 +301,11 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
               school_id: schoolIdAsNumber,
               academic_year: mbAyRaw,
             })) || undefined;
-          const configuredRpAy = await databaseService.getMbTermGradeConfigRpAcademicYear({
-            school_id: schoolIdAsNumber,
-            academic_year: mbAyRaw,
-          });
+          configuredRpAy =
+            (await databaseService.getMbTermGradeConfigRpAcademicYear({
+              school_id: schoolIdAsNumber,
+              academic_year: mbAyRaw,
+            })) || undefined;
           if (configuredRpAy) {
             ayForRefresh = configuredRpAy;
           }
@@ -309,16 +314,19 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
         if (loadRpSchema && endpointsMb.includes('term-grades') && item.schoolId) {
           await setCurrentEndpoint('rp-sync');
           try {
-            const { loadResult, usedAcademicYear } = await syncManageBacToRpWithAcademicYearFallback(
+            const { loadResult, usedAcademicYearRp } = await syncManageBacToRpWithAcademicYearFallback(
               mbService,
               item.schoolId,
               params.academicYear,
-              configuredMbAy
+              {
+                academic_year_rp: configuredRpAy,
+                academic_year_mb: configuredMbAy,
+              }
             );
             console.log(
               `   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
                 `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
-                `for school=${item.schoolId} academic_year=${usedAcademicYear || '(all)'}`
+                `for school=${item.schoolId} academic_year_rp=${usedAcademicYearRp || configuredRpAy || '(all)'}`
             );
             triggerRefresh({
               school_id: item.schoolId,
