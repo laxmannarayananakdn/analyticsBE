@@ -27,6 +27,10 @@ export function getFisSftpCronExpression(): string {
   return process.env.FIS_SFTP_CRON || '*/5 * * * *';
 }
 
+export function getFisSftpUploadedBy(): string {
+  return process.env.FIS_SFTP_UPLOADED_BY?.trim() || 'sftp@aks';
+}
+
 export function getFisSftpConfig(): FisSftpConfig | null {
   if (!isFisSftpPollerEnabled()) {
     return null;

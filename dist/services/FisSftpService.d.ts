@@ -17,6 +17,7 @@ export declare class FisSftpService {
     listFiles(remoteDir: string): Promise<SftpFileEntry[]>;
     ensureDirectory(remoteDir: string): Promise<void>;
     moveFile(sourcePath: string, destDir: string, fileName: string): Promise<void>;
+    downloadFile(remotePath: string): Promise<Buffer>;
 }
 export declare function withFisSftp<T>(config: FisSftpConfig, fn: (service: FisSftpService) => Promise<T>): Promise<T>;
 //# sourceMappingURL=FisSftpService.d.ts.map

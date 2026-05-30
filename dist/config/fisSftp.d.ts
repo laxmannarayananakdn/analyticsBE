@@ -12,5 +12,6 @@ export interface FisSftpConfig {
 }
 export declare function isFisSftpPollerEnabled(): boolean;
 export declare function getFisSftpCronExpression(): string;
+export declare function getFisSftpUploadedBy(): string;
 export declare function getFisSftpConfig(): FisSftpConfig | null;
 //# sourceMappingURL=fisSftp.d.ts.map

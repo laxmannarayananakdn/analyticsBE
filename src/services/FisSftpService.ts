@@ -68,6 +68,14 @@ export class FisSftpService {
     const destPath = joinRemotePath(destDir, fileName);
     await this.client.rename(sourcePath, destPath);
   }
+
+  async downloadFile(remotePath: string): Promise<Buffer> {
+    const data = await this.client.get(remotePath);
+    if (Buffer.isBuffer(data)) {
+      return data;
+    }
+    throw new Error(`Unexpected SFTP download response for ${remotePath}`);
+  }
 }
 
 export async function withFisSftp<T>(

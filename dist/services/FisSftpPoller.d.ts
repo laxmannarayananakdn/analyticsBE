@@ -1,6 +1,8 @@
 /**
- * Polls FIS SFTP unprocessed folder and moves files after a processing step.
- * Processing is a stub for now; file parsing/load will be added later.
+ * Polls FIS SFTP unprocessed folder, loads finance files via EF upload pipeline,
+ * then moves files to processed or error folders.
+ *
+ * Processing order per poll: all Dic* files first, then all TB* files.
  */
 export interface FisSftpPollResult {
     scanned: number;
@@ -13,7 +15,7 @@ export interface FisSftpPollResult {
     }>;
 }
 /**
- * List unprocessed files, run the processing stub, then move to processed (or error on failure).
+ * List unprocessed files, load Dic then TB via EF pipeline, move to processed/error.
  */
 export declare function pollFisSftpUnprocessedFiles(): Promise<FisSftpPollResult>;
 //# sourceMappingURL=FisSftpPoller.d.ts.map

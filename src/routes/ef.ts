@@ -23,6 +23,8 @@ import {
   validateRowCount
 } from '../utils/fileValidation.js';
 import { ErrorCode, UploadError } from '../types/errors.js';
+import { processFinanceFile } from '../services/FinanceEfUploadService.js';
+import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
 
 // Import multer - using default import with esModuleInterop
 // @ts-ignore - multer is CommonJS but esModuleInterop handles it
@@ -196,6 +198,34 @@ router.post('/upload', (req, res, next) => {
         code: ErrorCode.INVALID_FILE_TYPE,
         message: 'File validation failed',
         errors: validationErrors
+      });
+    }
+
+    if (isFinanceFileTypeCode(fileTypeCode)) {
+      const financeResult = await processFinanceFile({
+        fileName,
+        fileBuffer,
+        fileTypeCode,
+        uploadedBy,
+        skipInvalidRows,
+      });
+
+      if (!financeResult.success) {
+        return res.status(400).json({
+          code: financeResult.errors?.[0]?.code || ErrorCode.PARSE_ERROR,
+          message: financeResult.errorMessage || 'Finance upload failed',
+          errors: financeResult.errors || [],
+          uploadId: financeResult.uploadId,
+        });
+      }
+
+      return res.json({
+        uploadId: financeResult.uploadId,
+        status: 'COMPLETED',
+        rowCount: financeResult.rowCount,
+        message: `Successfully uploaded and processed ${financeResult.rowCount} records${financeResult.skippedRows ? ` (${financeResult.skippedRows} rows skipped)` : ''}`,
+        skippedRows: financeResult.skippedRows || 0,
+        totalRows: financeResult.totalRows || financeResult.rowCount,
       });
     }
 

@@ -12,6 +12,21 @@ Polls the FIS development SFTP server for new files, runs a processing stub (rea
 
 Step 1 only moves successful runs to **Processed**; failures are left in **Unprocessed** and logged.
 
+## Processing behaviour
+
+Each poll cycle:
+
+1. List files in `UnprocessedFilesNew`
+2. **Dic\*** files first (alphabetical), then **TB\*** files
+3. Unknown names → `ErrorFilesNew` (no DB insert)
+4. For each finance file:
+   - Resolve type from filename (e.g. `Dic_Account_202604.xlsx` → `FIN_DIC_ACCOUNT`)
+   - Parse + load via same pipeline as `/api/ef` upload
+   - `uploaded_by` = `sftp@aks` (override with `FIS_SFTP_UPLOADED_BY`)
+   - Success → `ProcessedFilesNew`
+   - Failure → `EF.Uploads` status `FAILED` + `ErrorFilesNew`
+5. Promote to RP remains manual in admin UI (unchanged)
+
 ## Environment variables
 
 Add to `backend/.env` (do not commit the `.pem` key):
@@ -29,7 +44,7 @@ FIS_SFTP_PRIVATE_KEY_PATH=/absolute/path/to/akssftp_key.pem
 # FIS_SFTP_ERROR_DIR=/FIS/Development/ErrorFilesNew
 # FIS_SFTP_CRON=*/5 * * * *
 # FIS_SFTP_RUN_ON_STARTUP=false
-# CRON_TIMEZONE=Asia/Kolkata
+# FIS_SFTP_UPLOADED_BY=sftp@aks
 ```
 
 `ENABLE_FIS_SFTP_POLLER` defaults to off unless set to `true`.

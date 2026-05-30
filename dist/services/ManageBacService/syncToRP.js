@@ -5,26 +5,15 @@
 import { getConnection, sql } from '../../config/database.js';
 /**
  * Load MB term grades into RP.student_assessments for configured schools.
- * @param schoolId MB.schools.id as string (e.g. "123"); omit to load all configured schools
- * @param academicYear MB academic year name (e.g. "2024-2025"); omit to load all years
- * @returns Insert counts from RP.usp_load_mb_term_grades
  */
-export async function syncManageBacToRP(schoolId, academicYear) {
+export async function syncManageBacToRP(schoolId, options) {
+    const resolved = typeof options === 'string' ? { academic_year: options } : options ?? {};
     const connection = await getConnection();
     const request = connection.request();
     request.timeout = 1800000;
-    if (schoolId) {
-        request.input('school_id', sql.NVarChar(100), schoolId);
-    }
-    else {
-        request.input('school_id', sql.NVarChar(100), null);
-    }
-    if (academicYear) {
-        request.input('academic_year', sql.NVarChar(200), academicYear);
-    }
-    else {
-        request.input('academic_year', sql.NVarChar(200), null);
-    }
+    request.input('school_id', sql.NVarChar(100), schoolId ?? null);
+    request.input('academic_year', sql.NVarChar(200), resolved.academic_year?.trim() || null);
+    request.input('academic_year_rp', sql.NVarChar(20), resolved.academic_year_rp?.trim() || null);
     const result = await request.execute('RP.usp_load_mb_term_grades');
     const row = result.recordset?.[0];
     return {

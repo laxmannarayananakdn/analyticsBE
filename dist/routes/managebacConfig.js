@@ -56,7 +56,7 @@ router.get('/term-grade-rubric-config', async (req, res) => {
     try {
         const { school_id, academic_year, grade_number } = req.query;
         let query = `
-      SELECT id, school_id, academic_year, grade_number, rubric_title, term_id, display_order, created_at, updated_at
+      SELECT id, school_id, academic_year, academic_year_rp, grade_number, rubric_title, term_id, display_order, created_at, updated_at
       FROM admin.mb_term_grade_rubric_config
       WHERE 1=1
     `;
@@ -100,7 +100,7 @@ router.post('/term-grade-rubric-config', async (req, res) => {
         let successCount = 0;
         const errors = [];
         for (const c of configs) {
-            const { id, school_id, academic_year, grade_number, rubric_title, term_id, display_order } = c;
+            const { id, school_id, academic_year, academic_year_rp, grade_number, rubric_title, term_id, display_order } = c;
             if (!school_id || academic_year == null || grade_number == null || !rubric_title || !term_id) {
                 errors.push(`Missing required fields: ${JSON.stringify(c)}`);
                 continue;
@@ -109,6 +109,7 @@ router.post('/term-grade-rubric-config', async (req, res) => {
                 const request = transaction.request();
                 request.input('school_id', sql.BigInt, school_id);
                 request.input('academic_year', sql.NVarChar(200), String(academic_year));
+                request.input('academic_year_rp', sql.NVarChar(20), academic_year_rp != null && String(academic_year_rp).trim() !== '' ? String(academic_year_rp).trim() : null);
                 request.input('grade_number', sql.Int, parseInt(String(grade_number), 10));
                 request.input('rubric_title', sql.NVarChar(500), rubric_title);
                 request.input('term_id', sql.BigInt, term_id);
@@ -118,7 +119,7 @@ router.post('/term-grade-rubric-config', async (req, res) => {
                     await request.query(`
             UPDATE admin.mb_term_grade_rubric_config
             SET school_id=@school_id, academic_year=@academic_year, grade_number=@grade_number,
-                rubric_title=@rubric_title, term_id=@term_id, display_order=@display_order, updated_at=SYSDATETIMEOFFSET()
+                academic_year_rp=@academic_year_rp, rubric_title=@rubric_title, term_id=@term_id, display_order=@display_order, updated_at=SYSDATETIMEOFFSET()
             WHERE id=@id
           `);
                 }
@@ -129,10 +130,10 @@ router.post('/term-grade-rubric-config', async (req, res) => {
             ON target.school_id = source.school_id AND target.academic_year = source.academic_year
                AND target.grade_number = source.grade_number AND target.rubric_title = source.rubric_title
             WHEN MATCHED THEN
-              UPDATE SET term_id=@term_id, display_order=@display_order, updated_at=SYSDATETIMEOFFSET()
+              UPDATE SET term_id=@term_id, academic_year_rp=@academic_year_rp, display_order=@display_order, updated_at=SYSDATETIMEOFFSET()
             WHEN NOT MATCHED THEN
-              INSERT (school_id, academic_year, grade_number, rubric_title, term_id, display_order)
-              VALUES (@school_id, @academic_year, @grade_number, @rubric_title, @term_id, @display_order);
+              INSERT (school_id, academic_year, academic_year_rp, grade_number, rubric_title, term_id, display_order)
+              VALUES (@school_id, @academic_year, @academic_year_rp, @grade_number, @rubric_title, @term_id, @display_order);
           `);
                 }
                 successCount++;

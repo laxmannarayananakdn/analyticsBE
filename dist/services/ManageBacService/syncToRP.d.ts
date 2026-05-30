@@ -8,11 +8,14 @@ export interface LoadMbTermGradesResult {
     rubric_rows_inserted: number;
     class_grade_rows_inserted: number;
 }
+export interface LoadMbTermGradesOptions {
+    /** MB.vw_term_grades.academic_year exact match (legacy) */
+    academic_year?: string;
+    /** Canonical RP year from admin.mb_term_grade_rubric_config (preferred for MB schools) */
+    academic_year_rp?: string;
+}
 /**
  * Load MB term grades into RP.student_assessments for configured schools.
- * @param schoolId MB.schools.id as string (e.g. "123"); omit to load all configured schools
- * @param academicYear MB academic year name (e.g. "2024-2025"); omit to load all years
- * @returns Insert counts from RP.usp_load_mb_term_grades
  */
-export declare function syncManageBacToRP(this: BaseManageBacService, schoolId?: string, academicYear?: string): Promise<LoadMbTermGradesResult>;
+export declare function syncManageBacToRP(this: BaseManageBacService, schoolId?: string, options?: string | LoadMbTermGradesOptions): Promise<LoadMbTermGradesResult>;
 //# sourceMappingURL=syncToRP.d.ts.map

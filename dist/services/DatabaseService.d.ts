@@ -244,6 +244,22 @@ export declare class DatabaseService {
         rubric_count: number;
     } | null>;
     /**
+     * Resolve MB academic_year label from rubric config (for MB.vw_term_grades filter in RP load).
+     * Uses fuzzy AY matching against sync schedule hints (e.g. schedule "2025" -> config "August 2025 - July 2026").
+     */
+    getMbTermGradeConfigMbAcademicYear(params: {
+        school_id: number;
+        academic_year: string;
+    }): Promise<string | null>;
+    /**
+     * Resolve RP academic year from term-grade rubric config for a school + MB academic year label.
+     * Uses fuzzy AY matching to tolerate label variations (e.g. "August 2025 - July 2026").
+     */
+    getMbTermGradeConfigRpAcademicYear(params: {
+        school_id: number;
+        academic_year: string;
+    }): Promise<string | null>;
+    /**
      * Load academic term metadata for a set of term IDs (config-driven sync).
      */
     getAcademicTermsByIds(termIds: number[]): Promise<AcademicTermRecord[]>;

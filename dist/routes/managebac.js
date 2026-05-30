@@ -656,14 +656,18 @@ router.get('/term-grades', loadManageBacConfig, async (req, res) => {
 /**
  * POST /api/managebac/sync-to-rp
  * Load RP.student_assessments from MB term grades via RP.usp_load_mb_term_grades.
- * Body: { school_id?: string, academic_year?: string }
+ * Body: { school_id?: string, academic_year?: string, academic_year_rp?: string }
  * school_id = MB.schools.id as string (e.g. "123"); omit to load all configured schools
- * academic_year = MB academic year name (e.g. "2024-2025"); omit to load all years
+ * academic_year = MB label (MB.vw_term_grades.academic_year); legacy filter
+ * academic_year_rp = canonical RP year (e.g. "2025 - 2026"); preferred for MB schools
  */
 router.post('/sync-to-rp', async (req, res) => {
     try {
-        const { school_id, academic_year } = req.body || {};
-        const result = await manageBacService.syncManageBacToRP(school_id != null ? String(school_id) : undefined, academic_year != null ? String(academic_year) : undefined);
+        const { school_id, academic_year, academic_year_rp } = req.body || {};
+        const result = await manageBacService.syncManageBacToRP(school_id != null ? String(school_id) : undefined, {
+            ...(academic_year != null ? { academic_year: String(academic_year) } : {}),
+            ...(academic_year_rp != null ? { academic_year_rp: String(academic_year_rp) } : {}),
+        });
         res.json({
             success: true,
             rowsInserted: result.rows_affected,
