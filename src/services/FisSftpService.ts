@@ -2,7 +2,7 @@
  * Low-level SFTP client for FIS file folders.
  */
 
-import { join } from 'path';
+import { extname, basename } from 'path';
 import SftpClient from 'ssh2-sftp-client';
 import type { FisSftpConfig } from '../config/fisSftp.js';
 import { loadFisSftpPrivateKey } from '../config/fisSftpKey.js';
@@ -22,6 +22,18 @@ function isFileEntry(entry: { type: string; name: string }): boolean {
 function joinRemotePath(dir: string, name: string): string {
   const base = dir.endsWith('/') ? dir.slice(0, -1) : dir;
   return `${base}/${name}`;
+}
+
+export function withTimestampSuffix(fileName: string, date = new Date()): string {
+  const ext = extname(fileName);
+  const base = basename(fileName, ext);
+  const ts = date.toISOString().replace(/[:.]/g, '-');
+  return `${base}_${ts}${ext}`;
+}
+
+export interface MoveFileResult {
+  destFileName: string;
+  usedFallback: boolean;
 }
 
 export class FisSftpService {
@@ -64,9 +76,35 @@ export class FisSftpService {
   }
 
   async moveFile(sourcePath: string, destDir: string, fileName: string): Promise<void> {
+    await this.moveFileWithFallback(sourcePath, destDir, fileName);
+  }
+
+  /**
+   * Move a remote file, retrying with a timestamp suffix if the destination name already exists.
+   */
+  async moveFileWithFallback(
+    sourcePath: string,
+    destDir: string,
+    fileName: string
+  ): Promise<MoveFileResult> {
     await this.ensureDirectory(destDir);
-    const destPath = joinRemotePath(destDir, fileName);
-    await this.client.rename(sourcePath, destPath);
+
+    try {
+      await this.client.rename(sourcePath, joinRemotePath(destDir, fileName));
+      return { destFileName: fileName, usedFallback: false };
+    } catch (firstErr) {
+      const fallbackName = withTimestampSuffix(fileName);
+      try {
+        await this.client.rename(sourcePath, joinRemotePath(destDir, fallbackName));
+        return { destFileName: fallbackName, usedFallback: true };
+      } catch (secondErr) {
+        const firstMessage = firstErr instanceof Error ? firstErr.message : String(firstErr);
+        const secondMessage = secondErr instanceof Error ? secondErr.message : String(secondErr);
+        throw new Error(
+          `Rename failed for ${fileName} and ${fallbackName}: ${firstMessage}; fallback: ${secondMessage}`
+        );
+      }
+    }
   }
 
   async downloadFile(remotePath: string): Promise<Buffer> {

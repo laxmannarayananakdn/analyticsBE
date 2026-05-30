@@ -62,6 +62,8 @@ When the backend starts and the poller is enabled, it registers a cron job (defa
 
 ## Azure deployment
 
+- **Scale out:** Only one instance should poll at a time. The app uses a SQL `sp_getapplock` cluster lock so duplicate uploads do not occur when multiple instances are running. For lowest cost and simpler ops, you can also set AnalyticsBE **Instance count = 1** under Scale out.
+
 - Store the private key in Key Vault as a secret with **real line breaks** (multi-line PEM). Do not paste a single line with `\n` text — that causes `Unsupported key format`.
 - Use a Key Vault reference on `FIS_SFTP_PRIVATE_KEY` (versioned `SecretUri` if needed).
 - Optional startup command writes the env value to `FIS_SFTP_PRIVATE_KEY_PATH`; the app also reads `FIS_SFTP_PRIVATE_KEY` directly when set.
