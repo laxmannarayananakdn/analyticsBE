@@ -37,6 +37,7 @@ import accessGroupsRoutes from './routes/accessGroups.js';
 import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 import syncRoutes from './routes/sync.js';
+import fisRoutes from './routes/fis.js';
 import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
 import { startFisSftpScheduler, stopFisSftpScheduler } from './scheduler/FisSftpScheduler.js';
 dotenv.config();
@@ -102,6 +103,7 @@ app.use('/api/report-groups', reportGroupsRoutes);
 app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
 app.use('/api/sidebar-access', sidebarAccessRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/fis', fisRoutes);
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({

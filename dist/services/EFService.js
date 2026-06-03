@@ -862,13 +862,15 @@ export class EFService {
                     return `(
             @uploadId, @fileName, @uploadedBy, @dictionaryType,
             @code${baseIndex}, @description${baseIndex}, @suspended${baseIndex}, @entity${baseIndex},
-            @groupDimension${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+            @groupDimension${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET(),
+            @lastUpdatedByRaw${baseIndex}, @lastUpdatedAtRaw${baseIndex}
           )`;
                 }).join(',');
                 const query = `
           INSERT INTO FIN.DictionaryData (
             upload_id, file_name, uploaded_by, dictionary_type,
-            code, description, suspended, entity, group_dimension, last_updated_by, last_updated_at
+            code, description, suspended, entity, group_dimension,
+            last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
           ) VALUES ${values};
         `;
                 const request = transaction.request();
@@ -883,6 +885,8 @@ export class EFService {
                     request.input(`suspended${baseIndex}`, sql.NVarChar(50), record.suspended ?? null);
                     request.input(`entity${baseIndex}`, sql.NVarChar(100), record.entity ?? null);
                     request.input(`groupDimension${baseIndex}`, sql.NVarChar(100), record.group_dimension ?? null);
+                    request.input(`lastUpdatedByRaw${baseIndex}`, sql.NVarChar(255), record.last_updated_by_raw ?? null);
+                    request.input(`lastUpdatedAtRaw${baseIndex}`, sql.DateTimeOffset, record.last_updated_at_raw ?? null);
                 });
                 await request.query(query);
                 totalInserted += batch.length;
@@ -913,14 +917,16 @@ export class EFService {
             @mainAccount${baseIndex}, @fundingSource${baseIndex}, @region${baseIndex}, @operatingUnit${baseIndex},
             @department${baseIndex}, @project${baseIndex}, @activity${baseIndex}, @resource${baseIndex},
             @party${baseIndex}, @fixedAssets${baseIndex}, @reference${baseIndex}, @debit${baseIndex},
-            @credit${baseIndex}, @status${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET()
+            @credit${baseIndex}, @status${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET(),
+            @lastUpdatedByRaw${baseIndex}, @lastUpdatedAtRaw${baseIndex}
           )`;
                 }).join(',');
                 const query = `
           INSERT INTO FIN.TrialBalance (
             upload_id, file_name, uploaded_by, tb_type,
             main_account, funding_source, region, operating_unit, department, project, activity,
-            resource, party, fixed_assets, reference, debit, credit, status, last_updated_by, last_updated_at
+            resource, party, fixed_assets, reference, debit, credit, status,
+            last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
           ) VALUES ${values};
         `;
                 const request = transaction.request();
@@ -944,6 +950,8 @@ export class EFService {
                     request.input(`debit${baseIndex}`, sql.Decimal(19, 4), record.debit ?? null);
                     request.input(`credit${baseIndex}`, sql.Decimal(19, 4), record.credit ?? null);
                     request.input(`status${baseIndex}`, sql.NVarChar(100), record.status ?? null);
+                    request.input(`lastUpdatedByRaw${baseIndex}`, sql.NVarChar(255), record.last_updated_by_raw ?? null);
+                    request.input(`lastUpdatedAtRaw${baseIndex}`, sql.DateTimeOffset, record.last_updated_at_raw ?? null);
                 });
                 await request.query(query);
                 totalInserted += batch.length;
@@ -1463,13 +1471,13 @@ export class EFService {
         else if (EFService.FINANCE_DICTIONARY_CODES.has(fileType.type_code)) {
             const whereClause = buildWhereClause([
                 'dictionary_type', 'code', 'description', 'suspended', 'entity', 'group_dimension',
-                'last_updated_by'
+                'last_updated_by', 'last_updated_by_raw'
             ]);
             dataQuery = `
         SELECT
           id, upload_id, file_name, uploaded_at, uploaded_by,
           dictionary_type, code, description, suspended, entity, group_dimension,
-          last_updated_by, last_updated_at
+          last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
         FROM FIN.DictionaryData
         ${whereClause}
         ORDER BY id
@@ -1481,14 +1489,14 @@ export class EFService {
             const whereClause = buildWhereClause([
                 'tb_type', 'main_account', 'funding_source', 'region', 'operating_unit', 'department',
                 'project', 'activity', 'resource', 'party', 'fixed_assets', 'reference',
-                'debit', 'credit', 'status', 'last_updated_by'
+                'debit', 'credit', 'status', 'last_updated_by', 'last_updated_by_raw'
             ]);
             dataQuery = `
         SELECT
           id, upload_id, file_name, uploaded_at, uploaded_by,
           tb_type, main_account, funding_source, region, operating_unit, department, project, activity,
           resource, party, fixed_assets, reference, debit, credit, status,
-          last_updated_by, last_updated_at
+          last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
         FROM FIN.TrialBalance
         ${whereClause}
         ORDER BY id

@@ -18,6 +18,7 @@ export const ADMIN_ITEMS = [
     { id: 'admin:sync-schedules', label: 'Sync Schedules' },
     { id: 'admin:sync-history', label: 'Sync History' },
     { id: 'admin:rp-config', label: 'RP Configuration' },
+    { id: 'admin:fis-row-management', label: 'FIS Row Management' },
     { id: 'admin:mark-grade-config', label: 'Mark Grade Translation Config' },
     { id: 'admin:users', label: 'User Management' },
     { id: 'admin:access-control', label: 'Access Control' },

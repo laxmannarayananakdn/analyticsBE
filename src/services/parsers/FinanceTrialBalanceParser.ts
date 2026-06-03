@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { ValidationResult, UploadError, ErrorCode } from '../../types/errors.js';
 import { FinanceTrialBalanceRecord } from '../../types/ef.js';
+import { parseRunBy, parseRunDttm } from '../../utils/financeRunMetadata.js';
 
 export class FinanceTrialBalanceParser {
   async parseFinanceTrialBalance(
@@ -63,6 +64,8 @@ export class FinanceTrialBalanceParser {
       const colDebit = indexOf('debit');
       const colCredit = indexOf('credit');
       const colStatus = indexOf('status');
+      const colRunBy = indexOf('runby', 'run by');
+      const colRunDttm = indexOf('rundttm', 'run dttm');
 
       if (colMainAccount < 0 || colFundingSource < 0 || colDebit < 0 || colCredit < 0) {
         return {
@@ -114,6 +117,9 @@ export class FinanceTrialBalanceParser {
           continue;
         }
 
+        const runBy = parseRunBy(get(row, colRunBy));
+        const runDttm = parseRunDttm(get(row, colRunDttm));
+
         results.push({
           main_account: mainAccount,
           funding_source: toText(get(row, colFundingSource)) ?? undefined,
@@ -128,7 +134,9 @@ export class FinanceTrialBalanceParser {
           reference: toText(get(row, colReference)) ?? undefined,
           debit: toNumber(get(row, colDebit)) ?? undefined,
           credit: toNumber(get(row, colCredit)) ?? undefined,
-          status: toText(get(row, colStatus)) ?? undefined
+          status: toText(get(row, colStatus)) ?? undefined,
+          last_updated_by_raw: runBy ?? undefined,
+          last_updated_at_raw: runDttm ?? undefined,
         });
       }
 

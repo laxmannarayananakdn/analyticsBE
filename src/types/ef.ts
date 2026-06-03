@@ -181,6 +181,10 @@ export interface FinanceDictionaryRecord {
   suspended?: string;
   entity?: string;
   group_dimension?: string;
+  /** From file column RunBy */
+  last_updated_by_raw?: string;
+  /** From file column RunDTTM */
+  last_updated_at_raw?: Date;
 }
 
 export interface FinanceTrialBalanceRecord {
@@ -198,5 +202,9 @@ export interface FinanceTrialBalanceRecord {
   debit?: number;
   credit?: number;
   status?: string;
+  /** From file column RunBy */
+  last_updated_by_raw?: string;
+  /** From file column RunDTTM */
+  last_updated_at_raw?: Date;
 }
 

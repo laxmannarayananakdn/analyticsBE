@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { ErrorCode } from '../../types/errors.js';
+import { parseRunBy, parseRunDttm } from '../../utils/financeRunMetadata.js';
 export class FinanceDictionaryParser {
     async parseFinanceDictionary(fileBuffer, skipInvalidRows = false) {
         const errors = [];
@@ -58,6 +59,8 @@ export class FinanceDictionaryParser {
             const suspendedIndex = findHeaderIndex('suspended');
             const entityIndex = findHeaderIndex('entity');
             const groupDimensionIndex = findHeaderIndex('groupdimension', 'group dimension');
+            const runByIndex = findHeaderIndex('runby', 'run by');
+            const runDttmIndex = findHeaderIndex('rundttm', 'run dttm');
             const get = (row, index) => (index >= 0 && index < row.length ? row[index] : null);
             const toText = (value) => {
                 if (value == null)
@@ -84,12 +87,16 @@ export class FinanceDictionaryParser {
                     });
                     continue;
                 }
+                const runBy = parseRunBy(get(row, runByIndex));
+                const runDttm = parseRunDttm(get(row, runDttmIndex));
                 results.push({
                     code,
                     description: toText(get(row, descriptionIndex)) ?? undefined,
                     suspended: toText(get(row, suspendedIndex)) ?? undefined,
                     entity: toText(get(row, entityIndex)) ?? undefined,
-                    group_dimension: toText(get(row, groupDimensionIndex)) ?? undefined
+                    group_dimension: toText(get(row, groupDimensionIndex)) ?? undefined,
+                    last_updated_by_raw: runBy ?? undefined,
+                    last_updated_at_raw: runDttm ?? undefined,
                 });
             }
             return {
