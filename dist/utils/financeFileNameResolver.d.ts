@@ -15,4 +15,19 @@ export declare function getFinanceFileCategory(fileName: string): FinanceFileCat
  */
 export declare function resolveFinanceFileType(fileName: string): ResolvedFinanceFileType | null;
 export declare function isFinanceFileTypeCode(fileTypeCode: string): boolean;
+export interface ParsedTrialBalanceFileName {
+    /** Normalized file name (no path) */
+    sourceFileName: string;
+    periodYyyymm: string;
+    entityCode: string;
+    tbKind: 'ACTUAL' | 'BUDGET';
+    fiscalYear: number;
+    fiscalMonth: number;
+    /** Human-readable column label, e.g. "January 2026 Actual" */
+    columnLabel: string;
+}
+/**
+ * Parse TB_YYYYMM_ENTY_Actual|Budget.xlsx filenames.
+ */
+export declare function parseTrialBalanceFileName(fileName: string): ParsedTrialBalanceFileName | null;
 //# sourceMappingURL=financeFileNameResolver.d.ts.map

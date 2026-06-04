@@ -27,6 +27,18 @@ Each poll cycle:
    - Failure → `EF.Uploads` status `FAILED` + `ErrorFilesNew`
 5. Promote to RP remains manual in admin UI (unchanged)
 
+### Trial balance → FIS report columns
+
+After a successful **TB\*** load (`TB_YYYYMM_ENTY_Actual.xlsx` or `…_Budget.xlsx`), the backend upserts `admin.fis_report_columns` for an auto instance per entity:
+
+- Instance name: `{FIS_AUTO_REPORT_TYPE_CODE} - {ENTY} (auto)` (default report type **MPR**)
+- Column label: e.g. `January 2026 Actual` / `January 2026 Budget`
+- Idempotent key: `source_file_name` (run `SQL scripts/add_source_file_name_to_fis_report_columns.sql`)
+
+Optional env: `FIS_AUTO_REPORT_TYPE_CODE=MPR`
+
+**Schema:** Before first TB load, run `SQL scripts/align_fin_trial_balance_schema.sql` on the database (adds `last_updated_by_raw`, `entity_code`, `period`, etc.).
+
 ## Environment variables
 
 Add to `backend/.env` (do not commit the `.pem` key):

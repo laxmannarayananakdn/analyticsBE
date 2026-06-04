@@ -316,7 +316,7 @@ router.post('/upload', (req, res, next) => {
         }
         else if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
             const tbType = fileTypeUpper === 'FIN_TB_ACTUAL' ? 'ACTUAL' : 'BUDGET';
-            await efService.deleteAllFINTrialBalanceByType(tbType);
+            await efService.deleteFINTrialBalanceByFileName(fileName, tbType);
         }
         const insertFunction = insertRegistry[fileTypeUpper];
         if (!insertFunction) {

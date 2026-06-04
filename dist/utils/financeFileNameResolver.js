@@ -56,4 +56,52 @@ export function isFinanceFileTypeCode(fileTypeCode) {
     const upper = fileTypeCode.toUpperCase();
     return upper.startsWith('FIN_DIC_') || upper === 'FIN_TB_ACTUAL' || upper === 'FIN_TB_BUDGET';
 }
+const MONTH_NAMES = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+];
+/**
+ * Parse TB_YYYYMM_ENTY_Actual|Budget.xlsx filenames.
+ */
+export function parseTrialBalanceFileName(fileName) {
+    const base = fileName.trim().replace(/^.*[/\\]/, '');
+    // Extension optional (some stores omit .xlsx); entity 2–10 chars
+    const match = base.match(/^TB_(\d{6})_([A-Za-z0-9]{2,10})_(Actual|Budget)(?:\.[A-Za-z0-9]+)?$/i);
+    if (!match)
+        return null;
+    const periodYyyymm = match[1];
+    const entityCode = match[2].toUpperCase();
+    const tbSuffix = match[3].toLowerCase();
+    const tbKind = tbSuffix === 'budget' ? 'BUDGET' : 'ACTUAL';
+    const fiscalYear = parseInt(periodYyyymm.slice(0, 4), 10);
+    const fiscalMonth = parseInt(periodYyyymm.slice(4, 6), 10);
+    if (!Number.isFinite(fiscalYear) ||
+        !Number.isFinite(fiscalMonth) ||
+        fiscalMonth < 1 ||
+        fiscalMonth > 12) {
+        return null;
+    }
+    const monthName = MONTH_NAMES[fiscalMonth - 1];
+    /** One FIS column per calendar month (Actual + Budget files share the same column). */
+    const columnLabel = `${monthName} ${fiscalYear}`;
+    return {
+        sourceFileName: base,
+        periodYyyymm,
+        entityCode,
+        tbKind,
+        fiscalYear,
+        fiscalMonth,
+        columnLabel,
+    };
+}
 //# sourceMappingURL=financeFileNameResolver.js.map

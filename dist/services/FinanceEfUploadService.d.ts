@@ -17,6 +17,8 @@ export interface ProcessFinanceFileResult {
     totalRows?: number;
     errorMessage?: string;
     errors?: UploadError[];
+    /** Present when TB load succeeded but FIS column sync did not */
+    fisSyncWarning?: string;
 }
 /**
  * Parse and load a finance file into FIN.* tables with EF.Uploads audit row.

@@ -6,6 +6,7 @@ import { fileParserFactory } from './parsers/index.js';
 import { ErrorCode } from '../types/errors.js';
 import { validateFileExtension, validateFileSize, validateRowCount, } from '../utils/fileValidation.js';
 import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
+import { syncFisReportColumnsFromTrialBalanceFile } from './FISReportColumnSyncService.js';
 const FINANCE_DICTIONARY_FILE_TYPES = [
     'FIN_DIC_ACCOUNT',
     'FIN_DIC_ACTIVITY',
@@ -34,18 +35,18 @@ const insertRegistry = {
     FIN_TB_ACTUAL: (id, name, by, recs) => efService.insertFINTrialBalance(id, name, by, 'ACTUAL', recs),
     FIN_TB_BUDGET: (id, name, by, recs) => efService.insertFINTrialBalance(id, name, by, 'BUDGET', recs),
 };
-async function deleteExistingFinanceData(fileTypeUpper) {
+async function deleteExistingFinanceData(fileTypeUpper, fileName) {
     if (FINANCE_DICTIONARY_FILE_TYPES.includes(fileTypeUpper)) {
         const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
         await efService.deleteAllFINDictionaryByType(dictionaryType);
         return;
     }
     if (fileTypeUpper === 'FIN_TB_ACTUAL') {
-        await efService.deleteAllFINTrialBalanceByType('ACTUAL');
+        await efService.deleteFINTrialBalanceByFileName(fileName, 'ACTUAL');
         return;
     }
     if (fileTypeUpper === 'FIN_TB_BUDGET') {
-        await efService.deleteAllFINTrialBalanceByType('BUDGET');
+        await efService.deleteFINTrialBalanceByFileName(fileName, 'BUDGET');
     }
 }
 /**
@@ -128,19 +129,34 @@ export async function processFinanceFile(params) {
                 errors: [rowCountError],
             };
         }
-        await deleteExistingFinanceData(fileTypeUpper);
+        await deleteExistingFinanceData(fileTypeUpper, fileName);
         const insertFunction = insertRegistry[fileTypeUpper];
         if (!insertFunction) {
             throw new Error(`Unsupported finance file type: ${fileTypeCode}`);
         }
         const rowCount = await insertFunction(uploadId, fileName, uploadedBy, records);
         await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
+        let fisSyncWarning;
+        if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+            try {
+                const syncResult = await syncFisReportColumnsFromTrialBalanceFile(fileName, uploadedBy);
+                if (!syncResult.synced) {
+                    fisSyncWarning = syncResult.message || 'FIS column sync skipped';
+                    console.warn(`[FinanceEfUpload] FIS column sync skipped: ${fisSyncWarning}`);
+                }
+            }
+            catch (syncErr) {
+                fisSyncWarning = syncErr instanceof Error ? syncErr.message : String(syncErr);
+                console.error(`[FinanceEfUpload] FIS column sync failed for ${fileName}: ${fisSyncWarning}`);
+            }
+        }
         return {
             success: true,
             uploadId,
             rowCount,
             skippedRows: parseResult.skippedRows || 0,
             totalRows: parseResult.totalRows || rowCount,
+            fisSyncWarning,
         };
     }
     catch (error) {

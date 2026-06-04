@@ -5,6 +5,8 @@
 
 import { getConnection, executeQuery, sql } from '../config/database.js';
 import { triggerRefresh } from './RefreshService.js';
+import { parseTrialBalanceFileName } from '../utils/financeFileNameResolver.js';
+import { backfillTrialBalanceEntityPeriod } from './FISReportColumnSyncService.js';
 import {
   FileType,
   Upload,
@@ -976,6 +978,7 @@ export class EFService {
     }
   }
 
+  /** Full wipe by type — admin/maintenance only; not for per-file SFTP uploads. */
   async deleteAllFINTrialBalanceByType(tbType: 'ACTUAL' | 'BUDGET'): Promise<void> {
     const result = await executeQuery(
       `DELETE FROM FIN.TrialBalance WHERE tb_type = @tbType;`,
@@ -984,6 +987,29 @@ export class EFService {
     if (result.error) {
       throw new Error(`Failed to delete FIN trial balance data (${tbType}): ${result.error}`);
     }
+  }
+
+  /**
+   * Replace only rows from a prior upload of the same file (keeps other months/entities).
+   * Do NOT use deleteAllFINTrialBalanceByType for routine uploads — it wipes every month.
+   */
+  async deleteFINTrialBalanceByFileName(
+    fileName: string,
+    tbType: 'ACTUAL' | 'BUDGET'
+  ): Promise<void> {
+    const baseName = fileName.trim().replace(/^.*[/\\]/, '');
+    const result = await executeQuery(
+      `DELETE FROM FIN.TrialBalance
+       WHERE tb_type = @tbType
+         AND (file_name = @fileName OR file_name = @baseName);`,
+      { tbType, fileName, baseName }
+    );
+    if (result.error) {
+      throw new Error(`Failed to delete FIN trial balance for ${baseName}: ${result.error}`);
+    }
+    console.log(
+      `[EFService] Replaced prior TB rows for ${baseName} (${tbType}) before insert`
+    );
   }
 
   async insertFINDictionary(
@@ -1072,6 +1098,10 @@ export class EFService {
     const connection = await getConnection();
     const transaction = new sql.Transaction(connection);
 
+    const parsedFile = parseTrialBalanceFileName(fileName);
+    const entityCode = parsedFile?.entityCode ?? null;
+    const period = parsedFile?.periodYyyymm ?? null;
+
     try {
       await transaction.begin();
       const batchSize = 100;
@@ -1086,7 +1116,8 @@ export class EFService {
             @mainAccount${baseIndex}, @fundingSource${baseIndex}, @region${baseIndex}, @operatingUnit${baseIndex},
             @department${baseIndex}, @project${baseIndex}, @activity${baseIndex}, @resource${baseIndex},
             @party${baseIndex}, @fixedAssets${baseIndex}, @reference${baseIndex}, @debit${baseIndex},
-            @credit${baseIndex}, @status${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET(),
+            @credit${baseIndex}, @status${baseIndex}, @entityCode, @period,
+            @uploadedBy, SYSDATETIMEOFFSET(),
             @lastUpdatedByRaw${baseIndex}, @lastUpdatedAtRaw${baseIndex}
           )`;
         }).join(',');
@@ -1096,6 +1127,7 @@ export class EFService {
             upload_id, file_name, uploaded_by, tb_type,
             main_account, funding_source, region, operating_unit, department, project, activity,
             resource, party, fixed_assets, reference, debit, credit, status,
+            entity_code, period,
             last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
           ) VALUES ${values};
         `;
@@ -1105,6 +1137,8 @@ export class EFService {
         request.input('fileName', sql.NVarChar, fileName);
         request.input('uploadedBy', sql.NVarChar, uploadedBy);
         request.input('tbType', sql.NVarChar(20), tbType);
+        request.input('entityCode', sql.NVarChar(4), entityCode);
+        request.input('period', sql.NVarChar(6), period);
 
         batch.forEach((record, index) => {
           const baseIndex = i + index;
@@ -1139,6 +1173,18 @@ export class EFService {
       }
 
       await transaction.commit();
+
+      if (parsedFile) {
+        try {
+          await backfillTrialBalanceEntityPeriod(parsedFile);
+        } catch (backfillErr) {
+          console.warn(
+            `[EFService] TB entity/period backfill failed for ${fileName}:`,
+            backfillErr instanceof Error ? backfillErr.message : backfillErr
+          );
+        }
+      }
+
       return totalInserted;
     } catch (error: any) {
       await transaction.rollback();
