@@ -18,9 +18,9 @@ export interface FisSftpConfig {
   errorDir: string;
 }
 
-const DEFAULT_UNPROCESSED = '/FIS/Development/UnprocessedFilesNew';
-const DEFAULT_PROCESSED = '/FIS/Development/ProcessedFilesNew';
-const DEFAULT_ERROR = '/FIS/Development/ErrorFilesNew';
+const DEFAULT_UNPROCESSED = '/aksfisreports/FIS/UnprocessedFilesNew';
+const DEFAULT_PROCESSED = '/aksfisreports/FIS/ProcessedFilesNew';
+const DEFAULT_ERROR = '/aksfisreports/FIS/ErrorFilesNew';
 
 export function isFisSftpPollerEnabled(): boolean {
   return process.env.ENABLE_FIS_SFTP_POLLER === 'true';

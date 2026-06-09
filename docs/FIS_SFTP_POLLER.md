@@ -6,9 +6,9 @@ Polls the FIS development SFTP server for new files, runs a processing stub (rea
 
 | Purpose | Default path |
 |--------|----------------|
-| Incoming | `/FIS/Development/UnprocessedFilesNew` |
-| Success | `/FIS/Development/ProcessedFilesNew` |
-| Errors (later) | `/FIS/Development/ErrorFilesNew` |
+| Incoming | `/aksfisreports/FIS/UnprocessedFilesNew` |
+| Success | `/aksfisreports/FIS/ProcessedFilesNew` |
+| Errors | `/aksfisreports/FIS/ErrorFilesNew` |
 
 Step 1 only moves successful runs to **Processed**; failures are left in **Unprocessed** and logged.
 
@@ -51,9 +51,9 @@ FIS_SFTP_USERNAME=aks_sftp
 FIS_SFTP_PASSWORD=your-password-here
 
 # Optional overrides
-# FIS_SFTP_UNPROCESSED_DIR=/FIS/Development/UnprocessedFilesNew
-# FIS_SFTP_PROCESSED_DIR=/FIS/Development/ProcessedFilesNew
-# FIS_SFTP_ERROR_DIR=/FIS/Development/ErrorFilesNew
+# FIS_SFTP_UNPROCESSED_DIR=/aksfisreports/FIS/UnprocessedFilesNew
+# FIS_SFTP_PROCESSED_DIR=/aksfisreports/FIS/ProcessedFilesNew
+# FIS_SFTP_ERROR_DIR=/aksfisreports/FIS/ErrorFilesNew
 # FIS_SFTP_CRON=*/5 * * * *
 # FIS_SFTP_RUN_ON_STARTUP=false
 # FIS_SFTP_UPLOADED_BY=sftp@aks
