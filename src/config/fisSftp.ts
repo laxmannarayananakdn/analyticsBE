@@ -9,7 +9,10 @@ export interface FisSftpConfig {
   host: string;
   port: number;
   username: string;
-  privateKeyPath: string;
+  /** Password auth (preferred when set via FIS_SFTP_PASSWORD). */
+  password?: string;
+  /** Private key file path when using key-based auth. */
+  privateKeyPath?: string;
   unprocessedDir: string;
   processedDir: string;
   errorDir: string;
@@ -38,6 +41,7 @@ export function getFisSftpConfig(): FisSftpConfig | null {
 
   const host = process.env.FIS_SFTP_HOST?.trim();
   const username = process.env.FIS_SFTP_USERNAME?.trim();
+  const password = process.env.FIS_SFTP_PASSWORD?.trim();
   const privateKeyPath = process.env.FIS_SFTP_PRIVATE_KEY_PATH?.trim();
   const privateKeyFromEnv = process.env.FIS_SFTP_PRIVATE_KEY?.trim();
 
@@ -48,22 +52,28 @@ export function getFisSftpConfig(): FisSftpConfig | null {
     return null;
   }
 
-  if (!privateKeyFromEnv && !privateKeyPath) {
+  const usePasswordAuth = Boolean(password);
+  const useKeyAuth = Boolean(privateKeyFromEnv || privateKeyPath);
+
+  if (!usePasswordAuth && !useKeyAuth) {
     console.error(
-      '[FisSftp] Provide either FIS_SFTP_PRIVATE_KEY (recommended) or FIS_SFTP_PRIVATE_KEY_PATH'
+      '[FisSftp] Provide FIS_SFTP_PASSWORD or FIS_SFTP_PRIVATE_KEY / FIS_SFTP_PRIVATE_KEY_PATH'
     );
     return null;
   }
 
-  // Path is optional when key is injected via FIS_SFTP_PRIVATE_KEY.
-  // Keep a fallback path for compatibility with file-based startup scripts.
-  const resolvedKeyPath = privateKeyPath
-    ? resolve(privateKeyPath)
-    : '/home/site/secrets/akssftp_key.pem';
+  let resolvedKeyPath: string | undefined;
+  if (useKeyAuth && !usePasswordAuth) {
+    // Path is optional when key is injected via FIS_SFTP_PRIVATE_KEY.
+    // Keep a fallback path for compatibility with file-based startup scripts.
+    resolvedKeyPath = privateKeyPath
+      ? resolve(privateKeyPath)
+      : '/home/site/secrets/akssftp_key.pem';
 
-  if (!privateKeyFromEnv && !existsSync(resolvedKeyPath)) {
-    console.error(`[FisSftp] Private key file not found: ${resolvedKeyPath}`);
-    return null;
+    if (!privateKeyFromEnv && !existsSync(resolvedKeyPath)) {
+      console.error(`[FisSftp] Private key file not found: ${resolvedKeyPath}`);
+      return null;
+    }
   }
 
   const port = Number(process.env.FIS_SFTP_PORT || '22');
@@ -76,6 +86,7 @@ export function getFisSftpConfig(): FisSftpConfig | null {
     host,
     port,
     username,
+    password: usePasswordAuth ? password : undefined,
     privateKeyPath: resolvedKeyPath,
     unprocessedDir: process.env.FIS_SFTP_UNPROCESSED_DIR?.trim() || DEFAULT_UNPROCESSED,
     processedDir: process.env.FIS_SFTP_PROCESSED_DIR?.trim() || DEFAULT_PROCESSED,

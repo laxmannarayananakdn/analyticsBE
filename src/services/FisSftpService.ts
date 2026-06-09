@@ -42,14 +42,29 @@ export class FisSftpService {
   constructor(private readonly config: FisSftpConfig) {}
 
   async connect(): Promise<void> {
-    const privateKey = loadFisSftpPrivateKey(this.config.privateKeyPath);
-    await this.client.connect({
+    const connectOptions: {
+      host: string;
+      port: number;
+      username: string;
+      readyTimeout: number;
+      password?: string;
+      privateKey?: string;
+    } = {
       host: this.config.host,
       port: this.config.port,
       username: this.config.username,
-      privateKey,
       readyTimeout: 30_000,
-    });
+    };
+
+    if (this.config.password) {
+      connectOptions.password = this.config.password;
+    } else if (this.config.privateKeyPath) {
+      connectOptions.privateKey = loadFisSftpPrivateKey(this.config.privateKeyPath);
+    } else {
+      throw new Error('[FisSftp] No authentication credentials configured');
+    }
+
+    await this.client.connect(connectOptions);
   }
 
   async disconnect(): Promise<void> {

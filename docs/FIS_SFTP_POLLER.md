@@ -41,14 +41,14 @@ Optional env: `FIS_AUTO_REPORT_TYPE_CODE=MPR`
 
 ## Environment variables
 
-Add to `backend/.env` (do not commit the `.pem` key):
+Add to `backend/.env` (do not commit credentials):
 
 ```env
 ENABLE_FIS_SFTP_POLLER=true
 FIS_SFTP_HOST=92.205.106.117
 FIS_SFTP_PORT=22
 FIS_SFTP_USERNAME=aks_sftp
-FIS_SFTP_PRIVATE_KEY_PATH=/absolute/path/to/akssftp_key.pem
+FIS_SFTP_PASSWORD=your-password-here
 
 # Optional overrides
 # FIS_SFTP_UNPROCESSED_DIR=/FIS/Development/UnprocessedFilesNew
@@ -58,6 +58,12 @@ FIS_SFTP_PRIVATE_KEY_PATH=/absolute/path/to/akssftp_key.pem
 # FIS_SFTP_RUN_ON_STARTUP=false
 # FIS_SFTP_UPLOADED_BY=sftp@aks
 ```
+
+### Authentication
+
+**Password (recommended):** set `FIS_SFTP_PASSWORD`. On Azure, store it in Key Vault and reference it from app settings.
+
+**Private key (legacy):** set `FIS_SFTP_PRIVATE_KEY` or `FIS_SFTP_PRIVATE_KEY_PATH` instead. If both password and key are set, password is used.
 
 `ENABLE_FIS_SFTP_POLLER` defaults to off unless set to `true`.
 
@@ -76,7 +82,6 @@ When the backend starts and the poller is enabled, it registers a cron job (defa
 
 - **Scale out:** Only one instance should poll at a time. The app uses a SQL `sp_getapplock` cluster lock so duplicate uploads do not occur when multiple instances are running. For lowest cost and simpler ops, you can also set AnalyticsBE **Instance count = 1** under Scale out.
 
-- Store the private key in Key Vault as a secret with **real line breaks** (multi-line PEM). Do not paste a single line with `\n` text — that causes `Unsupported key format`.
-- Use a Key Vault reference on `FIS_SFTP_PRIVATE_KEY` (versioned `SecretUri` if needed).
-- Optional startup command writes the env value to `FIS_SFTP_PRIVATE_KEY_PATH`; the app also reads `FIS_SFTP_PRIVATE_KEY` directly when set.
-- Never commit `.pem` files to git.
+- Store `FIS_SFTP_PASSWORD` in Key Vault and reference it from AnalyticsBE app settings (recommended).
+- For legacy key-based auth: store the private key in Key Vault as a secret with **real line breaks** (multi-line PEM) and reference `FIS_SFTP_PRIVATE_KEY`.
+- Never commit passwords or `.pem` files to git.

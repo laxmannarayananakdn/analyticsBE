@@ -5,7 +5,10 @@ export interface FisSftpConfig {
     host: string;
     port: number;
     username: string;
-    privateKeyPath: string;
+    /** Password auth (preferred when set via FIS_SFTP_PASSWORD). */
+    password?: string;
+    /** Private key file path when using key-based auth. */
+    privateKeyPath?: string;
     unprocessedDir: string;
     processedDir: string;
     errorDir: string;
