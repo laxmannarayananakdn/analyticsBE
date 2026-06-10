@@ -30,4 +30,8 @@ export interface ParsedTrialBalanceFileName {
  * Parse TB_YYYYMM_ENTY_Actual|Budget.xlsx filenames.
  */
 export declare function parseTrialBalanceFileName(fileName: string): ParsedTrialBalanceFileName | null;
+/**
+ * Build column metadata from entity + YYYYMM period (no file name required).
+ */
+export declare function parseTrialBalancePeriod(entityCode: string, periodYyyymm: string): ParsedTrialBalanceFileName | null;
 //# sourceMappingURL=financeFileNameResolver.d.ts.map

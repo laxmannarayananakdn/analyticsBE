@@ -50,6 +50,9 @@ export async function startFisSftpScheduler(): Promise<void> {
   console.log(
     `📁 FIS SFTP poller scheduled (${cronExpression}, ${timezone}) – host ${config.host}, user ${config.username}`
   );
+  console.log(
+    '📁 FIS SFTP: loads FIN.TrialBalance only — report instances must be created manually in the UI'
+  );
 
   if (process.env.FIS_SFTP_RUN_ON_STARTUP !== 'false') {
     try {

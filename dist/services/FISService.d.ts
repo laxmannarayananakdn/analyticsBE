@@ -110,8 +110,14 @@ export declare class FISService {
     createInstance(data: Record<string, unknown>): Promise<number>;
     updateInstance(instanceId: number, data: Record<string, unknown>): Promise<void>;
     softDeleteInstance(instanceId: number): Promise<void>;
-    generateReport(instanceId: number): Promise<{
+    generateReport(instanceId: number, scope?: {
+        entityCode: string;
+        period: string;
+    }): Promise<{
         instanceId: number;
+        outputRowCount: number;
+        entityCode?: string;
+        period?: string;
     }>;
     getDictionaryCodes(dictionaryType: string, entity?: string, search?: string): Promise<DictionaryCodeItem[]>;
     private mapRow;

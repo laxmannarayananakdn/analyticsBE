@@ -186,6 +186,10 @@ async function startServer() {
     console.error('⚠️ Database connection failed at startup (app is up; /api/health will report status):', error);
   }
 
+  console.log(
+    '📊 FIS reporting: manual instance creation only (SFTP/EF TB upload does not write admin.fis_report_*)'
+  );
+
   // FIS SFTP poller does not require the database; must not take down the API on SFTP errors
   try {
     await startFisSftpScheduler();

@@ -2,6 +2,7 @@
  * FIS (Financial Information System) Reporting Service
  */
 import { executeQuery, executeProcedure, getConnection, sql } from '../config/database.js';
+import { assertTrialBalanceDataForPeriod, buildColumnsFromEntityTrialBalance, } from './FISTrialBalanceProcessService.js';
 export class FISServiceError extends Error {
     statusCode;
     constructor(message, statusCode = 500) {
@@ -561,15 +562,43 @@ export class FISService {
         const result = await executeQuery(`UPDATE admin.fis_report_instances SET is_active = 0 WHERE instance_id = @instanceId`, { instanceId });
         throwOnError(result.error);
     }
-    async generateReport(instanceId) {
+    async generateReport(instanceId, scope) {
         const check = await executeQuery(`SELECT instance_id FROM admin.fis_report_instances WHERE instance_id = @instanceId AND is_active = 1`, { instanceId });
         throwOnError(check.error);
         if (!check.data?.length) {
             throw new FISServiceError('Report instance not found', 404);
         }
+        if (scope) {
+            const entity = scope.entityCode.trim().toUpperCase();
+            const period = scope.period.trim();
+            if (!entity || !period) {
+                throw new FISServiceError('entityCode and period are required for scoped generation', 400);
+            }
+            try {
+                await assertTrialBalanceDataForPeriod(entity, period);
+            }
+            catch (err) {
+                throw new FISServiceError(err instanceof Error ? err.message : 'No trial balance data for scope', 400);
+            }
+            const columns = await buildColumnsFromEntityTrialBalance(entity, period);
+            if (!columns.length) {
+                throw new FISServiceError(`No trial balance periods found for ${entity} / ${period}`, 400);
+            }
+            await this.updateInstance(instanceId, {
+                entityCodes: [entity],
+                columns,
+            });
+        }
         const result = await executeProcedure('rp.usp_GenerateFISReport', { instance_id: instanceId });
         throwOnError(result.error);
-        return { instanceId };
+        const countResult = await executeQuery(`SELECT COUNT(*) AS total FROM rp.fis_report_output WHERE instance_id = @instanceId`, { instanceId });
+        throwOnError(countResult.error);
+        return {
+            instanceId,
+            outputRowCount: Number(countResult.data?.[0]?.total) || 0,
+            entityCode: scope?.entityCode.trim().toUpperCase(),
+            period: scope?.period.trim(),
+        };
     }
     // ---------------------------------------------------------------------------
     // Dictionary autocomplete

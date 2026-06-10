@@ -133,3 +133,37 @@ export function parseTrialBalanceFileName(fileName: string): ParsedTrialBalanceF
     columnLabel,
   };
 }
+
+/**
+ * Build column metadata from entity + YYYYMM period (no file name required).
+ */
+export function parseTrialBalancePeriod(
+  entityCode: string,
+  periodYyyymm: string
+): ParsedTrialBalanceFileName | null {
+  const entity = entityCode.trim().toUpperCase();
+  const period = periodYyyymm.trim();
+  if (!entity || !/^\d{6}$/.test(period)) return null;
+
+  const fiscalYear = parseInt(period.slice(0, 4), 10);
+  const fiscalMonth = parseInt(period.slice(4, 6), 10);
+  if (
+    !Number.isFinite(fiscalYear) ||
+    !Number.isFinite(fiscalMonth) ||
+    fiscalMonth < 1 ||
+    fiscalMonth > 12
+  ) {
+    return null;
+  }
+
+  const monthName = MONTH_NAMES[fiscalMonth - 1];
+  return {
+    sourceFileName: `TB_${period}_${entity}_Actual.xlsx`,
+    periodYyyymm: period,
+    entityCode: entity,
+    tbKind: 'ACTUAL',
+    fiscalYear,
+    fiscalMonth,
+    columnLabel: `${monthName} ${fiscalYear}`,
+  };
+}

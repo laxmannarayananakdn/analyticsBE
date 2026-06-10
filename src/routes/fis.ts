@@ -5,6 +5,12 @@
 import express, { Request, Response } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { fisService, FISServiceError, FisRuleCriterion } from '../services/FISService.js';
+import {
+  listTrialBalanceEntityPeriods,
+  getLatestTrialBalanceUploads,
+  buildColumnsFromEntityTrialBalance,
+  getReportOutputPreview,
+} from '../services/FISTrialBalanceProcessService.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -187,7 +193,22 @@ router.post('/instances', async (req: Request, res: Response) => {
 router.post('/instances/:id/generate', async (req: Request, res: Response) => {
   try {
     const instanceId = parseId(req.params.id, 'instance id');
-    const data = await fisService.generateReport(instanceId);
+    const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
+    const period = String(req.body?.period ?? '').trim();
+    const scope = entityCode && period ? { entityCode, period } : undefined;
+    const data = await fisService.generateReport(instanceId, scope);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/instances/:id/output?limit= (before /instances/:id)
+router.get('/instances/:id/output', async (req: Request, res: Response) => {
+  try {
+    const instanceId = parseId(req.params.id, 'instance id');
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
+    const data = await getReportOutputPreview(instanceId, Number.isNaN(limit) ? 100 : limit);
     return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
@@ -222,6 +243,46 @@ router.delete('/instances/:id', async (req: Request, res: Response) => {
     const instanceId = parseId(req.params.id, 'instance id');
     await fisService.softDeleteInstance(instanceId);
     return res.json({ success: true, data: { instanceId } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/trial-balance/entity-periods
+router.get('/trial-balance/entity-periods', async (_req: Request, res: Response) => {
+  try {
+    const data = await listTrialBalanceEntityPeriods();
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/trial-balance/uploads?entity_code=&period=
+router.get('/trial-balance/uploads', async (req: Request, res: Response) => {
+  try {
+    const entityCode = String(req.query.entity_code || '').trim();
+    const period = String(req.query.period || '').trim();
+    if (!entityCode || !period) {
+      return res.status(400).json({ success: false, error: 'entity_code and period query parameters are required' });
+    }
+    const data = await getLatestTrialBalanceUploads(entityCode, period);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/trial-balance/columns-for-entity?entity_code=&period=
+router.get('/trial-balance/columns-for-entity', async (req: Request, res: Response) => {
+  try {
+    const entityCode = String(req.query.entity_code || '').trim();
+    const period = req.query.period ? String(req.query.period).trim() : undefined;
+    if (!entityCode) {
+      return res.status(400).json({ success: false, error: 'entity_code query parameter is required' });
+    }
+    const data = await buildColumnsFromEntityTrialBalance(entityCode, period);
+    return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
   }

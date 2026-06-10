@@ -3,9 +3,9 @@
  */
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-const DEFAULT_UNPROCESSED = '/aksfisreports/FIS/UnprocessedNew';
-const DEFAULT_PROCESSED = '/aksfisreports/FIS/ProcessedNew';
-const DEFAULT_ERROR = '/aksfisreports/FIS/ErrorNew';
+const DEFAULT_UNPROCESSED = '/aksfisreports/FIS/UnprocessedFilesNew';
+const DEFAULT_PROCESSED = '/aksfisreports/FIS/ProcessedFilesNew';
+const DEFAULT_ERROR = '/aksfisreports/FIS/ErrorFilesNew';
 export function isFisSftpPollerEnabled() {
     return process.env.ENABLE_FIS_SFTP_POLLER === 'true';
 }

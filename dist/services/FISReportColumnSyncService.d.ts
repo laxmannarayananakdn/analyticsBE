@@ -1,27 +1,15 @@
 /**
- * Sync admin.fis_report_columns from trial balance upload file names.
- * Pattern: TB_YYYYMM_ENTY_Actual.xlsx | TB_YYYYMM_ENTY_Budget.xlsx
- * One column per YYYYMM per entity instance (Actual and Budget share the same column).
+ * Trial balance entity/period backfill only.
+ * Report instances and columns are created manually via FIS Report Processing.
  */
 import { type ParsedTrialBalanceFileName } from '../utils/financeFileNameResolver.js';
 /** Set entity_code / period on all rows for this upload file. */
 export declare function backfillTrialBalanceEntityPeriod(parsed: ParsedTrialBalanceFileName): Promise<number>;
-export interface SyncFisReportColumnsResult {
-    synced: boolean;
-    instanceId?: number;
-    columnAction?: 'inserted' | 'updated';
-    message?: string;
-}
 /**
- * After a TB file is loaded, ensure a report instance and column exist for that entity/period.
+ * Backfill entity_code / period on FIN.TrialBalance from distinct TB file names in the table.
  */
-export declare function syncFisReportColumnsFromTrialBalanceFile(fileName: string, uploadedBy: string): Promise<SyncFisReportColumnsResult>;
-/**
- * Repair TB rows and FIS columns from completed EF uploads (e.g. after a deploy gap).
- */
-export declare function repairFisFromCompletedTbUploads(): Promise<{
-    uploadsProcessed: number;
-    columnsSynced: number;
+export declare function repairTrialBalanceEntityPeriodFromData(): Promise<{
+    filesProcessed: number;
     errors: string[];
 }>;
 //# sourceMappingURL=FISReportColumnSyncService.d.ts.map

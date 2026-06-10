@@ -6,7 +6,6 @@ import { fileParserFactory } from './parsers/index.js';
 import { ErrorCode } from '../types/errors.js';
 import { validateFileExtension, validateFileSize, validateRowCount, } from '../utils/fileValidation.js';
 import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
-import { syncFisReportColumnsFromTrialBalanceFile } from './FISReportColumnSyncService.js';
 const FINANCE_DICTIONARY_FILE_TYPES = [
     'FIN_DIC_ACCOUNT',
     'FIN_DIC_ACTIVITY',
@@ -136,27 +135,12 @@ export async function processFinanceFile(params) {
         }
         const rowCount = await insertFunction(uploadId, fileName, uploadedBy, records);
         await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
-        let fisSyncWarning;
-        if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
-            try {
-                const syncResult = await syncFisReportColumnsFromTrialBalanceFile(fileName, uploadedBy);
-                if (!syncResult.synced) {
-                    fisSyncWarning = syncResult.message || 'FIS column sync skipped';
-                    console.warn(`[FinanceEfUpload] FIS column sync skipped: ${fisSyncWarning}`);
-                }
-            }
-            catch (syncErr) {
-                fisSyncWarning = syncErr instanceof Error ? syncErr.message : String(syncErr);
-                console.error(`[FinanceEfUpload] FIS column sync failed for ${fileName}: ${fisSyncWarning}`);
-            }
-        }
         return {
             success: true,
             uploadId,
             rowCount,
             skippedRows: parseResult.skippedRows || 0,
             totalRows: parseResult.totalRows || rowCount,
-            fisSyncWarning,
         };
     }
     catch (error) {

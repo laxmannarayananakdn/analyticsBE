@@ -15,8 +15,6 @@ import {
   validateRowCount,
 } from '../utils/fileValidation.js';
 import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
-import { syncFisReportColumnsFromTrialBalanceFile } from './FISReportColumnSyncService.js';
-
 export interface ProcessFinanceFileParams {
   fileName: string;
   fileBuffer: Buffer;
@@ -33,8 +31,6 @@ export interface ProcessFinanceFileResult {
   totalRows?: number;
   errorMessage?: string;
   errors?: UploadError[];
-  /** Present when TB load succeeded but FIS column sync did not */
-  fisSyncWarning?: string;
 }
 
 const FINANCE_DICTIONARY_FILE_TYPES = [
@@ -223,18 +219,11 @@ export async function processFinanceFile(
     );
     await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
 
-    let fisSyncWarning: string | undefined;
     if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
-      try {
-        const syncResult = await syncFisReportColumnsFromTrialBalanceFile(fileName, uploadedBy);
-        if (!syncResult.synced) {
-          fisSyncWarning = syncResult.message || 'FIS column sync skipped';
-          console.warn(`[FinanceEfUpload] FIS column sync skipped: ${fisSyncWarning}`);
-        }
-      } catch (syncErr) {
-        fisSyncWarning = syncErr instanceof Error ? syncErr.message : String(syncErr);
-        console.error(`[FinanceEfUpload] FIS column sync failed for ${fileName}: ${fisSyncWarning}`);
-      }
+      console.log(
+        `[FinanceEfUpload] TB loaded to FIN.TrialBalance only (${rowCount} rows, upload ${uploadId}). ` +
+          'No FIS report instance or admin.fis_report_columns changes.'
+      );
     }
 
     return {
@@ -243,7 +232,6 @@ export async function processFinanceFile(
       rowCount,
       skippedRows: parseResult.skippedRows || 0,
       totalRows: parseResult.totalRows || rowCount,
-      fisSyncWarning,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

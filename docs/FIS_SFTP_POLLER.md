@@ -25,17 +25,13 @@ Each poll cycle:
    - `uploaded_by` = `sftp@aks` (override with `FIS_SFTP_UPLOADED_BY`)
    - Success → `ProcessedFilesNew`
    - Failure → `EF.Uploads` status `FAILED` + `ErrorFilesNew`
-5. Promote to RP remains manual in admin UI (unchanged)
+5. Report instances are created manually in FIS Report Processing (unchanged)
 
-### Trial balance → FIS report columns
+### Trial balance → FIN.TrialBalance only
 
-After a successful **TB\*** load (`TB_YYYYMM_ENTY_Actual.xlsx` or `…_Budget.xlsx`), the backend upserts `admin.fis_report_columns` for an auto instance per entity:
-
-- Instance name: `{FIS_AUTO_REPORT_TYPE_CODE} - {ENTY} (auto)` (default report type **MPR**)
-- Column label: e.g. `January 2026 Actual` / `January 2026 Budget`
-- Idempotent key: `source_file_name` (run `SQL scripts/add_source_file_name_to_fis_report_columns.sql`)
-
-Optional env: `FIS_AUTO_REPORT_TYPE_CODE=MPR`
+SFTP / EF upload loads **TB\*** files into `FIN.TrialBalance` only. Report instances and
+`admin.fis_report_columns` are **not** created automatically — use **FIS Report Processing**
+in the admin UI to create an instance and generate the report.
 
 **Schema:** Before first TB load, run `SQL scripts/align_fin_trial_balance_schema.sql` on the database (adds `last_updated_by_raw`, `entity_code`, `period`, etc.).
 
@@ -79,6 +75,16 @@ npm run fis-sftp:poll
 When the backend starts and the poller is enabled, it registers a cron job (default every 5 minutes) and runs one poll on startup unless `FIS_SFTP_RUN_ON_STARTUP=false`.
 
 ## Azure deployment
+
+**If you still see `MPR – {entity} (auto)` instances with `created_by = sftp@aks` and
+`admin.fis_report_columns.source_file_name` set to the TB filename, AnalyticsBE is running an
+older build that auto-synced FIS columns.** Redeploy from `main` (workflow
+`.github/workflows/azure-webapp-backend.yml`) and confirm startup logs include:
+
+- `FIS reporting: manual instance creation only`
+- `FIS SFTP: loads FIN.TrialBalance only`
+
+Until redeployed, set `ENABLE_FIS_SFTP_POLLER=false` on AnalyticsBE to stop new auto instances.
 
 - **Scale out:** Only one instance should poll at a time. The app uses a SQL `sp_getapplock` cluster lock so duplicate uploads do not occur when multiple instances are running. For lowest cost and simpler ops, you can also set AnalyticsBE **Instance count = 1** under Scale out.
 

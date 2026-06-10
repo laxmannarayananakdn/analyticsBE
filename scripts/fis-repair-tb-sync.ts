@@ -1,19 +1,18 @@
 /**
- * Repair FIN.TrialBalance entity/period + FIS columns from completed TB uploads.
+ * Backfill FIN.TrialBalance entity_code / period from file names (no report instances).
  * Usage: npx tsx scripts/fis-repair-tb-sync.ts
  */
 import dotenv from 'dotenv';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { repairFisFromCompletedTbUploads } from '../src/services/FISReportColumnSyncService.js';
+import { repairTrialBalanceEntityPeriodFromData } from '../src/services/FISReportColumnSyncService.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '../.env') });
 
 async function main() {
-  const result = await repairFisFromCompletedTbUploads();
-  console.log('Uploads processed:', result.uploadsProcessed);
-  console.log('Columns synced:', result.columnsSynced);
+  const result = await repairTrialBalanceEntityPeriodFromData();
+  console.log('Files processed:', result.filesProcessed);
   if (result.errors.length) {
     console.error('Errors:');
     result.errors.forEach((e) => console.error('  -', e));
