@@ -111,6 +111,11 @@ export declare class FISService {
     getInstances(): Promise<FisReportInstanceSummary[]>;
     getInstance(instanceId: number): Promise<FisReportInstanceDetail>;
     private insertReportColumn;
+    /**
+     * Normalize column_order: Budget before Actual within each month block.
+     * Runs after inserts and before generate so upload/file order never affects display.
+     */
+    reorderInstanceColumns(instanceId: number): Promise<void>;
     /** Append six month columns if this period is not already on the instance. */
     appendMonthColumnsForPeriod(instanceId: number, period: string): Promise<number>;
     ensureInstanceEntity(instanceId: number, entityCode: string): Promise<void>;

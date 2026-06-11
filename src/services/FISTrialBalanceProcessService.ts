@@ -266,7 +266,31 @@ function parsePeriod(period: string): { fiscalYear: number; fiscalMonth: number;
   return { fiscalYear, fiscalMonth, monthName };
 }
 
-/** Six columns per processed month: Actual, Budget, YTD Actual, YTD Budget, YTD Variance, YTD Var %. */
+/** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
+export function fisColumnBlockSortKey(col: {
+  isYtd: boolean;
+  tbType: FisColumnTbType | null;
+  columnKind: FisColumnKind;
+}): number {
+  if (col.columnKind === 'YTD_VARIANCE') return 5;
+  if (col.columnKind === 'YTD_VAR_PCT') return 6;
+  if (col.tbType === 'BUDGET' && !col.isYtd) return 1;
+  if (col.tbType === 'ACTUAL' && !col.isYtd) return 2;
+  if (col.tbType === 'BUDGET' && col.isYtd) return 3;
+  if (col.tbType === 'ACTUAL' && col.isYtd) return 4;
+  return 99;
+}
+
+export function compareFisReportColumns(
+  a: { fiscalYear: number; fiscalMonthTo: number; isYtd: boolean; tbType: FisColumnTbType | null; columnKind: FisColumnKind },
+  b: { fiscalYear: number; fiscalMonthTo: number; isYtd: boolean; tbType: FisColumnTbType | null; columnKind: FisColumnKind }
+): number {
+  if (a.fiscalYear !== b.fiscalYear) return a.fiscalYear - b.fiscalYear;
+  if (a.fiscalMonthTo !== b.fiscalMonthTo) return a.fiscalMonthTo - b.fiscalMonthTo;
+  return fisColumnBlockSortKey(a) - fisColumnBlockSortKey(b);
+}
+
+/** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export function buildMonthColumnSet(period: string, startOrder = 1): FisMonthColumnDef[] {
   const { fiscalYear, fiscalMonth, monthName } = parsePeriod(period);
   let order = startOrder;
@@ -290,10 +314,10 @@ export function buildMonthColumnSet(period: string, startOrder = 1): FisMonthCol
   });
 
   return [
-    col(`${monthName} Actual`, fiscalMonth, fiscalMonth, false, 'ACTUAL', 'TB_SUM'),
     col(`${monthName} Budget`, fiscalMonth, fiscalMonth, false, 'BUDGET', 'TB_SUM'),
-    col(`${monthName} YTD Actual`, 1, fiscalMonth, true, 'ACTUAL', 'TB_SUM'),
+    col(`${monthName} Actual`, fiscalMonth, fiscalMonth, false, 'ACTUAL', 'TB_SUM'),
     col(`${monthName} YTD Budget`, 1, fiscalMonth, true, 'BUDGET', 'TB_SUM'),
+    col(`${monthName} YTD Actual`, 1, fiscalMonth, true, 'ACTUAL', 'TB_SUM'),
     col(`${monthName} YTD Variance`, 1, fiscalMonth, true, null, 'YTD_VARIANCE'),
     col(`${monthName} YTD Var %`, 1, fiscalMonth, true, null, 'YTD_VAR_PCT'),
   ];

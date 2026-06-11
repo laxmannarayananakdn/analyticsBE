@@ -53,7 +53,26 @@ export interface FisMonthColumnDef {
     tbType: FisColumnTbType | null;
     columnKind: FisColumnKind;
 }
-/** Six columns per processed month: Actual, Budget, YTD Actual, YTD Budget, YTD Variance, YTD Var %. */
+/** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
+export declare function fisColumnBlockSortKey(col: {
+    isYtd: boolean;
+    tbType: FisColumnTbType | null;
+    columnKind: FisColumnKind;
+}): number;
+export declare function compareFisReportColumns(a: {
+    fiscalYear: number;
+    fiscalMonthTo: number;
+    isYtd: boolean;
+    tbType: FisColumnTbType | null;
+    columnKind: FisColumnKind;
+}, b: {
+    fiscalYear: number;
+    fiscalMonthTo: number;
+    isYtd: boolean;
+    tbType: FisColumnTbType | null;
+    columnKind: FisColumnKind;
+}): number;
+/** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export declare function buildMonthColumnSet(period: string, startOrder?: number): FisMonthColumnDef[];
 export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<FisMonthColumnDef[]>;
 /** Actual required for the period; budget may fall back to January (or latest revision). */

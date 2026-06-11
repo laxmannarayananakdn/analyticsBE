@@ -33,9 +33,10 @@ SFTP / EF upload loads **TB\*** files into `FIN.TrialBalance` only. Report insta
 `admin.fis_report_columns` are **not** created automatically — use **FIS Report Processing**
 in the admin UI to create an instance and generate the report.
 
-**Budget fallback:** Budget files are optional after January. If no budget file exists for a
-month, report generation uses the latest budget on or before that month in the fiscal year
-(typically January). Actual files are required every month.
+**Budget fallback:** Budget files are optional after January. The **monthly Budget** column uses
+the latest budget on or before that month (typically January). **YTD Budget** sums only months
+that have their own budget upload (January baseline plus any monthly budget-change files); months
+without a budget file add nothing to YTD. Actual files are required every month.
 
 **Schema:** Before first TB load, run `SQL scripts/align_fin_trial_balance_schema.sql` on the database (adds `last_updated_by_raw`, `entity_code`, `period`, etc.).
 

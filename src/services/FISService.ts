@@ -6,6 +6,7 @@ import { executeQuery, executeProcedure, getConnection, sql } from '../config/da
 import {
   assertTrialBalanceDataForPeriod,
   buildMonthColumnSet,
+  compareFisReportColumns,
   type FisColumnKind,
   type FisColumnTbType,
   type FisMonthColumnDef,
@@ -752,6 +753,80 @@ export class FISService {
     );
   }
 
+  /**
+   * Normalize column_order: Budget before Actual within each month block.
+   * Runs after inserts and before generate so upload/file order never affects display.
+   */
+  async reorderInstanceColumns(instanceId: number): Promise<void> {
+    const result = await executeQuery<{
+      column_id: number;
+      fiscal_year: number;
+      fiscal_month_to: number;
+      is_ytd: boolean | number;
+      tb_type: string | null;
+      column_kind: string;
+    }>(
+      `SELECT column_id, fiscal_year, fiscal_month_to, is_ytd, tb_type,
+              ISNULL(column_kind, 'TB_SUM') AS column_kind
+       FROM admin.fis_report_columns
+       WHERE instance_id = @instanceId`,
+      { instanceId }
+    );
+    throwOnError(result.error);
+    const rows = result.data || [];
+    if (rows.length <= 1) return;
+
+    const sorted = [...rows].sort((a, b) =>
+      compareFisReportColumns(
+        {
+          fiscalYear: a.fiscal_year,
+          fiscalMonthTo: a.fiscal_month_to,
+          isYtd: a.is_ytd === true || a.is_ytd === 1,
+          tbType: a.tb_type as FisColumnTbType | null,
+          columnKind: (a.column_kind || 'TB_SUM') as FisColumnKind,
+        },
+        {
+          fiscalYear: b.fiscal_year,
+          fiscalMonthTo: b.fiscal_month_to,
+          isYtd: b.is_ytd === true || b.is_ytd === 1,
+          tbType: b.tb_type as FisColumnTbType | null,
+          columnKind: (b.column_kind || 'TB_SUM') as FisColumnKind,
+        }
+      )
+    );
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    await transaction.begin();
+    try {
+      const resetReq = new sql.Request(transaction);
+      resetReq.input('instanceId', sql.Int, instanceId);
+      await resetReq.query(
+        `UPDATE admin.fis_report_columns
+         SET column_order = -column_id
+         WHERE instance_id = @instanceId`
+      );
+
+      let order = 1;
+      for (const row of sorted) {
+        const req = new sql.Request(transaction);
+        req.input('columnId', sql.Int, row.column_id);
+        req.input('columnOrder', sql.Int, order++);
+        await req.query(
+          `UPDATE admin.fis_report_columns SET column_order = @columnOrder WHERE column_id = @columnId`
+        );
+      }
+
+      await transaction.commit();
+    } catch (err: unknown) {
+      await transaction.rollback();
+      if (err instanceof FISServiceError) throw err;
+      throw new FISServiceError(
+        err instanceof Error ? err.message : 'Failed to reorder report columns'
+      );
+    }
+  }
+
   /** Append six month columns if this period is not already on the instance. */
   async appendMonthColumnsForPeriod(instanceId: number, period: string): Promise<number> {
     const periodNorm = period.trim();
@@ -791,6 +866,7 @@ export class FISService {
         await this.insertReportColumn(transaction, instanceId, col);
       }
       await transaction.commit();
+      await this.reorderInstanceColumns(instanceId);
       return columns.length;
     } catch (err: unknown) {
       await transaction.rollback();
@@ -863,6 +939,9 @@ export class FISService {
       }
 
       await transaction.commit();
+      if (columns.length > 0) {
+        await this.reorderInstanceColumns(instanceId);
+      }
       return instanceId;
     } catch (err: unknown) {
       await transaction.rollback();
@@ -938,6 +1017,9 @@ export class FISService {
       }
 
       await transaction.commit();
+      if (columns !== undefined) {
+        await this.reorderInstanceColumns(instanceId);
+      }
     } catch (err: unknown) {
       await transaction.rollback();
       if (err instanceof FISServiceError) throw err;
@@ -998,6 +1080,8 @@ export class FISService {
         }
       }
     }
+
+    await this.reorderInstanceColumns(instanceId);
 
     const result = await executeProcedure('rp.usp_GenerateFISReport', { instance_id: instanceId });
     throwOnError(result.error);
