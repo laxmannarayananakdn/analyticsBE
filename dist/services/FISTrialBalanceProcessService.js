@@ -99,31 +99,68 @@ export async function listTrialBalanceEntityPeriods() {
     const rows = await fetchLatestTrialBalanceUploads();
     return groupLatestByEntityPeriod(rows);
 }
+/** Latest budget period on or before target (same fiscal year); null if none. */
+export async function resolveBudgetSourcePeriod(entityCode, period) {
+    const entity = entityCode.trim().toUpperCase();
+    const periodNorm = period.trim();
+    const fiscalYear = periodNorm.slice(0, 4);
+    const result = await executeQuery(`SELECT MAX(tb.period) AS source_period
+     FROM FIN.TrialBalance tb
+     WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+       AND UPPER(tb.tb_type) = 'BUDGET'
+       AND tb.period IS NOT NULL
+       AND LEN(tb.period) = 6
+       AND LEFT(tb.period, 4) = @fiscalYear
+       AND tb.period <= @period`, { entity, period: periodNorm, fiscalYear });
+    if (result.error)
+        throw new Error(result.error);
+    return result.data?.[0]?.source_period ?? null;
+}
+function uploadInfoFromRow(row) {
+    return {
+        uploadId: row.upload_id,
+        fileName: row.file_name,
+        typeCode: row.tb_type.toUpperCase() === 'BUDGET' ? 'FIN_TB_BUDGET' : 'FIN_TB_ACTUAL',
+        uploadedAt: toIsoDate(row.uploaded_at),
+        uploadedBy: row.uploaded_by,
+        rowCount: row.row_count,
+    };
+}
 export async function getLatestTrialBalanceUploads(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
     const rows = await fetchLatestTrialBalanceUploads();
     let actual = null;
-    let budget = null;
+    let budgetForPeriod = null;
     for (const row of rows) {
         if (row.entity_code !== entity || row.period !== periodNorm)
             continue;
-        const info = {
-            uploadId: row.upload_id,
-            fileName: row.file_name,
-            typeCode: row.tb_type.toUpperCase() === 'BUDGET' ? 'FIN_TB_BUDGET' : 'FIN_TB_ACTUAL',
-            uploadedAt: toIsoDate(row.uploaded_at),
-            uploadedBy: row.uploaded_by,
-            rowCount: row.row_count,
-        };
+        const info = uploadInfoFromRow(row);
         if (row.tb_type.toUpperCase() === 'ACTUAL' && !actual)
             actual = info;
-        if (row.tb_type.toUpperCase() === 'BUDGET' && !budget)
-            budget = info;
-        if (actual && budget)
+        if (row.tb_type.toUpperCase() === 'BUDGET' && !budgetForPeriod)
+            budgetForPeriod = info;
+        if (actual && budgetForPeriod)
             break;
     }
-    return { actual, budget };
+    const budgetSourcePeriod = await resolveBudgetSourcePeriod(entity, periodNorm);
+    let budget = budgetForPeriod;
+    if (!budget && budgetSourcePeriod) {
+        for (const row of rows) {
+            if (row.entity_code === entity &&
+                row.period === budgetSourcePeriod &&
+                row.tb_type.toUpperCase() === 'BUDGET') {
+                budget = uploadInfoFromRow(row);
+                break;
+            }
+        }
+    }
+    return {
+        actual,
+        budget,
+        budgetSourcePeriod,
+        budgetUsesFallback: Boolean(budgetSourcePeriod && budgetSourcePeriod !== periodNorm),
+    };
 }
 const MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -159,10 +196,10 @@ export function buildMonthColumnSet(period, startOrder = 1) {
     return [
         col(`${monthName} Actual`, fiscalMonth, fiscalMonth, false, 'ACTUAL', 'TB_SUM'),
         col(`${monthName} Budget`, fiscalMonth, fiscalMonth, false, 'BUDGET', 'TB_SUM'),
-        col('YTD Actual', 1, fiscalMonth, true, 'ACTUAL', 'TB_SUM'),
-        col('YTD Budget', 1, fiscalMonth, true, 'BUDGET', 'TB_SUM'),
-        col('YTD Variance', 1, fiscalMonth, true, null, 'YTD_VARIANCE'),
-        col('YTD Var %', 1, fiscalMonth, true, null, 'YTD_VAR_PCT'),
+        col(`${monthName} YTD Actual`, 1, fiscalMonth, true, 'ACTUAL', 'TB_SUM'),
+        col(`${monthName} YTD Budget`, 1, fiscalMonth, true, 'BUDGET', 'TB_SUM'),
+        col(`${monthName} YTD Variance`, 1, fiscalMonth, true, null, 'YTD_VARIANCE'),
+        col(`${monthName} YTD Var %`, 1, fiscalMonth, true, null, 'YTD_VAR_PCT'),
     ];
 }
 export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
@@ -179,6 +216,13 @@ export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
      WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
        AND tb.period IS NOT NULL
        AND LEN(tb.period) = 6
+       AND EXISTS (
+         SELECT 1
+         FROM FIN.TrialBalance act
+         WHERE UPPER(LTRIM(RTRIM(act.entity_code))) = @entity
+           AND act.period = tb.period
+           AND UPPER(act.tb_type) = 'ACTUAL'
+       )
        ${periodClause}
      ORDER BY tb.period`, params);
     if (result.error)
@@ -193,23 +237,23 @@ export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
     }
     return columns;
 }
-/** Verify both Actual and Budget TB rows exist for entity + period. */
+/** Actual required for the period; budget may fall back to January (or latest revision). */
 export async function assertTrialBalanceDataForPeriod(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
-    const result = await executeQuery(`SELECT
-       SUM(CASE WHEN UPPER(tb.tb_type) = 'ACTUAL' THEN 1 ELSE 0 END) AS actual_cnt,
-       SUM(CASE WHEN UPPER(tb.tb_type) = 'BUDGET' THEN 1 ELSE 0 END) AS budget_cnt
+    const result = await executeQuery(`SELECT COUNT(*) AS actual_cnt
      FROM FIN.TrialBalance tb
-     WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity AND tb.period = @period`, { entity, period: periodNorm });
+     WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+       AND tb.period = @period
+       AND UPPER(tb.tb_type) = 'ACTUAL'`, { entity, period: periodNorm });
     if (result.error)
         throw new Error(result.error);
-    const row = result.data?.[0];
-    if (!row?.actual_cnt) {
+    if (!result.data?.[0]?.actual_cnt) {
         throw new Error(`No Actual trial balance data for ${entity} period ${periodNorm}`);
     }
-    if (!row?.budget_cnt) {
-        throw new Error(`No Budget trial balance data for ${entity} period ${periodNorm}`);
+    const budgetSource = await resolveBudgetSourcePeriod(entity, periodNorm);
+    if (!budgetSource) {
+        throw new Error(`No Budget trial balance data for ${entity} fiscal year ${periodNorm.slice(0, 4)}. Upload January budget first.`);
     }
 }
 export async function getReportOutputPreview(instanceId, limit = 100) {
