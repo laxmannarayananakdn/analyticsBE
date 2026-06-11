@@ -1,6 +1,7 @@
 /**
  * FIS (Financial Information System) Reporting Service
  */
+import { type FisColumnKind, type FisColumnTbType } from './FISTrialBalanceProcessService.js';
 export declare class FISServiceError extends Error {
     statusCode: number;
     constructor(message: string, statusCode?: number);
@@ -69,6 +70,8 @@ export interface FisReportColumn {
     fiscalMonthFrom: number;
     fiscalMonthTo: number;
     isYtd: boolean;
+    tbType?: FisColumnTbType | null;
+    columnKind?: FisColumnKind;
 }
 export interface FisReportInstanceSummary {
     instanceId: number;
@@ -107,6 +110,10 @@ export declare class FISService {
     replaceRuleCriteria(ruleId: number, criteria: FisRuleCriterion[]): Promise<void>;
     getInstances(): Promise<FisReportInstanceSummary[]>;
     getInstance(instanceId: number): Promise<FisReportInstanceDetail>;
+    private insertReportColumn;
+    /** Append six month columns if this period is not already on the instance. */
+    appendMonthColumnsForPeriod(instanceId: number, period: string): Promise<number>;
+    ensureInstanceEntity(instanceId: number, entityCode: string): Promise<void>;
     createInstance(data: Record<string, unknown>): Promise<number>;
     updateInstance(instanceId: number, data: Record<string, unknown>): Promise<void>;
     softDeleteInstance(instanceId: number): Promise<void>;

@@ -37,15 +37,22 @@ export declare function getLatestTrialBalanceUploads(entityCode: string, period:
     actual: TbUploadInfo | null;
     budget: TbUploadInfo | null;
 }>;
-export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<Array<{
+export type FisColumnKind = 'TB_SUM' | 'YTD_VARIANCE' | 'YTD_VAR_PCT';
+export type FisColumnTbType = 'ACTUAL' | 'BUDGET';
+export interface FisMonthColumnDef {
     columnOrder: number;
     columnLabel: string;
     fiscalYear: number;
     fiscalMonthFrom: number;
     fiscalMonthTo: number;
     isYtd: boolean;
-}>>;
-/** Verify TB rows exist for entity + period before scoping an instance. */
+    tbType: FisColumnTbType | null;
+    columnKind: FisColumnKind;
+}
+/** Six columns per processed month: Actual, Budget, YTD Actual, YTD Budget, YTD Variance, YTD Var %. */
+export declare function buildMonthColumnSet(period: string, startOrder?: number): FisMonthColumnDef[];
+export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<FisMonthColumnDef[]>;
+/** Verify both Actual and Budget TB rows exist for entity + period. */
 export declare function assertTrialBalanceDataForPeriod(entityCode: string, period: string): Promise<void>;
 export declare function getReportOutputPreview(instanceId: number, limit?: number): Promise<{
     totalRows: number;

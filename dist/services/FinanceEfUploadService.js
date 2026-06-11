@@ -135,6 +135,10 @@ export async function processFinanceFile(params) {
         }
         const rowCount = await insertFunction(uploadId, fileName, uploadedBy, records);
         await efService.updateUploadStatus(uploadId, 'COMPLETED', rowCount);
+        if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+            console.log(`[FinanceEfUpload] TB loaded to FIN.TrialBalance only (${rowCount} rows, upload ${uploadId}). ` +
+                'No FIS report instance or admin.fis_report_columns changes.');
+        }
         return {
             success: true,
             uploadId,

@@ -5,7 +5,10 @@
 import { executeQuery, executeProcedure, getConnection, sql } from '../config/database.js';
 import {
   assertTrialBalanceDataForPeriod,
-  buildColumnsFromEntityTrialBalance,
+  buildMonthColumnSet,
+  type FisColumnKind,
+  type FisColumnTbType,
+  type FisMonthColumnDef,
 } from './FISTrialBalanceProcessService.js';
 
 export class FISServiceError extends Error {
@@ -73,8 +76,12 @@ function columnFromInput(col: FisReportColumn | Record<string, unknown>): {
   fiscalMonthFrom: number;
   fiscalMonthTo: number;
   isYtd: number;
+  tbType: string | null;
+  columnKind: string;
 } {
   const raw = col as Record<string, unknown>;
+  const tbType = pickField<string | null>(raw, 'tbType', 'tb_type');
+  const columnKind = pickField<string>(raw, 'columnKind', 'column_kind');
   return {
     columnOrder: toInt(pickField(raw, 'columnOrder', 'column_order'), 'columnOrder'),
     columnLabel: String(pickField(raw, 'columnLabel', 'column_label') ?? ''),
@@ -82,6 +89,8 @@ function columnFromInput(col: FisReportColumn | Record<string, unknown>): {
     fiscalMonthFrom: toInt(pickField(raw, 'fiscalMonthFrom', 'fiscal_month_from'), 'fiscalMonthFrom'),
     fiscalMonthTo: toInt(pickField(raw, 'fiscalMonthTo', 'fiscal_month_to'), 'fiscalMonthTo'),
     isYtd: toBit(pickField(raw, 'isYtd', 'is_ytd')),
+    tbType: tbType != null && String(tbType).trim() !== '' ? String(tbType).trim().toUpperCase() : null,
+    columnKind: columnKind ? String(columnKind).trim().toUpperCase() : 'TB_SUM',
   };
 }
 
@@ -153,6 +162,8 @@ export interface FisReportColumn {
   fiscalMonthFrom: number;
   fiscalMonthTo: number;
   isYtd: boolean;
+  tbType?: FisColumnTbType | null;
+  columnKind?: FisColumnKind;
 }
 
 export interface FisReportInstanceSummary {
@@ -676,9 +687,12 @@ export class FISService {
       fiscal_month_from: number;
       fiscal_month_to: number;
       is_ytd: boolean | number;
+      tb_type: string | null;
+      column_kind: string;
     }>(
       `SELECT column_id, instance_id, column_order, column_label,
-              fiscal_year, fiscal_month_from, fiscal_month_to, is_ytd
+              fiscal_year, fiscal_month_from, fiscal_month_to, is_ytd,
+              tb_type, ISNULL(column_kind, 'TB_SUM') AS column_kind
        FROM admin.fis_report_columns
        WHERE instance_id = @instanceId
        ORDER BY column_order`,
@@ -705,8 +719,100 @@ export class FISService {
         fiscalMonthFrom: c.fiscal_month_from,
         fiscalMonthTo: c.fiscal_month_to,
         isYtd: c.is_ytd === true || c.is_ytd === 1,
+        tbType: c.tb_type as FisColumnTbType | null,
+        columnKind: (c.column_kind || 'TB_SUM') as FisColumnKind,
       })),
     };
+  }
+
+  private async insertReportColumn(
+    transaction: sql.Transaction,
+    instanceId: number,
+    col: FisMonthColumnDef | FisReportColumn
+  ): Promise<void> {
+    const parsed = columnFromInput(col);
+    const req = new sql.Request(transaction);
+    req.input('instanceId', sql.Int, instanceId);
+    req.input('columnOrder', sql.Int, parsed.columnOrder);
+    req.input('columnLabel', sql.NVarChar(100), parsed.columnLabel);
+    req.input('fiscalYear', sql.Int, parsed.fiscalYear);
+    req.input('fiscalMonthFrom', sql.Int, parsed.fiscalMonthFrom);
+    req.input('fiscalMonthTo', sql.Int, parsed.fiscalMonthTo);
+    req.input('isYtd', sql.Bit, parsed.isYtd);
+    req.input('tbType', sql.NVarChar(20), parsed.tbType);
+    req.input('columnKind', sql.NVarChar(20), parsed.columnKind);
+    await req.query(
+      `INSERT INTO admin.fis_report_columns (
+         instance_id, column_order, column_label, fiscal_year,
+         fiscal_month_from, fiscal_month_to, is_ytd, tb_type, column_kind
+       ) VALUES (
+         @instanceId, @columnOrder, @columnLabel, @fiscalYear,
+         @fiscalMonthFrom, @fiscalMonthTo, @isYtd, @tbType, @columnKind
+       )`
+    );
+  }
+
+  /** Append six month columns if this period is not already on the instance. */
+  async appendMonthColumnsForPeriod(instanceId: number, period: string): Promise<number> {
+    const periodNorm = period.trim();
+    const fiscalYear = parseInt(periodNorm.slice(0, 4), 10);
+    const fiscalMonth = parseInt(periodNorm.slice(4, 6), 10);
+
+    const existing = await executeQuery<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt
+       FROM admin.fis_report_columns
+       WHERE instance_id = @instanceId
+         AND fiscal_year = @fiscalYear
+         AND fiscal_month_from = @fiscalMonth
+         AND fiscal_month_to = @fiscalMonth
+         AND is_ytd = 0
+         AND tb_type = 'ACTUAL'
+         AND ISNULL(column_kind, 'TB_SUM') = 'TB_SUM'`,
+      { instanceId, fiscalYear, fiscalMonth }
+    );
+    throwOnError(existing.error);
+    if (existing.data?.[0]?.cnt) {
+      return 0;
+    }
+
+    const maxOrderResult = await executeQuery<{ max_order: number | null }>(
+      `SELECT MAX(column_order) AS max_order FROM admin.fis_report_columns WHERE instance_id = @instanceId`,
+      { instanceId }
+    );
+    throwOnError(maxOrderResult.error);
+    const startOrder = (Number(maxOrderResult.data?.[0]?.max_order) || 0) + 1;
+    const columns = buildMonthColumnSet(periodNorm, startOrder);
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    await transaction.begin();
+    try {
+      for (const col of columns) {
+        await this.insertReportColumn(transaction, instanceId, col);
+      }
+      await transaction.commit();
+      return columns.length;
+    } catch (err: unknown) {
+      await transaction.rollback();
+      if (err instanceof FISServiceError) throw err;
+      throw new FISServiceError(
+        err instanceof Error ? err.message : 'Failed to append report columns'
+      );
+    }
+  }
+
+  async ensureInstanceEntity(instanceId: number, entityCode: string): Promise<void> {
+    const entity = entityCode.trim().toUpperCase();
+    const result = await executeQuery(
+      `IF NOT EXISTS (
+         SELECT 1 FROM admin.fis_instance_countries
+         WHERE instance_id = @instanceId AND entity_code = @entity
+       )
+       INSERT INTO admin.fis_instance_countries (instance_id, entity_code)
+       VALUES (@instanceId, @entity)`,
+      { instanceId, entity }
+    );
+    throwOnError(result.error);
   }
 
   async createInstance(data: Record<string, unknown>): Promise<number> {
@@ -753,20 +859,7 @@ export class FISService {
       }
 
       for (const col of columns) {
-        const parsed = columnFromInput(col);
-        const req = new sql.Request(transaction);
-        req.input('instanceId', sql.Int, instanceId);
-        req.input('columnOrder', sql.Int, parsed.columnOrder);
-        req.input('columnLabel', sql.NVarChar(100), parsed.columnLabel);
-        req.input('fiscalYear', sql.Int, parsed.fiscalYear);
-        req.input('fiscalMonthFrom', sql.Int, parsed.fiscalMonthFrom);
-        req.input('fiscalMonthTo', sql.Int, parsed.fiscalMonthTo);
-        req.input('isYtd', sql.Bit, parsed.isYtd);
-        await req.query(
-          `INSERT INTO admin.fis_report_columns (
-             instance_id, column_order, column_label, fiscal_year, fiscal_month_from, fiscal_month_to, is_ytd
-           ) VALUES (@instanceId, @columnOrder, @columnLabel, @fiscalYear, @fiscalMonthFrom, @fiscalMonthTo, @isYtd)`
-        );
+        await this.insertReportColumn(transaction, instanceId, col);
       }
 
       await transaction.commit();
@@ -840,20 +933,7 @@ export class FISService {
         await delCol.query(`DELETE FROM admin.fis_report_columns WHERE instance_id = @instanceId`);
 
         for (const col of columns as FisReportColumn[]) {
-          const parsed = columnFromInput(col);
-          const req = new sql.Request(transaction);
-          req.input('instanceId', sql.Int, instanceId);
-          req.input('columnOrder', sql.Int, parsed.columnOrder);
-          req.input('columnLabel', sql.NVarChar(100), parsed.columnLabel);
-          req.input('fiscalYear', sql.Int, parsed.fiscalYear);
-          req.input('fiscalMonthFrom', sql.Int, parsed.fiscalMonthFrom);
-          req.input('fiscalMonthTo', sql.Int, parsed.fiscalMonthTo);
-          req.input('isYtd', sql.Bit, parsed.isYtd);
-          await req.query(
-            `INSERT INTO admin.fis_report_columns (
-               instance_id, column_order, column_label, fiscal_year, fiscal_month_from, fiscal_month_to, is_ytd
-             ) VALUES (@instanceId, @columnOrder, @columnLabel, @fiscalYear, @fiscalMonthFrom, @fiscalMonthTo, @isYtd)`
-          );
+          await this.insertReportColumn(transaction, instanceId, col);
         }
       }
 
@@ -902,18 +982,21 @@ export class FISService {
         );
       }
 
-      const columns = await buildColumnsFromEntityTrialBalance(entity, period);
-      if (!columns.length) {
-        throw new FISServiceError(
-          `No trial balance periods found for ${entity} / ${period}`,
-          400
+      await this.ensureInstanceEntity(instanceId, entity);
+      const appended = await this.appendMonthColumnsForPeriod(instanceId, period);
+      if (appended === 0) {
+        const hasColumns = await executeQuery<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM admin.fis_report_columns WHERE instance_id = @instanceId`,
+          { instanceId }
         );
+        throwOnError(hasColumns.error);
+        if (!hasColumns.data?.[0]?.cnt) {
+          throw new FISServiceError(
+            `No report columns on instance ${instanceId}. Create the instance for ${period} first.`,
+            400
+          );
+        }
       }
-
-      await this.updateInstance(instanceId, {
-        entityCodes: [entity],
-        columns,
-      });
     }
 
     const result = await executeProcedure('rp.usp_GenerateFISReport', { instance_id: instanceId });
