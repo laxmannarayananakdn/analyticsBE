@@ -53,25 +53,17 @@ export interface FisMonthColumnDef {
     tbType: FisColumnTbType | null;
     columnKind: FisColumnKind;
 }
+export type FisColumnSortInput = {
+    fiscalYear: number;
+    fiscalMonthTo: number;
+    isYtd: boolean;
+    tbType: FisColumnTbType | null;
+    columnKind: FisColumnKind;
+    columnLabel?: string;
+};
 /** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
-export declare function fisColumnBlockSortKey(col: {
-    isYtd: boolean;
-    tbType: FisColumnTbType | null;
-    columnKind: FisColumnKind;
-}): number;
-export declare function compareFisReportColumns(a: {
-    fiscalYear: number;
-    fiscalMonthTo: number;
-    isYtd: boolean;
-    tbType: FisColumnTbType | null;
-    columnKind: FisColumnKind;
-}, b: {
-    fiscalYear: number;
-    fiscalMonthTo: number;
-    isYtd: boolean;
-    tbType: FisColumnTbType | null;
-    columnKind: FisColumnKind;
-}): number;
+export declare function fisColumnBlockSortKey(col: FisColumnSortInput): number;
+export declare function compareFisReportColumns(a: FisColumnSortInput, b: FisColumnSortInput): number;
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export declare function buildMonthColumnSet(period: string, startOrder?: number): FisMonthColumnDef[];
 export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<FisMonthColumnDef[]>;

@@ -179,20 +179,41 @@ function parsePeriod(period) {
     const monthName = `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
     return { fiscalYear, fiscalMonth, monthName };
 }
+function normalizeTbType(tbType) {
+    if (!tbType?.trim())
+        return null;
+    const upper = tbType.trim().toUpperCase();
+    return upper === 'BUDGET' || upper === 'ACTUAL' ? upper : null;
+}
 /** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
 export function fisColumnBlockSortKey(col) {
-    if (col.columnKind === 'YTD_VARIANCE')
+    const kind = col.columnKind || 'TB_SUM';
+    if (kind === 'YTD_VARIANCE')
         return 5;
-    if (col.columnKind === 'YTD_VAR_PCT')
+    if (kind === 'YTD_VAR_PCT')
         return 6;
-    if (col.tbType === 'BUDGET' && !col.isYtd)
+    const tbType = normalizeTbType(col.tbType);
+    if (tbType === 'BUDGET' && !col.isYtd)
         return 1;
-    if (col.tbType === 'ACTUAL' && !col.isYtd)
+    if (tbType === 'ACTUAL' && !col.isYtd)
         return 2;
-    if (col.tbType === 'BUDGET' && col.isYtd)
+    if (tbType === 'BUDGET' && col.isYtd)
         return 3;
-    if (col.tbType === 'ACTUAL' && col.isYtd)
+    if (tbType === 'ACTUAL' && col.isYtd)
         return 4;
+    const label = col.columnLabel?.trim() ?? '';
+    if (label.includes('Var %'))
+        return 6;
+    if (label.includes('Variance'))
+        return 5;
+    if (label.includes('YTD Budget'))
+        return 3;
+    if (label.includes('YTD Actual'))
+        return 4;
+    if (label.endsWith('Budget'))
+        return 1;
+    if (label.endsWith('Actual'))
+        return 2;
     return 99;
 }
 export function compareFisReportColumns(a, b) {
@@ -200,7 +221,10 @@ export function compareFisReportColumns(a, b) {
         return a.fiscalYear - b.fiscalYear;
     if (a.fiscalMonthTo !== b.fiscalMonthTo)
         return a.fiscalMonthTo - b.fiscalMonthTo;
-    return fisColumnBlockSortKey(a) - fisColumnBlockSortKey(b);
+    const keyDiff = fisColumnBlockSortKey(a) - fisColumnBlockSortKey(b);
+    if (keyDiff !== 0)
+        return keyDiff;
+    return (a.columnLabel ?? '').localeCompare(b.columnLabel ?? '');
 }
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export function buildMonthColumnSet(period, startOrder = 1) {

@@ -458,26 +458,22 @@ export class FISService {
      */
     async reorderInstanceColumns(instanceId) {
         const result = await executeQuery(`SELECT column_id, fiscal_year, fiscal_month_to, is_ytd, tb_type,
-              ISNULL(column_kind, 'TB_SUM') AS column_kind
+              ISNULL(column_kind, 'TB_SUM') AS column_kind, column_label
        FROM admin.fis_report_columns
        WHERE instance_id = @instanceId`, { instanceId });
         throwOnError(result.error);
         const rows = result.data || [];
         if (rows.length <= 1)
             return;
-        const sorted = [...rows].sort((a, b) => compareFisReportColumns({
-            fiscalYear: a.fiscal_year,
-            fiscalMonthTo: a.fiscal_month_to,
-            isYtd: a.is_ytd === true || a.is_ytd === 1,
-            tbType: a.tb_type,
-            columnKind: (a.column_kind || 'TB_SUM'),
-        }, {
-            fiscalYear: b.fiscal_year,
-            fiscalMonthTo: b.fiscal_month_to,
-            isYtd: b.is_ytd === true || b.is_ytd === 1,
-            tbType: b.tb_type,
-            columnKind: (b.column_kind || 'TB_SUM'),
-        }));
+        const toSortInput = (row) => ({
+            fiscalYear: row.fiscal_year,
+            fiscalMonthTo: row.fiscal_month_to,
+            isYtd: row.is_ytd === true || row.is_ytd === 1,
+            tbType: row.tb_type,
+            columnKind: (row.column_kind || 'TB_SUM'),
+            columnLabel: row.column_label,
+        });
+        const sorted = [...rows].sort((a, b) => compareFisReportColumns(toSortInput(a), toSortInput(b)));
         const connection = await getConnection();
         const transaction = new sql.Transaction(connection);
         await transaction.begin();

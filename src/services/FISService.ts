@@ -363,6 +363,18 @@ export class FISService {
     await transaction.begin();
 
     try {
+      // Phase 1: temporary negative orders avoid UQ (report_type_id, display_order) conflicts
+      for (const u of updates) {
+        const request = new sql.Request(transaction);
+        request.input('rowId', sql.Int, u.rowId);
+        await request.query(
+          `UPDATE admin.fis_report_rows
+           SET display_order = -row_id, updated_at = GETDATE()
+           WHERE row_id = @rowId AND is_active = 1`
+        );
+      }
+
+      // Phase 2: apply final display_order values
       for (const u of updates) {
         const request = new sql.Request(transaction);
         request.input('rowId', sql.Int, u.rowId);
@@ -765,9 +777,10 @@ export class FISService {
       is_ytd: boolean | number;
       tb_type: string | null;
       column_kind: string;
+      column_label: string;
     }>(
       `SELECT column_id, fiscal_year, fiscal_month_to, is_ytd, tb_type,
-              ISNULL(column_kind, 'TB_SUM') AS column_kind
+              ISNULL(column_kind, 'TB_SUM') AS column_kind, column_label
        FROM admin.fis_report_columns
        WHERE instance_id = @instanceId`,
       { instanceId }
@@ -776,23 +789,17 @@ export class FISService {
     const rows = result.data || [];
     if (rows.length <= 1) return;
 
+    const toSortInput = (row: (typeof rows)[0]) => ({
+      fiscalYear: row.fiscal_year,
+      fiscalMonthTo: row.fiscal_month_to,
+      isYtd: row.is_ytd === true || row.is_ytd === 1,
+      tbType: row.tb_type as FisColumnTbType | null,
+      columnKind: (row.column_kind || 'TB_SUM') as FisColumnKind,
+      columnLabel: row.column_label,
+    });
+
     const sorted = [...rows].sort((a, b) =>
-      compareFisReportColumns(
-        {
-          fiscalYear: a.fiscal_year,
-          fiscalMonthTo: a.fiscal_month_to,
-          isYtd: a.is_ytd === true || a.is_ytd === 1,
-          tbType: a.tb_type as FisColumnTbType | null,
-          columnKind: (a.column_kind || 'TB_SUM') as FisColumnKind,
-        },
-        {
-          fiscalYear: b.fiscal_year,
-          fiscalMonthTo: b.fiscal_month_to,
-          isYtd: b.is_ytd === true || b.is_ytd === 1,
-          tbType: b.tb_type as FisColumnTbType | null,
-          columnKind: (b.column_kind || 'TB_SUM') as FisColumnKind,
-        }
-      )
+      compareFisReportColumns(toSortInput(a), toSortInput(b))
     );
 
     const connection = await getConnection();

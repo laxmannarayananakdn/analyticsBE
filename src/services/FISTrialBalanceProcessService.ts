@@ -266,28 +266,50 @@ function parsePeriod(period: string): { fiscalYear: number; fiscalMonth: number;
   return { fiscalYear, fiscalMonth, monthName };
 }
 
-/** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
-export function fisColumnBlockSortKey(col: {
+export type FisColumnSortInput = {
+  fiscalYear: number;
+  fiscalMonthTo: number;
   isYtd: boolean;
   tbType: FisColumnTbType | null;
   columnKind: FisColumnKind;
-}): number {
-  if (col.columnKind === 'YTD_VARIANCE') return 5;
-  if (col.columnKind === 'YTD_VAR_PCT') return 6;
-  if (col.tbType === 'BUDGET' && !col.isYtd) return 1;
-  if (col.tbType === 'ACTUAL' && !col.isYtd) return 2;
-  if (col.tbType === 'BUDGET' && col.isYtd) return 3;
-  if (col.tbType === 'ACTUAL' && col.isYtd) return 4;
+  columnLabel?: string;
+};
+
+function normalizeTbType(tbType: string | null | undefined): FisColumnTbType | null {
+  if (!tbType?.trim()) return null;
+  const upper = tbType.trim().toUpperCase();
+  return upper === 'BUDGET' || upper === 'ACTUAL' ? upper : null;
+}
+
+/** Within each month block: Budget before Actual; YTD Budget before YTD Actual. */
+export function fisColumnBlockSortKey(col: FisColumnSortInput): number {
+  const kind = col.columnKind || 'TB_SUM';
+  if (kind === 'YTD_VARIANCE') return 5;
+  if (kind === 'YTD_VAR_PCT') return 6;
+
+  const tbType = normalizeTbType(col.tbType);
+  if (tbType === 'BUDGET' && !col.isYtd) return 1;
+  if (tbType === 'ACTUAL' && !col.isYtd) return 2;
+  if (tbType === 'BUDGET' && col.isYtd) return 3;
+  if (tbType === 'ACTUAL' && col.isYtd) return 4;
+
+  const label = col.columnLabel?.trim() ?? '';
+  if (label.includes('Var %')) return 6;
+  if (label.includes('Variance')) return 5;
+  if (label.includes('YTD Budget')) return 3;
+  if (label.includes('YTD Actual')) return 4;
+  if (label.endsWith('Budget')) return 1;
+  if (label.endsWith('Actual')) return 2;
+
   return 99;
 }
 
-export function compareFisReportColumns(
-  a: { fiscalYear: number; fiscalMonthTo: number; isYtd: boolean; tbType: FisColumnTbType | null; columnKind: FisColumnKind },
-  b: { fiscalYear: number; fiscalMonthTo: number; isYtd: boolean; tbType: FisColumnTbType | null; columnKind: FisColumnKind }
-): number {
+export function compareFisReportColumns(a: FisColumnSortInput, b: FisColumnSortInput): number {
   if (a.fiscalYear !== b.fiscalYear) return a.fiscalYear - b.fiscalYear;
   if (a.fiscalMonthTo !== b.fiscalMonthTo) return a.fiscalMonthTo - b.fiscalMonthTo;
-  return fisColumnBlockSortKey(a) - fisColumnBlockSortKey(b);
+  const keyDiff = fisColumnBlockSortKey(a) - fisColumnBlockSortKey(b);
+  if (keyDiff !== 0) return keyDiff;
+  return (a.columnLabel ?? '').localeCompare(b.columnLabel ?? '');
 }
 
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
