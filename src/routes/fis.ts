@@ -44,6 +44,19 @@ router.get('/report-types', async (_req: Request, res: Response) => {
   }
 });
 
+// POST /api/fis/report-types
+router.post('/report-types', async (req: Request, res: Response) => {
+  try {
+    const reportTypeId = await fisService.createReportType({
+      ...req.body,
+      createdBy: req.user?.email ?? null,
+    });
+    return res.status(201).json({ success: true, data: { reportTypeId } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
 // GET /api/fis/report-types/:id/rows
 router.get('/report-types/:id/rows', async (req: Request, res: Response) => {
   try {
