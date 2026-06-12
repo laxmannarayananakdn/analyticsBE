@@ -88,17 +88,60 @@ export class FISService {
             createdBy: r.created_by,
         }));
     }
+    async createReportType(data) {
+        const reportTypeCode = String(data.reportTypeCode ?? data.report_type_code ?? '')
+            .trim()
+            .toUpperCase();
+        const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
+        const description = String(data.description ?? '').trim() || null;
+        const createdBy = (data.createdBy ?? data.created_by ?? null);
+        if (!reportTypeCode) {
+            throw new FISServiceError('reportTypeCode is required', 400);
+        }
+        if (!reportTypeName) {
+            throw new FISServiceError('reportTypeName is required', 400);
+        }
+        if (!/^[A-Z0-9_-]+$/.test(reportTypeCode)) {
+            throw new FISServiceError('reportTypeCode may only contain letters, numbers, underscores, and hyphens', 400);
+        }
+        const existing = await executeQuery(`SELECT report_type_id
+       FROM admin.fis_report_types
+       WHERE UPPER(report_type_code) = @reportTypeCode`, { reportTypeCode });
+        throwOnError(existing.error);
+        if (existing.data?.length) {
+            throw new FISServiceError('A report type with this code already exists', 409);
+        }
+        const result = await executeQuery(`INSERT INTO admin.fis_report_types (
+         report_type_code, report_type_name, description, created_by
+       )
+       OUTPUT INSERTED.report_type_id
+       VALUES (@reportTypeCode, @reportTypeName, @description, @createdBy)`, { reportTypeCode, reportTypeName, description, createdBy });
+        throwOnError(result.error);
+        if (!result.data?.[0]?.report_type_id) {
+            throw new FISServiceError('Failed to create report type');
+        }
+        return result.data[0].report_type_id;
+    }
     // ---------------------------------------------------------------------------
     // Rows
     // ---------------------------------------------------------------------------
-    async getRowsByReportType(reportTypeId) {
-        const result = await executeQuery(`SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
+    rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
               rr.is_header, rr.is_total, rr.is_spacer, rr.is_title,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
+              rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
        FROM admin.fis_report_rows rr
-       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
+       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id`;
+    async getRowById(rowId) {
+        const result = await executeQuery(`${this.rowSelectSql} WHERE rr.row_id = @rowId`, { rowId });
+        throwOnError(result.error);
+        if (!result.data?.[0])
+            return null;
+        return this.mapRow(result.data[0]);
+    }
+    async getRowsByReportType(reportTypeId) {
+        const result = await executeQuery(`${this.rowSelectSql}
        WHERE rr.report_type_id = @reportTypeId AND rr.is_active = 1
        ORDER BY rr.display_order`, { reportTypeId });
         throwOnError(result.error);
@@ -113,13 +156,13 @@ export class FISService {
         const result = await executeQuery(`INSERT INTO admin.fis_report_rows (
          report_type_id, line_item_code, line_item_label, display_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
-         sign_convention, format_type, notes
+         sign_convention, format_type, pct_numerator_code, pct_denominator_code, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
          @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
-         @signConvention, @formatType, @notes
+         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @notes
        )`, {
             reportTypeId,
             lineItemCode,
@@ -134,6 +177,16 @@ export class FISService {
             expression: data.expression != null ? String(data.expression) : null,
             signConvention: toInt(data.signConvention ?? data.sign_convention ?? 1, 'signConvention'),
             formatType: data.formatType != null ? String(data.formatType) : data.format_type != null ? String(data.format_type) : 'NUMBER',
+            pctNumeratorCode: data.pctNumeratorCode != null
+                ? String(data.pctNumeratorCode)
+                : data.pct_numerator_code != null
+                    ? String(data.pct_numerator_code)
+                    : null,
+            pctDenominatorCode: data.pctDenominatorCode != null
+                ? String(data.pctDenominatorCode)
+                : data.pct_denominator_code != null
+                    ? String(data.pct_denominator_code)
+                    : null,
             notes: data.notes != null ? String(data.notes) : null,
         });
         throwOnError(result.error);
@@ -157,15 +210,20 @@ export class FISService {
             { key: 'expression', snake: 'expression' },
             { key: 'signConvention', snake: 'sign_convention', transform: (v) => toInt(v, 'signConvention') },
             { key: 'formatType', snake: 'format_type' },
+            { key: 'pctNumeratorCode', snake: 'pct_numerator_code' },
+            { key: 'pctDenominatorCode', snake: 'pct_denominator_code' },
             { key: 'notes', snake: 'notes' },
             { key: 'isActive', snake: 'is_active', transform: (v) => toBit(v) },
         ];
         for (const f of fields) {
-            const val = data[f.key] ?? data[f.snake];
+            const val = pickField(data, f.key, f.snake);
             if (val !== undefined) {
                 const param = f.key;
                 sets.push(`${f.snake} = @${param}`);
-                params[param] = f.transform ? f.transform(val) : val;
+                const transformed = f.transform ? f.transform(val) : val;
+                params[param] = transformed === '' && (f.key === 'pctNumeratorCode' || f.key === 'pctDenominatorCode')
+                    ? null
+                    : transformed;
             }
         }
         if (sets.length === 0) {
@@ -174,6 +232,11 @@ export class FISService {
         sets.push('updated_at = GETDATE()');
         const result = await executeQuery(`UPDATE admin.fis_report_rows SET ${sets.join(', ')} WHERE row_id = @rowId`, params);
         throwOnError(result.error);
+        const row = await this.getRowById(rowId);
+        if (!row) {
+            throw new FISServiceError(`Row ${rowId} not found after update`, 404);
+        }
+        return row;
     }
     async softDeleteRow(rowId) {
         const result = await executeQuery(`UPDATE admin.fis_report_rows SET is_active = 0, updated_at = GETDATE() WHERE row_id = @rowId`, { rowId });
@@ -186,6 +249,15 @@ export class FISService {
         const transaction = new sql.Transaction(connection);
         await transaction.begin();
         try {
+            // Phase 1: temporary negative orders avoid UQ (report_type_id, display_order) conflicts
+            for (const u of updates) {
+                const request = new sql.Request(transaction);
+                request.input('rowId', sql.Int, u.rowId);
+                await request.query(`UPDATE admin.fis_report_rows
+           SET display_order = -row_id, updated_at = GETDATE()
+           WHERE row_id = @rowId AND is_active = 1`);
+            }
+            // Phase 2: apply final display_order values
             for (const u of updates) {
                 const request = new sql.Request(transaction);
                 request.input('rowId', sql.Int, u.rowId);
@@ -751,6 +823,8 @@ export class FISService {
             expression: r.expression,
             signConvention: r.sign_convention,
             formatType: r.format_type,
+            pctNumeratorCode: r.pct_numerator_code ?? null,
+            pctDenominatorCode: r.pct_denominator_code ?? null,
             isActive: r.is_active === true || r.is_active === 1,
             notes: r.notes,
             createdAt: r.created_at,

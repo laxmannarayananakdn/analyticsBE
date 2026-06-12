@@ -31,6 +31,8 @@ export interface FisReportRow {
     expression: string | null;
     signConvention: number;
     formatType: string | null;
+    pctNumeratorCode: string | null;
+    pctDenominatorCode: string | null;
     isActive: boolean;
     notes: string | null;
     createdAt?: Date;
@@ -95,9 +97,12 @@ export interface DictionaryCodeItem {
 }
 export declare class FISService {
     getReportTypes(): Promise<FisReportType[]>;
+    createReportType(data: Record<string, unknown>): Promise<number>;
+    private rowSelectSql;
+    getRowById(rowId: number): Promise<FisReportRow | null>;
     getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]>;
     createRow(reportTypeId: number, data: Record<string, unknown>): Promise<number>;
-    updateRow(rowId: number, data: Record<string, unknown>): Promise<void>;
+    updateRow(rowId: number, data: Record<string, unknown>): Promise<FisReportRow>;
     softDeleteRow(rowId: number): Promise<void>;
     reorderRows(updates: Array<{
         rowId: number;

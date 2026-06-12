@@ -101,8 +101,8 @@ router.put('/rows/reorder', async (req: Request, res: Response) => {
 router.put('/rows/:rowId', async (req: Request, res: Response) => {
   try {
     const rowId = parseId(req.params.rowId, 'row id');
-    await fisService.updateRow(rowId, req.body);
-    return res.json({ success: true, data: { rowId } });
+    const row = await fisService.updateRow(rowId, req.body);
+    return res.json({ success: true, data: row });
   } catch (error) {
     return handleError(res, error);
   }

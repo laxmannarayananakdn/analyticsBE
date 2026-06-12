@@ -121,6 +121,8 @@ export interface FisReportRow {
   expression: string | null;
   signConvention: number;
   formatType: string | null;
+  pctNumeratorCode: string | null;
+  pctDenominatorCode: string | null;
   isActive: boolean;
   notes: string | null;
   createdAt?: Date;
@@ -273,38 +275,28 @@ export class FISService {
   // Rows
   // ---------------------------------------------------------------------------
 
-  async getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]> {
-    const result = await executeQuery<{
-      row_id: number;
-      report_type_id: number;
-      report_type_code: string;
-      line_item_code: string;
-      line_item_label: string;
-      display_order: number;
-      indent_level: number;
-      is_header: boolean | number;
-      is_total: boolean | number;
-      is_spacer: boolean | number;
-      is_title: boolean | number;
-      aggregation_type: string;
-      expression: string | null;
-      sign_convention: number;
-      format_type: string | null;
-      pct_numerator_code: string | null;
-      pct_denominator_code: string | null;
-      is_active: boolean | number;
-      notes: string | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
+  private rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
               rr.is_header, rr.is_total, rr.is_spacer, rr.is_title,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
        FROM admin.fis_report_rows rr
-       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
+       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id`;
+
+  async getRowById(rowId: number): Promise<FisReportRow | null> {
+    const result = await executeQuery<Parameters<FISService['mapRow']>[0]>(
+      `${this.rowSelectSql} WHERE rr.row_id = @rowId`,
+      { rowId }
+    );
+    throwOnError(result.error);
+    if (!result.data?.[0]) return null;
+    return this.mapRow(result.data[0]);
+  }
+
+  async getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]> {
+    const result = await executeQuery<Parameters<FISService['mapRow']>[0]>(
+      `${this.rowSelectSql}
        WHERE rr.report_type_id = @reportTypeId AND rr.is_active = 1
        ORDER BY rr.display_order`,
       { reportTypeId }
@@ -364,7 +356,7 @@ export class FISService {
     return result.data[0].row_id;
   }
 
-  async updateRow(rowId: number, data: Record<string, unknown>): Promise<void> {
+  async updateRow(rowId: number, data: Record<string, unknown>): Promise<FisReportRow> {
     const sets: string[] = [];
     const params: Record<string, unknown> = { rowId };
 
@@ -388,11 +380,14 @@ export class FISService {
     ];
 
     for (const f of fields) {
-      const val = data[f.key] ?? data[f.snake];
+      const val = pickField(data, f.key, f.snake);
       if (val !== undefined) {
         const param = f.key;
         sets.push(`${f.snake} = @${param}`);
-        params[param] = f.transform ? f.transform(val) : val;
+        const transformed = f.transform ? f.transform(val) : val;
+        params[param] = transformed === '' && (f.key === 'pctNumeratorCode' || f.key === 'pctDenominatorCode')
+          ? null
+          : transformed;
       }
     }
 
@@ -407,6 +402,12 @@ export class FISService {
       params
     );
     throwOnError(result.error);
+
+    const row = await this.getRowById(rowId);
+    if (!row) {
+      throw new FISServiceError(`Row ${rowId} not found after update`, 404);
+    }
+    return row;
   }
 
   async softDeleteRow(rowId: number): Promise<void> {

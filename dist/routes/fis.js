@@ -34,6 +34,19 @@ router.get('/report-types', async (_req, res) => {
         return handleError(res, error);
     }
 });
+// POST /api/fis/report-types
+router.post('/report-types', async (req, res) => {
+    try {
+        const reportTypeId = await fisService.createReportType({
+            ...req.body,
+            createdBy: req.user?.email ?? null,
+        });
+        return res.status(201).json({ success: true, data: { reportTypeId } });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
 // GET /api/fis/report-types/:id/rows
 router.get('/report-types/:id/rows', async (req, res) => {
     try {
@@ -78,8 +91,8 @@ router.put('/rows/reorder', async (req, res) => {
 router.put('/rows/:rowId', async (req, res) => {
     try {
         const rowId = parseId(req.params.rowId, 'row id');
-        await fisService.updateRow(rowId, req.body);
-        return res.json({ success: true, data: { rowId } });
+        const row = await fisService.updateRow(rowId, req.body);
+        return res.json({ success: true, data: row });
     }
     catch (error) {
         return handleError(res, error);
