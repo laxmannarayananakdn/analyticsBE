@@ -20,6 +20,7 @@ export const ADMIN_ITEMS = [
     { id: 'admin:rp-config', label: 'RP Configuration' },
     { id: 'admin:fis-row-management', label: 'FIS Reports Management' },
     { id: 'admin:fis-report-processing', label: 'FIS Report Processing' },
+    { id: 'admin:fis-entity-management', label: 'FIS Entity Management' },
     { id: 'admin:mark-grade-config', label: 'Mark Grade Translation Config' },
     { id: 'admin:users', label: 'User Management' },
     { id: 'admin:access-control', label: 'Access Control' },

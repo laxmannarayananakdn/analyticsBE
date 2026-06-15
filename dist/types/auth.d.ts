@@ -121,6 +121,9 @@ export interface UpdateNodeRequest {
     isCentralOffice?: boolean;
     countryCode?: string | null;
     parentNodeId?: string | null;
+    operatingUnit?: string | null;
+    operatingUnitName?: string | null;
+    entityCodes?: string[];
 }
 export interface AssignSchoolRequest {
     schoolId: string;
@@ -143,6 +146,9 @@ export interface NodeTree {
     isCentralOffice?: boolean;
     countryCode?: string | null;
     parentNodeId: string | null;
+    operatingUnit?: string | null;
+    operatingUnitName?: string | null;
+    entityCodes?: string[];
     children?: NodeTree[];
 }
 //# sourceMappingURL=auth.d.ts.map

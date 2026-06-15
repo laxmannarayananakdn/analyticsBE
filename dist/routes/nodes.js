@@ -93,7 +93,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { nodeDescription, isHeadOffice, isSchoolNode, isCentralOffice, countryCode, parentNodeId } = req.body;
+        const { nodeDescription, isHeadOffice, isSchoolNode, isCentralOffice, countryCode, parentNodeId, operatingUnit, operatingUnitName, entityCodes } = req.body;
         const node = await updateNode(id, {
             nodeDescription,
             isHeadOffice,
@@ -101,6 +101,9 @@ router.put('/:id', async (req, res) => {
             isCentralOffice,
             countryCode: countryCode !== undefined ? (countryCode || null) : undefined,
             parentNodeId: parentNodeId !== undefined ? (parentNodeId || null) : undefined,
+            operatingUnit: operatingUnit !== undefined ? (operatingUnit || null) : undefined,
+            operatingUnitName: operatingUnitName !== undefined ? (operatingUnitName || null) : undefined,
+            entityCodes,
         });
         res.json(node);
     }

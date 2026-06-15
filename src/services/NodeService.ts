@@ -5,26 +5,71 @@
 import { executeQuery } from '../config/database.js';
 import { Node, CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth.js';
 
+type DbNode = Node & {
+  Is_School_Node?: boolean | number;
+  Is_Central_Office?: boolean | number;
+  Country_Code?: string | null;
+  Operating_Unit?: string | null;
+  Operating_Unit_Name?: string | null;
+};
+
+async function loadNodeEntityMap(): Promise<Map<string, string[]>> {
+  const result = await executeQuery<{ Node_ID: string; Entity_Code: string }>(
+    `SELECT Node_ID, Entity_Code FROM admin.Node_Entity ORDER BY Node_ID, Entity_Code`
+  );
+  const map = new Map<string, string[]>();
+  if (result.error) return map;
+  for (const row of result.data || []) {
+    const list = map.get(row.Node_ID) || [];
+    list.push(row.Entity_Code);
+    map.set(row.Node_ID, list);
+  }
+  return map;
+}
+
+export async function setNodeEntityCodes(
+  nodeId: string,
+  entityCodes: string[],
+  createdBy?: string
+): Promise<void> {
+  const normalized = [...new Set(entityCodes.map((c) => c.trim().toUpperCase()).filter(Boolean))];
+  const del = await executeQuery(
+    `DELETE FROM admin.Node_Entity WHERE Node_ID = @nodeId`,
+    { nodeId }
+  );
+  if (del.error) throw new Error(del.error);
+
+  for (const code of normalized) {
+    const ins = await executeQuery(
+      `INSERT INTO admin.Node_Entity (Node_ID, Entity_Code, Created_By)
+       VALUES (@nodeId, @entityCode, @createdBy)`,
+      { nodeId, entityCode: code, createdBy: createdBy || null }
+    );
+    if (ins.error) throw new Error(ins.error);
+  }
+}
+
 /**
  * Get all nodes as flat list
  */
 export async function getAllNodes(): Promise<NodeTree[]> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
+  const result = await executeQuery<DbNode>(
     `SELECT * FROM admin.Node ORDER BY Node_ID`
   );
   
   if (result.error) {
     throw new Error(result.error);
   }
-  
-  return (result.data || []).map(transformNode);
+
+  const entityMap = await loadNodeEntityMap();
+  return (result.data || []).map((n) => transformNode(n, entityMap.get(n.Node_ID)));
 }
 
 /**
  * Get node by ID (returns NodeTree format)
  */
 export async function getNodeById(nodeId: string): Promise<NodeTree | null> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
+  const result = await executeQuery<DbNode>(
     `SELECT * FROM admin.Node WHERE Node_ID = @nodeId`,
     { nodeId }
   );
@@ -32,8 +77,9 @@ export async function getNodeById(nodeId: string): Promise<NodeTree | null> {
   if (result.error || !result.data || result.data.length === 0) {
     return null;
   }
-  
-  return transformNode(result.data[0]);
+
+  const entityMap = await loadNodeEntityMap();
+  return transformNode(result.data[0], entityMap.get(nodeId));
 }
 
 /**
@@ -43,7 +89,10 @@ function isTruthy(v: boolean | number | undefined): boolean {
   return v === true || v === 1;
 }
 
-function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number; Is_Central_Office?: boolean | number; Country_Code?: string | null }): NodeTree {
+function transformNodeToTree(
+  node: DbNode,
+  entityCodes?: string[]
+): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
@@ -52,14 +101,14 @@ function transformNodeToTree(node: Node & { Is_School_Node?: boolean | number; I
     isCentralOffice: isTruthy(node.Is_Central_Office),
     countryCode: node.Country_Code ?? null,
     parentNodeId: node.Parent_Node_ID,
+    operatingUnit: node.Operating_Unit ?? null,
+    operatingUnitName: node.Operating_Unit_Name ?? null,
+    entityCodes: entityCodes ?? [],
     children: [],
   };
 }
 
-/**
- * Transform database node to API format (flat)
- */
-function transformNode(node: Node & { Is_School_Node?: boolean | number; Is_Central_Office?: boolean | number; Country_Code?: string | null }): NodeTree {
+function transformNode(node: DbNode, entityCodes?: string[]): NodeTree {
   return {
     nodeId: node.Node_ID,
     nodeDescription: node.Node_Description,
@@ -68,6 +117,9 @@ function transformNode(node: Node & { Is_School_Node?: boolean | number; Is_Cent
     isCentralOffice: isTruthy(node.Is_Central_Office),
     countryCode: node.Country_Code ?? null,
     parentNodeId: node.Parent_Node_ID,
+    operatingUnit: node.Operating_Unit ?? null,
+    operatingUnitName: node.Operating_Unit_Name ?? null,
+    entityCodes: entityCodes ?? [],
   };
 }
 
@@ -93,7 +145,7 @@ export async function getHeadOfficeNodeId(): Promise<string | null> {
  * Get nodes as tree structure
  */
 export async function getNodesTree(): Promise<NodeTree[]> {
-  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
+  const result = await executeQuery<DbNode>(
     `SELECT * FROM admin.Node ORDER BY Node_ID`
   );
   
@@ -102,14 +154,13 @@ export async function getNodesTree(): Promise<NodeTree[]> {
   }
   
   const nodes = result.data || [];
+  const entityMap = await loadNodeEntityMap();
   
-  // Build tree structure with transformed nodes
   const nodeMap = new Map<string, NodeTree>();
   const rootNodes: NodeTree[] = [];
   
-  // Create map of all nodes (transformed)
   nodes.forEach(node => {
-    nodeMap.set(node.Node_ID, transformNodeToTree(node));
+    nodeMap.set(node.Node_ID, transformNodeToTree(node, entityMap.get(node.Node_ID)));
   });
   
   // Build tree
@@ -233,6 +284,16 @@ export async function updateNode(
     updates.push('Country_Code = @countryCode');
     params.countryCode = updateRequest.countryCode || null;
   }
+
+  if (updateRequest.operatingUnit !== undefined) {
+    updates.push('Operating_Unit = @operatingUnit');
+    params.operatingUnit = updateRequest.operatingUnit || null;
+  }
+
+  if (updateRequest.operatingUnitName !== undefined) {
+    updates.push('Operating_Unit_Name = @operatingUnitName');
+    params.operatingUnitName = updateRequest.operatingUnitName || null;
+  }
   
   if (updateRequest.parentNodeId !== undefined) {
     // Validate parent node exists if provided
@@ -258,8 +319,8 @@ export async function updateNode(
     params.parentNodeId = updateRequest.parentNodeId || null;
   }
   
-  if (updates.length === 0) {
-    const nodeResult = await executeQuery<Node & { Is_School_Node?: boolean }>(
+  if (updates.length === 0 && updateRequest.entityCodes === undefined) {
+    const nodeResult = await executeQuery<DbNode>(
       `SELECT * FROM admin.Node WHERE Node_ID = @nodeId`,
       { nodeId }
     );
@@ -267,25 +328,31 @@ export async function updateNode(
     if (nodeResult.error || !nodeResult.data || nodeResult.data.length === 0) {
       throw new Error('Node not found');
     }
+
+    const entityMap = await loadNodeEntityMap();
+    return transformNode(nodeResult.data[0], entityMap.get(nodeId));
+  }
+  
+  if (updates.length > 0) {
+    const result = await executeQuery<DbNode>(
+      `UPDATE admin.Node 
+       SET ${updates.join(', ')}
+       WHERE Node_ID = @nodeId`,
+      params
+    );
     
-    return transformNode(nodeResult.data[0]);
+    if (result.error) {
+      throw new Error(result.error || 'Failed to update node');
+    }
   }
-  
-  // Modified_Date is updated by trigger
-  
-  const result = await executeQuery<Node & { Is_School_Node?: boolean | number }>(
-    `UPDATE admin.Node 
-     SET ${updates.join(', ')}
-     WHERE Node_ID = @nodeId;
-     SELECT * FROM admin.Node WHERE Node_ID = @nodeId`,
-    params
-  );
-  
-  if (result.error || !result.data || result.data.length === 0) {
-    throw new Error(result.error || 'Failed to update node');
+
+  if (updateRequest.entityCodes !== undefined) {
+    await setNodeEntityCodes(nodeId, updateRequest.entityCodes);
   }
-  
-  return transformNode(result.data[0]);
+
+  const refreshed = await getNodeById(nodeId);
+  if (!refreshed) throw new Error('Node not found');
+  return refreshed;
 }
 
 /**

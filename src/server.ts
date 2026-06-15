@@ -40,6 +40,7 @@ import reportGroupsRoutes from './routes/reportGroups.js';
 import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 import syncRoutes from './routes/sync.js';
 import fisRoutes from './routes/fis.js';
+import fisEntitiesRoutes from './routes/fisEntities.js';
 import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
 import { startFisSftpScheduler, stopFisSftpScheduler } from './scheduler/FisSftpScheduler.js';
 
@@ -116,6 +117,7 @@ app.use('/api/microsoft-tenant-config', microsoftTenantConfigRoutes);
 app.use('/api/sidebar-access', sidebarAccessRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/fis', fisRoutes);
+app.use('/api/fis-entities', fisEntitiesRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {

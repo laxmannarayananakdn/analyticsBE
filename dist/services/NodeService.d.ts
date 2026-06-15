@@ -2,6 +2,7 @@
  * Node Management Service
  */
 import { CreateNodeRequest, UpdateNodeRequest, NodeTree } from '../types/auth.js';
+export declare function setNodeEntityCodes(nodeId: string, entityCodes: string[], createdBy?: string): Promise<void>;
 /**
  * Get all nodes as flat list
  */
