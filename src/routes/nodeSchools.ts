@@ -5,6 +5,7 @@
 import express from 'express';
 import {
   getSchoolsByNode,
+  getAllSchoolAssignments,
   assignSchoolToNode,
   unassignSchoolFromNode,
 } from '../services/SchoolService.js';
@@ -15,6 +16,22 @@ const router = express.Router();
 // All routes require authentication and admin access
 router.use(authenticate);
 router.use(requireAdmin);
+
+/**
+ * GET /nodes/school-assignments
+ * All node–school assignments (bulk lookup for admin UI).
+ */
+router.get('/school-assignments', async (_req, res) => {
+  try {
+    const assignments = await getAllSchoolAssignments();
+    res.json(assignments);
+  } catch (error: unknown) {
+    console.error('Get all school assignments error:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Internal server error',
+    });
+  }
+});
 
 /**
  * POST /nodes/:nodeId/schools

@@ -6,6 +6,33 @@ import { executeQuery } from '../config/database.js';
 import { NodeSchool, AssignSchoolRequest } from '../types/auth.js';
 
 /**
+ * Get all node–school assignments (for admin UI lookups).
+ */
+export async function getAllSchoolAssignments(): Promise<
+  Array<{ nodeId: string; schoolId: string; schoolSource: string }>
+> {
+  const result = await executeQuery<{
+    Node_ID: string;
+    School_ID: string;
+    School_Source: string;
+  }>(
+    `SELECT Node_ID, School_ID, School_Source
+     FROM admin.Node_School
+     ORDER BY Node_ID, School_ID, School_Source`
+  );
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  return (result.data || []).map((row) => ({
+    nodeId: row.Node_ID,
+    schoolId: row.School_ID,
+    schoolSource: row.School_Source,
+  }));
+}
+
+/**
  * Get schools assigned to a node
  */
 export async function getSchoolsByNode(nodeId: string): Promise<NodeSchool[]> {

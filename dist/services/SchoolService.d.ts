@@ -3,6 +3,14 @@
  */
 import { NodeSchool, AssignSchoolRequest } from '../types/auth.js';
 /**
+ * Get all node–school assignments (for admin UI lookups).
+ */
+export declare function getAllSchoolAssignments(): Promise<Array<{
+    nodeId: string;
+    schoolId: string;
+    schoolSource: string;
+}>>;
+/**
  * Get schools assigned to a node
  */
 export declare function getSchoolsByNode(nodeId: string): Promise<NodeSchool[]>;

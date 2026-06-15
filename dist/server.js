@@ -94,8 +94,8 @@ app.use('/api/auth/microsoft', microsoftAuthRoutes);
 app.use('/api/users', userMeRoutes); // Must be before userRoutes so /me doesn't match /:email
 app.use('/api/users', userRoutes);
 app.use('/api/departments', departmentRoutes);
+app.use('/api/nodes', nodeSchoolRoutes); // School routes first (/school-assignments before /:id)
 app.use('/api/nodes', nodeRoutes);
-app.use('/api/nodes', nodeSchoolRoutes); // School assignment routes (/nodes/:id/schools)
 app.use('/api/schools', schoolNodeRoutes); // Get node for school (/schools/:id/:source/node)
 app.use('/api/admin/schools', adminSchoolsRoutes); // Get available schools for assignment
 app.use('/api/users', userAccessRoutes); // User access management routes
