@@ -5,7 +5,8 @@ import { efService } from './EFService.js';
 import { fileParserFactory } from './parsers/index.js';
 import { ErrorCode } from '../types/errors.js';
 import { validateFileExtension, validateFileSize, validateRowCount, } from '../utils/fileValidation.js';
-import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
+import { isFinanceFileTypeCode, parseTrialBalanceFileName } from '../utils/financeFileNameResolver.js';
+import { assertHomogeneousTbStatus, assertTbUploadAllowed, isFisPhase4Enabled, maybeLockEntityPeriod, upsertTbPeriodCoverage, } from './FISRunTrackingService.js';
 const FINANCE_DICTIONARY_FILE_TYPES = [
     'FIN_DIC_ACCOUNT',
     'FIN_DIC_ACTIVITY',
@@ -128,6 +129,20 @@ export async function processFinanceFile(params) {
                 errors: [rowCountError],
             };
         }
+        let tbFileStatus;
+        if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+            const parsed = parseTrialBalanceFileName(fileName);
+            if (!parsed?.entityCode || !parsed.periodYyyymm) {
+                const message = `Cannot parse entity/period from trial balance filename "${fileName}". ` +
+                    'Expected TB_YYYYMM_ENTITY_Actual|Budget.xlsx';
+                await efService.updateUploadStatus(uploadId, 'FAILED', records.length, message);
+                return { success: false, uploadId, errorMessage: message };
+            }
+            if (isFisPhase4Enabled()) {
+                await assertTbUploadAllowed(parsed.entityCode, parsed.periodYyyymm);
+                tbFileStatus = assertHomogeneousTbStatus(records);
+            }
+        }
         await deleteExistingFinanceData(fileTypeUpper, fileName);
         const insertFunction = insertRegistry[fileTypeUpper];
         if (!insertFunction) {
@@ -138,6 +153,22 @@ export async function processFinanceFile(params) {
         if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
             console.log(`[FinanceEfUpload] TB loaded to FIN.TrialBalance only (${rowCount} rows, upload ${uploadId}). ` +
                 'No FIS report instance or admin.fis_report_columns changes.');
+            if (isFisPhase4Enabled()) {
+                const parsed = parseTrialBalanceFileName(fileName);
+                if (parsed?.entityCode && parsed.periodYyyymm && tbFileStatus) {
+                    const tbType = fileTypeUpper === 'FIN_TB_BUDGET' ? 'BUDGET' : 'ACTUAL';
+                    await upsertTbPeriodCoverage({
+                        entityCode: parsed.entityCode,
+                        period: parsed.periodYyyymm,
+                        tbType,
+                        uploadId,
+                        fileName,
+                        fileStatus: tbFileStatus,
+                        rowCount,
+                    });
+                    await maybeLockEntityPeriod(parsed.entityCode, parsed.periodYyyymm, uploadedBy);
+                }
+            }
         }
         return {
             success: true,

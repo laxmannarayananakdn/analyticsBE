@@ -10,7 +10,14 @@ import {
   getLatestTrialBalanceUploads,
   buildColumnsFromEntityTrialBalance,
   getReportOutputPreview,
+  getReportOutputPreviewByRunKey,
 } from '../services/FISTrialBalanceProcessService.js';
+import {
+  getPeriodCoverage,
+  getRunCalendar,
+  isFisPhase4Enabled,
+  resolveFileStatusForPeriod,
+} from '../services/FISRunTrackingService.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -85,6 +92,87 @@ router.post('/report-types/:id/rows', async (req: Request, res: Response) => {
     const reportTypeId = parseId(req.params.id, 'report type id');
     const rowId = await fisService.createRow(reportTypeId, req.body);
     return res.status(201).json({ success: true, data: { rowId } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/report-types/:id/column-defs/preview?as_of_period=
+router.get('/report-types/:id/column-defs/preview', async (req: Request, res: Response) => {
+  try {
+    const reportTypeId = parseId(req.params.id, 'report type id');
+    const asOfPeriod = String(req.query.as_of_period ?? req.query.period ?? '').trim();
+    if (!asOfPeriod) {
+      return res.status(400).json({ success: false, error: 'as_of_period query parameter is required' });
+    }
+    const data = await fisService.getColumnDefPreview(reportTypeId, asOfPeriod);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/report-types/:id/column-defs
+router.get('/report-types/:id/column-defs', async (req: Request, res: Response) => {
+  try {
+    const reportTypeId = parseId(req.params.id, 'report type id');
+    const activeOnly = req.query.active_only === '1' || req.query.activeOnly === 'true';
+    const data = await fisService.getColumnDefsByReportType(reportTypeId, activeOnly);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// POST /api/fis/report-types/:id/column-defs
+router.post('/report-types/:id/column-defs', async (req: Request, res: Response) => {
+  try {
+    const reportTypeId = parseId(req.params.id, 'report type id');
+    const columnDefId = await fisService.createColumnDef(reportTypeId, req.body);
+    return res.status(201).json({ success: true, data: { columnDefId } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// PUT /api/fis/column-defs/reorder (before /column-defs/:id)
+router.put('/column-defs/reorder', async (req: Request, res: Response) => {
+  try {
+    const updates = req.body;
+    if (!Array.isArray(updates)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Body must be an array of { columnDefId, displayOrder }',
+      });
+    }
+    const normalized = updates.map((u: { columnDefId?: number; displayOrder?: number }) => ({
+      columnDefId: parseId(String(u.columnDefId), 'columnDefId'),
+      displayOrder: parseId(String(u.displayOrder), 'displayOrder'),
+    }));
+    await fisService.reorderColumnDefs(normalized);
+    return res.json({ success: true, data: { updated: normalized.length } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// PUT /api/fis/column-defs/:id
+router.put('/column-defs/:id', async (req: Request, res: Response) => {
+  try {
+    const columnDefId = parseId(req.params.id, 'column def id');
+    const data = await fisService.updateColumnDef(columnDefId, req.body);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// DELETE /api/fis/column-defs/:id
+router.delete('/column-defs/:id', async (req: Request, res: Response) => {
+  try {
+    const columnDefId = parseId(req.params.id, 'column def id');
+    await fisService.softDeleteColumnDef(columnDefId);
+    return res.json({ success: true, data: { columnDefId } });
   } catch (error) {
     return handleError(res, error);
   }
@@ -189,6 +277,105 @@ router.put('/rules/:ruleId/criteria', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/fis/config
+router.get('/config', async (_req: Request, res: Response) => {
+  try {
+    return res.json({
+      success: true,
+      data: {
+        phase4Enabled: isFisPhase4Enabled(),
+      },
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// POST /api/fis/reports/generate — run-key (NF/PL/BS/CF)
+router.post('/reports/generate', async (req: Request, res: Response) => {
+  try {
+    const reportTypeCode = String(req.body?.reportTypeCode ?? req.body?.report_type_code ?? '').trim();
+    const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
+    const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
+    const data = await fisService.generateReportByRunKey(
+      reportTypeCode,
+      entityCode,
+      asOfPeriod,
+      req.user?.email ?? null
+    );
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/reports/file-status?entity=&period=
+router.get('/reports/file-status', async (req: Request, res: Response) => {
+  try {
+    const entityCode = String(req.query.entity ?? req.query.entity_code ?? '').trim();
+    const period = String(req.query.period ?? req.query.as_of_period ?? '').trim();
+    if (!entityCode || !period) {
+      return res.status(400).json({
+        success: false,
+        error: 'entity and period query parameters are required',
+      });
+    }
+    if (!isFisPhase4Enabled()) {
+      return res.json({ success: true, data: { phase4Enabled: false } });
+    }
+    const data = await resolveFileStatusForPeriod(entityCode, period);
+    return res.json({ success: true, data: { phase4Enabled: true, ...data } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/reports/calendar?entity=&year=
+router.get('/reports/calendar', async (req: Request, res: Response) => {
+  try {
+    if (!isFisPhase4Enabled()) {
+      return res.json({ success: true, data: [] });
+    }
+    const entityCode = req.query.entity ? String(req.query.entity) : undefined;
+    const year = req.query.year ? String(req.query.year) : undefined;
+    const data = await getRunCalendar(entityCode, year);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/reports/output?report_type=&entity=&as_of_period=&file_status=&limit=
+router.get('/reports/output', async (req: Request, res: Response) => {
+  try {
+    const reportTypeCode = String(req.query.report_type ?? req.query.reportType ?? '').trim();
+    const entityCode = String(req.query.entity ?? req.query.entity_code ?? '').trim();
+    const asOfPeriod = String(req.query.as_of_period ?? req.query.period ?? '').trim();
+    const fileStatus = req.query.file_status
+      ? String(req.query.file_status).trim()
+      : req.query.fileStatus
+        ? String(req.query.fileStatus).trim()
+        : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
+    if (!reportTypeCode || !entityCode || !asOfPeriod) {
+      return res.status(400).json({
+        success: false,
+        error: 'report_type, entity, and as_of_period query parameters are required',
+      });
+    }
+    const data = await getReportOutputPreviewByRunKey(
+      reportTypeCode,
+      entityCode,
+      asOfPeriod,
+      Number.isNaN(limit) ? 100 : limit,
+      fileStatus
+    );
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
 // GET /api/fis/instances
 router.get('/instances', async (_req: Request, res: Response) => {
   try {
@@ -267,6 +454,24 @@ router.delete('/instances/:id', async (req: Request, res: Response) => {
     const instanceId = parseId(req.params.id, 'instance id');
     await fisService.softDeleteInstance(instanceId);
     return res.json({ success: true, data: { instanceId } });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /api/fis/trial-balance/coverage?entity=&period=
+router.get('/trial-balance/coverage', async (req: Request, res: Response) => {
+  try {
+    const entityCode = String(req.query.entity ?? req.query.entity_code ?? '').trim();
+    const period = String(req.query.period ?? '').trim();
+    if (!entityCode || !period) {
+      return res.status(400).json({
+        success: false,
+        error: 'entity and period query parameters are required',
+      });
+    }
+    const data = await getPeriodCoverage(entityCode, period);
+    return res.json({ success: true, data });
   } catch (error) {
     return handleError(res, error);
   }

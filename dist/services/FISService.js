@@ -3,6 +3,7 @@
  */
 import { executeQuery, executeProcedure, getConnection, sql } from '../config/database.js';
 import { assertTrialBalanceDataForPeriod, buildMonthColumnSet, compareFisReportColumns, } from './FISTrialBalanceProcessService.js';
+import { completeReportRun, isFisPhase4Enabled, resolveFileStatusForPeriod, startReportRun, } from './FISRunTrackingService.js';
 export class FISServiceError extends Error {
     statusCode;
     constructor(message, statusCode = 500) {
@@ -34,6 +35,17 @@ function toBit(value, defaultValue = 0) {
     if (value === 1 || value === '1' || value === 'true')
         return 1;
     return 0;
+}
+function normalizeHexColor(value) {
+    if (value === undefined || value === null)
+        return null;
+    const color = String(value).trim();
+    if (!color)
+        return null;
+    if (!/^#([A-Fa-f0-9]{6})$/.test(color)) {
+        throw new FISServiceError('Color values must be valid hex codes in #RRGGBB format', 400);
+    }
+    return color.toUpperCase();
 }
 function pickField(obj, camel, snake) {
     if (obj[camel] !== undefined)
@@ -73,7 +85,7 @@ export class FISService {
     // Report types
     // ---------------------------------------------------------------------------
     async getReportTypes() {
-        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description, is_active, created_at, created_by
+        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`);
@@ -83,6 +95,7 @@ export class FISService {
             reportTypeCode: r.report_type_code,
             reportTypeName: r.report_type_name,
             description: r.description,
+            chartId: r.chart_id,
             isActive: r.is_active === true || r.is_active === 1,
             createdAt: r.created_at,
             createdBy: r.created_by,
@@ -94,6 +107,7 @@ export class FISService {
             .toUpperCase();
         const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
         const description = String(data.description ?? '').trim() || null;
+        const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
         const createdBy = (data.createdBy ?? data.created_by ?? null);
         if (!reportTypeCode) {
             throw new FISServiceError('reportTypeCode is required', 400);
@@ -112,22 +126,65 @@ export class FISService {
             throw new FISServiceError('A report type with this code already exists', 409);
         }
         const result = await executeQuery(`INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, created_by
+         report_type_code, report_type_name, description, chart_id, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @createdBy)`, { reportTypeCode, reportTypeName, description, createdBy });
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @createdBy)`, { reportTypeCode, reportTypeName, description, chartId, createdBy });
         throwOnError(result.error);
         if (!result.data?.[0]?.report_type_id) {
             throw new FISServiceError('Failed to create report type');
         }
         return result.data[0].report_type_id;
     }
+    async updateReportType(reportTypeId, data) {
+        const sets = [];
+        const params = { reportTypeId };
+        if (data.reportTypeName !== undefined || data.report_type_name !== undefined) {
+            const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
+            if (!reportTypeName) {
+                throw new FISServiceError('reportTypeName cannot be empty', 400);
+            }
+            sets.push('report_type_name = @reportTypeName');
+            params.reportTypeName = reportTypeName;
+        }
+        if (data.description !== undefined) {
+            sets.push('description = @description');
+            params.description = String(data.description ?? '').trim() || null;
+        }
+        if (data.chartId !== undefined || data.chart_id !== undefined) {
+            sets.push('chart_id = @chartId');
+            params.chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
+        }
+        if (sets.length === 0) {
+            throw new FISServiceError('No fields to update', 400);
+        }
+        const update = await executeQuery(`UPDATE admin.fis_report_types SET ${sets.join(', ')} WHERE report_type_id = @reportTypeId`, params);
+        throwOnError(update.error);
+        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+       FROM admin.fis_report_types
+       WHERE report_type_id = @reportTypeId`, { reportTypeId });
+        throwOnError(result.error);
+        if (!result.data?.length) {
+            throw new FISServiceError('Report type not found', 404);
+        }
+        const r = result.data[0];
+        return {
+            reportTypeId: r.report_type_id,
+            reportTypeCode: r.report_type_code,
+            reportTypeName: r.report_type_name,
+            description: r.description,
+            chartId: r.chart_id,
+            isActive: r.is_active === true || r.is_active === 1,
+            createdAt: r.created_at,
+            createdBy: r.created_by,
+        };
+    }
     // ---------------------------------------------------------------------------
     // Rows
     // ---------------------------------------------------------------------------
     rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
-              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title,
+              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.row_color, rr.font_color,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
@@ -156,13 +213,13 @@ export class FISService {
         const result = await executeQuery(`INSERT INTO admin.fis_report_rows (
          report_type_id, line_item_code, line_item_label, display_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
-         sign_convention, format_type, pct_numerator_code, pct_denominator_code, notes
+         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, row_color, font_color, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
          @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
-         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @notes
+         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @rowColor, @fontColor, @notes
        )`, {
             reportTypeId,
             lineItemCode,
@@ -187,6 +244,9 @@ export class FISService {
                 : data.pct_denominator_code != null
                     ? String(data.pct_denominator_code)
                     : null,
+            isBold: toBit(data.isBold ?? data.is_bold),
+            rowColor: normalizeHexColor(data.rowColor ?? data.row_color),
+            fontColor: normalizeHexColor(data.fontColor ?? data.font_color),
             notes: data.notes != null ? String(data.notes) : null,
         });
         throwOnError(result.error);
@@ -206,6 +266,9 @@ export class FISService {
             { key: 'isTotal', snake: 'is_total', transform: (v) => toBit(v) },
             { key: 'isSpacer', snake: 'is_spacer', transform: (v) => toBit(v) },
             { key: 'isTitle', snake: 'is_title', transform: (v) => toBit(v) },
+            { key: 'isBold', snake: 'is_bold', transform: (v) => toBit(v) },
+            { key: 'rowColor', snake: 'row_color', transform: (v) => normalizeHexColor(v) },
+            { key: 'fontColor', snake: 'font_color', transform: (v) => normalizeHexColor(v) },
             { key: 'aggregationType', snake: 'aggregation_type' },
             { key: 'expression', snake: 'expression' },
             { key: 'signConvention', snake: 'sign_convention', transform: (v) => toInt(v, 'signConvention') },
@@ -271,6 +334,292 @@ export class FISService {
         catch (err) {
             await transaction.rollback();
             const message = err instanceof Error ? err.message : 'Failed to reorder rows';
+            throw new FISServiceError(message);
+        }
+    }
+    // ---------------------------------------------------------------------------
+    // Column definitions (Phase 3)
+    // ---------------------------------------------------------------------------
+    static CALCULATED_COLUMN_KINDS = new Set([
+        'YTD_VARIANCE',
+        'YTD_VAR_PCT',
+        'CM_VARIANCE',
+        'CM_VAR_PCT',
+        'PERF_PCT',
+        'AUDITED_PLACEHOLDER',
+    ]);
+    columnDefSelectSql = `SELECT cd.column_def_id, cd.report_type_id, rt.report_type_code,
+              cd.column_code, cd.column_label, cd.display_order, cd.column_kind, cd.period_scope,
+              cd.tb_type, cd.reference_month, cd.fiscal_year_offset, cd.source_column_codes,
+              cd.format_type, cd.is_active, cd.notes, cd.created_at, cd.updated_at
+       FROM admin.fis_report_column_defs cd
+       INNER JOIN admin.fis_report_types rt ON cd.report_type_id = rt.report_type_id`;
+    mapColumnDef(r) {
+        return {
+            columnDefId: r.column_def_id,
+            reportTypeId: r.report_type_id,
+            reportTypeCode: r.report_type_code,
+            columnCode: r.column_code,
+            columnLabel: r.column_label,
+            displayOrder: r.display_order,
+            columnKind: r.column_kind,
+            periodScope: r.period_scope,
+            tbType: r.tb_type,
+            referenceMonth: r.reference_month,
+            fiscalYearOffset: r.fiscal_year_offset,
+            sourceColumnCodes: r.source_column_codes,
+            formatType: r.format_type,
+            isActive: r.is_active === true || r.is_active === 1,
+            notes: r.notes,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+        };
+    }
+    async assertColumnDefDependencies(reportTypeId, columnCode) {
+        const result = await executeQuery(`SELECT column_code
+       FROM admin.fis_report_column_defs
+       WHERE report_type_id = @reportTypeId
+         AND is_active = 1
+         AND source_column_codes IS NOT NULL
+         AND (
+           source_column_codes = @columnCode
+           OR source_column_codes LIKE @columnCodePrefix
+           OR source_column_codes LIKE @columnCodeMiddle
+           OR source_column_codes LIKE @columnCodeSuffix
+         )`, {
+            reportTypeId,
+            columnCode,
+            columnCodePrefix: `${columnCode},%`,
+            columnCodeMiddle: `%,${columnCode},%`,
+            columnCodeSuffix: `%,${columnCode}`,
+        });
+        throwOnError(result.error);
+        if (result.data?.length) {
+            const dependents = result.data.map((r) => r.column_code).join(', ');
+            throw new FISServiceError(`Cannot deactivate column ${columnCode}: required by calculated column(s): ${dependents}`, 409);
+        }
+    }
+    resolveColumnDefPeriods(def, asOfPeriod) {
+        const period = asOfPeriod.trim();
+        const reportYear = parseInt(period.slice(0, 4), 10);
+        const reportMonth = parseInt(period.slice(4, 6), 10);
+        const fiscalYear = reportYear + (def.fiscalYearOffset ?? 0);
+        let fiscalMonthFrom = 1;
+        let fiscalMonthTo = reportMonth;
+        switch (def.periodScope) {
+            case 'YTD':
+                fiscalMonthFrom = 1;
+                fiscalMonthTo = reportMonth;
+                break;
+            case 'CM':
+                fiscalMonthFrom = reportMonth;
+                fiscalMonthTo = reportMonth;
+                break;
+            case 'MONTH':
+                fiscalMonthFrom = def.referenceMonth ?? 1;
+                fiscalMonthTo = def.referenceMonth ?? 1;
+                break;
+            case 'APPROVED':
+                fiscalMonthFrom = 1;
+                fiscalMonthTo = 1;
+                break;
+            case 'PY':
+                fiscalMonthFrom = def.referenceMonth ?? 12;
+                fiscalMonthTo = def.referenceMonth ?? 12;
+                break;
+            default:
+                fiscalMonthFrom = 1;
+                fiscalMonthTo = reportMonth;
+        }
+        const isYtd = def.periodScope === 'YTD';
+        const periodFrom = String(fiscalYear * 100 + fiscalMonthFrom);
+        const periodTo = String(fiscalYear * 100 + fiscalMonthTo);
+        const calculated = FISService.CALCULATED_COLUMN_KINDS.has(def.columnKind);
+        const skipTbQuery = calculated ||
+            (def.columnKind === 'POINT_IN_TIME' &&
+                def.periodScope === 'MONTH' &&
+                (def.referenceMonth ?? 0) > reportMonth);
+        return {
+            fiscalYear,
+            fiscalMonthFrom,
+            fiscalMonthTo,
+            isYtd,
+            periodFrom,
+            periodTo,
+            skipTbQuery,
+            effectiveTbType: def.columnKind === 'APPROVED_BUDGET' ? 'BUDGET' : def.tbType,
+        };
+    }
+    async getColumnDefsByReportType(reportTypeId, activeOnly = false) {
+        const result = await executeQuery(`${this.columnDefSelectSql}
+       WHERE cd.report_type_id = @reportTypeId
+         ${activeOnly ? 'AND cd.is_active = 1' : ''}
+       ORDER BY cd.display_order`, { reportTypeId });
+        throwOnError(result.error);
+        return (result.data || []).map((r) => this.mapColumnDef(r));
+    }
+    async getColumnDefPreview(reportTypeId, asOfPeriod) {
+        const period = asOfPeriod.trim();
+        if (!/^\d{6}$/.test(period)) {
+            throw new FISServiceError('asOfPeriod must be YYYYMM', 400);
+        }
+        const defs = await this.getColumnDefsByReportType(reportTypeId, true);
+        return defs.map((def) => ({
+            ...def,
+            resolution: this.resolveColumnDefPeriods(def, period),
+        }));
+    }
+    async createColumnDef(reportTypeId, data) {
+        const columnCode = String(data.columnCode ?? data.column_code ?? '')
+            .trim()
+            .toUpperCase();
+        const columnLabel = String(data.columnLabel ?? data.column_label ?? '').trim();
+        const columnKind = String(data.columnKind ?? data.column_kind ?? 'TB_SUM')
+            .trim()
+            .toUpperCase();
+        const periodScope = String(data.periodScope ?? data.period_scope ?? 'YTD')
+            .trim()
+            .toUpperCase();
+        if (!columnCode || !columnLabel) {
+            throw new FISServiceError('columnCode and columnLabel are required', 400);
+        }
+        if (!/^[A-Z0-9_]+$/.test(columnCode)) {
+            throw new FISServiceError('columnCode may only contain letters, numbers, and underscores', 400);
+        }
+        const maxOrder = await executeQuery(`SELECT MAX(display_order) AS max_order
+       FROM admin.fis_report_column_defs
+       WHERE report_type_id = @reportTypeId`, { reportTypeId });
+        throwOnError(maxOrder.error);
+        const displayOrder = data.displayOrder !== undefined || data.display_order !== undefined
+            ? toInt(data.displayOrder ?? data.display_order, 'displayOrder')
+            : (Number(maxOrder.data?.[0]?.max_order) || 0) + 1;
+        const tbTypeRaw = data.tbType ?? data.tb_type;
+        const tbType = tbTypeRaw != null && String(tbTypeRaw).trim() !== ''
+            ? String(tbTypeRaw).trim().toUpperCase()
+            : null;
+        const result = await executeQuery(`INSERT INTO admin.fis_report_column_defs (
+         report_type_id, column_code, column_label, display_order,
+         column_kind, period_scope, tb_type, reference_month, fiscal_year_offset,
+         source_column_codes, format_type, notes
+       )
+       OUTPUT INSERTED.column_def_id
+       VALUES (
+         @reportTypeId, @columnCode, @columnLabel, @displayOrder,
+         @columnKind, @periodScope, @tbType, @referenceMonth, @fiscalYearOffset,
+         @sourceColumnCodes, @formatType, @notes
+       )`, {
+            reportTypeId,
+            columnCode,
+            columnLabel,
+            displayOrder,
+            columnKind,
+            periodScope,
+            tbType,
+            referenceMonth: data.referenceMonth != null
+                ? toInt(data.referenceMonth, 'referenceMonth')
+                : data.reference_month != null
+                    ? toInt(data.reference_month, 'referenceMonth')
+                    : null,
+            fiscalYearOffset: toInt(data.fiscalYearOffset ?? data.fiscal_year_offset ?? 0, 'fiscalYearOffset'),
+            sourceColumnCodes: data.sourceColumnCodes != null
+                ? String(data.sourceColumnCodes)
+                : data.source_column_codes != null
+                    ? String(data.source_column_codes)
+                    : null,
+            formatType: String(data.formatType ?? data.format_type ?? 'NUMBER'),
+            notes: data.notes != null ? String(data.notes) : null,
+        });
+        throwOnError(result.error);
+        if (!result.data?.[0]?.column_def_id) {
+            throw new FISServiceError('Failed to create column definition');
+        }
+        return result.data[0].column_def_id;
+    }
+    async updateColumnDef(columnDefId, data) {
+        const existing = await executeQuery(`SELECT column_def_id, report_type_id, column_code, column_kind
+       FROM admin.fis_report_column_defs
+       WHERE column_def_id = @columnDefId`, { columnDefId });
+        throwOnError(existing.error);
+        if (!existing.data?.length) {
+            throw new FISServiceError('Column definition not found', 404);
+        }
+        const current = existing.data[0];
+        const isCalculated = FISService.CALCULATED_COLUMN_KINDS.has(current.column_kind);
+        if (data.isActive === false || data.is_active === 0 || data.is_active === false) {
+            await this.assertColumnDefDependencies(current.report_type_id, current.column_code);
+        }
+        const sets = [];
+        const params = { columnDefId };
+        const editableFields = [
+            { key: 'columnLabel', snake: 'column_label' },
+            { key: 'notes', snake: 'notes' },
+            { key: 'formatType', snake: 'format_type' },
+            { key: 'isActive', snake: 'is_active', transform: (v) => toBit(v) },
+        ];
+        if (!isCalculated) {
+            editableFields.push({ key: 'columnKind', snake: 'column_kind', transform: (v) => String(v).trim().toUpperCase() }, { key: 'periodScope', snake: 'period_scope', transform: (v) => String(v).trim().toUpperCase() }, { key: 'tbType', snake: 'tb_type', transform: (v) => (v == null || v === '' ? null : String(v).trim().toUpperCase()) }, {
+                key: 'referenceMonth',
+                snake: 'reference_month',
+                transform: (v) => (v == null || v === '' ? null : toInt(v, 'referenceMonth')),
+            }, { key: 'fiscalYearOffset', snake: 'fiscal_year_offset', transform: (v) => toInt(v, 'fiscalYearOffset') }, { key: 'sourceColumnCodes', snake: 'source_column_codes' });
+        }
+        for (const f of editableFields) {
+            const val = pickField(data, f.key, f.snake);
+            if (val !== undefined) {
+                sets.push(`${f.snake} = @${f.key}`);
+                params[f.key] = f.transform ? f.transform(val) : val === '' ? null : val;
+            }
+        }
+        if (sets.length === 0) {
+            throw new FISServiceError('No fields to update', 400);
+        }
+        sets.push('updated_at = GETDATE()');
+        const update = await executeQuery(`UPDATE admin.fis_report_column_defs SET ${sets.join(', ')} WHERE column_def_id = @columnDefId`, params);
+        throwOnError(update.error);
+        const result = await executeQuery(`${this.columnDefSelectSql} WHERE cd.column_def_id = @columnDefId`, { columnDefId });
+        throwOnError(result.error);
+        if (!result.data?.length) {
+            throw new FISServiceError('Column definition not found after update', 404);
+        }
+        return this.mapColumnDef(result.data[0]);
+    }
+    async softDeleteColumnDef(columnDefId) {
+        const existing = await executeQuery(`SELECT report_type_id, column_code FROM admin.fis_report_column_defs WHERE column_def_id = @columnDefId`, { columnDefId });
+        throwOnError(existing.error);
+        if (!existing.data?.length) {
+            throw new FISServiceError('Column definition not found', 404);
+        }
+        await this.assertColumnDefDependencies(existing.data[0].report_type_id, existing.data[0].column_code);
+        const result = await executeQuery(`UPDATE admin.fis_report_column_defs SET is_active = 0, updated_at = GETDATE() WHERE column_def_id = @columnDefId`, { columnDefId });
+        throwOnError(result.error);
+    }
+    async reorderColumnDefs(updates) {
+        if (!updates.length)
+            return;
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        try {
+            for (const u of updates) {
+                const request = new sql.Request(transaction);
+                request.input('columnDefId', sql.Int, u.columnDefId);
+                await request.query(`UPDATE admin.fis_report_column_defs
+           SET display_order = -column_def_id, updated_at = GETDATE()
+           WHERE column_def_id = @columnDefId AND is_active = 1`);
+            }
+            for (const u of updates) {
+                const request = new sql.Request(transaction);
+                request.input('columnDefId', sql.Int, u.columnDefId);
+                request.input('displayOrder', sql.Int, u.displayOrder);
+                await request.query(`UPDATE admin.fis_report_column_defs
+           SET display_order = @displayOrder, updated_at = GETDATE()
+           WHERE column_def_id = @columnDefId AND is_active = 1`);
+            }
+            await transaction.commit();
+        }
+        catch (err) {
+            await transaction.rollback();
+            const message = err instanceof Error ? err.message : 'Failed to reorder column definitions';
             throw new FISServiceError(message);
         }
     }
@@ -771,7 +1120,7 @@ export class FISService {
             }
         }
         await this.reorderInstanceColumns(instanceId);
-        const result = await executeProcedure('rp.usp_GenerateFISReport', { instance_id: instanceId });
+        const result = await executeProcedure('rp.usp_GenerateFISReportByInstance', { instance_id: instanceId });
         throwOnError(result.error);
         const countResult = await executeQuery(`SELECT COUNT(*) AS total FROM rp.fis_report_output WHERE instance_id = @instanceId`, { instanceId });
         throwOnError(countResult.error);
@@ -781,6 +1130,106 @@ export class FISService {
             entityCode: scope?.entityCode.trim().toUpperCase(),
             period: scope?.period.trim(),
         };
+    }
+    /** Run-key generation for NF / PL / BS / CF (no instances). */
+    async generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, triggeredBy) {
+        const reportType = reportTypeCode.trim().toUpperCase();
+        const entity = entityCode.trim().toUpperCase();
+        const period = asOfPeriod.trim();
+        if (!reportType) {
+            throw new FISServiceError('reportTypeCode is required', 400);
+        }
+        if (!entity) {
+            throw new FISServiceError('entityCode is required', 400);
+        }
+        if (!/^\d{6}$/.test(period)) {
+            throw new FISServiceError('asOfPeriod must be YYYYMM', 400);
+        }
+        if (reportType === 'MPR') {
+            throw new FISServiceError('MPR reports use instance-based generation', 400);
+        }
+        const allowed = new Set(['NF', 'PL', 'BS', 'CF']);
+        if (!allowed.has(reportType)) {
+            throw new FISServiceError(`Unsupported report type: ${reportType}`, 400);
+        }
+        const typeCheck = await executeQuery(`SELECT report_type_id FROM admin.fis_report_types
+       WHERE report_type_code = @reportType AND is_active = 1`, { reportType });
+        throwOnError(typeCheck.error);
+        if (!typeCheck.data?.length) {
+            throw new FISServiceError(`Report type ${reportType} not found`, 404);
+        }
+        try {
+            await assertTrialBalanceDataForPeriod(entity, period);
+        }
+        catch (err) {
+            throw new FISServiceError(err instanceof Error ? err.message : 'No trial balance data for scope', 400);
+        }
+        const phase4 = isFisPhase4Enabled();
+        let fileStatus;
+        let isTbLocked = false;
+        let runId = null;
+        if (phase4) {
+            const resolved = await resolveFileStatusForPeriod(entity, period);
+            fileStatus = resolved.fileStatus;
+            isTbLocked = resolved.isTbLocked;
+            runId = await startReportRun({
+                reportTypeCode: reportType,
+                entityCode: entity,
+                asOfPeriod: period,
+                fileStatus: resolved.fileStatus,
+                triggeredBy: triggeredBy ?? null,
+                actualUploadId: resolved.actualUploadId,
+                budgetUploadId: resolved.budgetUploadId,
+                actualFileName: resolved.actualFileName,
+                budgetFileName: resolved.budgetFileName,
+                actualTbStatus: resolved.actualTbStatus,
+                budgetTbStatus: resolved.budgetTbStatus,
+            });
+        }
+        const procParams = {
+            report_type_code: reportType,
+            entity_code: entity,
+            as_of_period: period,
+        };
+        if (phase4 && fileStatus) {
+            procParams.file_status = fileStatus;
+        }
+        try {
+            const result = await executeProcedure('rp.usp_GenerateFISReport', procParams);
+            throwOnError(result.error);
+            const countSql = phase4 && fileStatus
+                ? `SELECT COUNT(*) AS total FROM rp.fis_report_output
+           WHERE report_type_code = @reportType
+             AND entity_code = @entity
+             AND as_of_period = @period
+             AND file_status = @fileStatus`
+                : `SELECT COUNT(*) AS total FROM rp.fis_report_output
+           WHERE report_type_code = @reportType
+             AND entity_code = @entity
+             AND as_of_period = @period`;
+            const countParams = { reportType, entity, period };
+            if (phase4 && fileStatus) {
+                countParams.fileStatus = fileStatus;
+            }
+            const countResult = await executeQuery(countSql, countParams);
+            throwOnError(countResult.error);
+            const outputRowCount = Number(countResult.data?.[0]?.total) || 0;
+            await completeReportRun(runId, true, outputRowCount);
+            return {
+                reportTypeCode: reportType,
+                entityCode: entity,
+                asOfPeriod: period,
+                outputRowCount,
+                ...(phase4 ? { fileStatus, isTbLocked } : {}),
+            };
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await completeReportRun(runId, false, 0, message);
+            if (err instanceof FISServiceError)
+                throw err;
+            throw new FISServiceError(message);
+        }
     }
     // ---------------------------------------------------------------------------
     // Dictionary autocomplete
@@ -819,6 +1268,9 @@ export class FISService {
             isTotal: r.is_total === true || r.is_total === 1,
             isSpacer: r.is_spacer === true || r.is_spacer === 1,
             isTitle: r.is_title === true || r.is_title === 1,
+            isBold: r.is_bold === true || r.is_bold === 1,
+            rowColor: r.row_color,
+            fontColor: r.font_color,
             aggregationType: r.aggregation_type,
             expression: r.expression,
             signConvention: r.sign_convention,

@@ -12,6 +12,9 @@ export interface TbEntityPeriod {
     budgetUploadedAt: string | null;
     actualRowCount: number | null;
     budgetRowCount: number | null;
+    actualFileStatus?: string | null;
+    budgetFileStatus?: string | null;
+    isTbLocked?: boolean;
 }
 export interface TbUploadInfo {
     uploadId: number;
@@ -23,8 +26,9 @@ export interface TbUploadInfo {
 }
 export interface FisReportOutputRow {
     outputId: number;
-    instanceId: number;
+    instanceId: number | null;
     columnId: number;
+    columnCode?: string | null;
     columnLabel: string;
     lineItemCode: string;
     lineItemLabel: string;
@@ -41,7 +45,7 @@ export declare function getLatestTrialBalanceUploads(entityCode: string, period:
     budgetSourcePeriod: string | null;
     budgetUsesFallback: boolean;
 }>;
-export type FisColumnKind = 'TB_SUM' | 'YTD_VARIANCE' | 'YTD_VAR_PCT';
+export type FisColumnKind = 'TB_SUM' | 'APPROVED_BUDGET' | 'YTD_VARIANCE' | 'YTD_VAR_PCT' | 'CM_VARIANCE' | 'CM_VAR_PCT' | 'PERF_PCT' | 'POINT_IN_TIME' | 'AUDITED_PLACEHOLDER';
 export type FisColumnTbType = 'ACTUAL' | 'BUDGET';
 export interface FisMonthColumnDef {
     columnOrder: number;
@@ -70,6 +74,10 @@ export declare function buildColumnsFromEntityTrialBalance(entityCode: string, p
 /** Actual required for the period; budget may fall back to January (or latest revision). */
 export declare function assertTrialBalanceDataForPeriod(entityCode: string, period: string): Promise<void>;
 export declare function getReportOutputPreview(instanceId: number, limit?: number): Promise<{
+    totalRows: number;
+    rows: FisReportOutputRow[];
+}>;
+export declare function getReportOutputPreviewByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, limit?: number, fileStatus?: string | null): Promise<{
     totalRows: number;
     rows: FisReportOutputRow[];
 }>;

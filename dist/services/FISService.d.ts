@@ -2,6 +2,7 @@
  * FIS (Financial Information System) Reporting Service
  */
 import { type FisColumnKind, type FisColumnTbType } from './FISTrialBalanceProcessService.js';
+import { type FisFileStatus } from './FISRunTrackingService.js';
 export declare class FISServiceError extends Error {
     statusCode: number;
     constructor(message: string, statusCode?: number);
@@ -11,6 +12,7 @@ export interface FisReportType {
     reportTypeCode: string;
     reportTypeName: string;
     description: string | null;
+    chartId: string | null;
     isActive: boolean;
     createdAt: Date;
     createdBy: string | null;
@@ -27,6 +29,9 @@ export interface FisReportRow {
     isTotal: boolean;
     isSpacer: boolean;
     isTitle: boolean;
+    isBold: boolean;
+    rowColor: string | null;
+    fontColor: string | null;
     aggregationType: string;
     expression: string | null;
     signConvention: number;
@@ -75,6 +80,38 @@ export interface FisReportColumn {
     tbType?: FisColumnTbType | null;
     columnKind?: FisColumnKind;
 }
+export interface FisReportColumnDef {
+    columnDefId: number;
+    reportTypeId: number;
+    reportTypeCode?: string;
+    columnCode: string;
+    columnLabel: string;
+    displayOrder: number;
+    columnKind: FisColumnKind;
+    periodScope: string;
+    tbType: FisColumnTbType | null;
+    referenceMonth: number | null;
+    fiscalYearOffset: number;
+    sourceColumnCodes: string | null;
+    formatType: string;
+    isActive: boolean;
+    notes: string | null;
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+export interface FisColumnDefResolution {
+    fiscalYear: number;
+    fiscalMonthFrom: number;
+    fiscalMonthTo: number;
+    isYtd: boolean;
+    periodFrom: string;
+    periodTo: string;
+    skipTbQuery: boolean;
+    effectiveTbType: FisColumnTbType | null;
+}
+export interface FisColumnDefPreviewRow extends FisReportColumnDef {
+    resolution: FisColumnDefResolution;
+}
 export interface FisReportInstanceSummary {
     instanceId: number;
     reportTypeId: number;
@@ -98,6 +135,7 @@ export interface DictionaryCodeItem {
 export declare class FISService {
     getReportTypes(): Promise<FisReportType[]>;
     createReportType(data: Record<string, unknown>): Promise<number>;
+    updateReportType(reportTypeId: number, data: Record<string, unknown>): Promise<FisReportType>;
     private rowSelectSql;
     getRowById(rowId: number): Promise<FisReportRow | null>;
     getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]>;
@@ -106,6 +144,20 @@ export declare class FISService {
     softDeleteRow(rowId: number): Promise<void>;
     reorderRows(updates: Array<{
         rowId: number;
+        displayOrder: number;
+    }>): Promise<void>;
+    private static readonly CALCULATED_COLUMN_KINDS;
+    private columnDefSelectSql;
+    private mapColumnDef;
+    private assertColumnDefDependencies;
+    resolveColumnDefPeriods(def: Pick<FisReportColumnDef, 'periodScope' | 'columnKind' | 'referenceMonth' | 'fiscalYearOffset' | 'tbType'>, asOfPeriod: string): FisColumnDefPreviewRow['resolution'];
+    getColumnDefsByReportType(reportTypeId: number, activeOnly?: boolean): Promise<FisReportColumnDef[]>;
+    getColumnDefPreview(reportTypeId: number, asOfPeriod: string): Promise<FisColumnDefPreviewRow[]>;
+    createColumnDef(reportTypeId: number, data: Record<string, unknown>): Promise<number>;
+    updateColumnDef(columnDefId: number, data: Record<string, unknown>): Promise<FisReportColumnDef>;
+    softDeleteColumnDef(columnDefId: number): Promise<void>;
+    reorderColumnDefs(updates: Array<{
+        columnDefId: number;
         displayOrder: number;
     }>): Promise<void>;
     getRulesForRow(rowId: number): Promise<FisFilterRule[]>;
@@ -135,6 +187,15 @@ export declare class FISService {
         outputRowCount: number;
         entityCode?: string;
         period?: string;
+    }>;
+    /** Run-key generation for NF / PL / BS / CF (no instances). */
+    generateReportByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, triggeredBy?: string | null): Promise<{
+        reportTypeCode: string;
+        entityCode: string;
+        asOfPeriod: string;
+        outputRowCount: number;
+        fileStatus?: FisFileStatus;
+        isTbLocked?: boolean;
     }>;
     getDictionaryCodes(dictionaryType: string, entity?: string, search?: string): Promise<DictionaryCodeItem[]>;
     private mapRow;

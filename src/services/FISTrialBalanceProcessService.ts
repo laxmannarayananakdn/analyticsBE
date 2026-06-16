@@ -3,6 +3,8 @@
  */
 
 import { executeQuery } from '../config/database.js';
+import { isFisPhase4Enabled } from './FISRunTrackingService.js';
+
 export interface TbEntityPeriod {
   entityCode: string;
   period: string;
@@ -14,6 +16,9 @@ export interface TbEntityPeriod {
   budgetUploadedAt: string | null;
   actualRowCount: number | null;
   budgetRowCount: number | null;
+  actualFileStatus?: string | null;
+  budgetFileStatus?: string | null;
+  isTbLocked?: boolean;
 }
 
 export interface TbUploadInfo {
@@ -27,8 +32,9 @@ export interface TbUploadInfo {
 
 export interface FisReportOutputRow {
   outputId: number;
-  instanceId: number;
+  instanceId: number | null;
   columnId: number;
+  columnCode?: string | null;
   columnLabel: string;
   lineItemCode: string;
   lineItemLabel: string;
@@ -148,7 +154,51 @@ async function fetchLatestTrialBalanceUploads(): Promise<LatestTbUploadRow[]> {
 
 export async function listTrialBalanceEntityPeriods(): Promise<TbEntityPeriod[]> {
   const rows = await fetchLatestTrialBalanceUploads();
-  return groupLatestByEntityPeriod(rows);
+  const periods = groupLatestByEntityPeriod(rows);
+
+  if (!isFisPhase4Enabled() || periods.length === 0) {
+    return periods;
+  }
+
+  const coverageResult = await executeQuery<{
+    entity_code: string;
+    period: string;
+    actual_file_status: string | null;
+    budget_file_status: string | null;
+    is_tb_locked: number;
+  }>(
+    `SELECT
+       c.entity_code, c.period, c.actual_file_status, c.budget_file_status,
+       CASE WHEN l.entity_code IS NOT NULL THEN 1 ELSE 0 END AS is_tb_locked
+     FROM admin.fis_tb_period_coverage c
+     LEFT JOIN admin.fis_entity_period_lock l
+       ON l.entity_code = c.entity_code AND l.period = c.period`
+  );
+  if (coverageResult.error) throw new Error(coverageResult.error);
+
+  type CoverageRow = {
+    entity_code: string;
+    period: string;
+    actual_file_status: string | null;
+    budget_file_status: string | null;
+    is_tb_locked: number;
+  };
+
+  const coverageMap = new Map<string, CoverageRow>();
+  for (const row of coverageResult.data || []) {
+    coverageMap.set(`${row.entity_code}|${row.period}`, row);
+  }
+
+  return periods.map((entry) => {
+    const cov = coverageMap.get(`${entry.entityCode}|${entry.period}`);
+    if (!cov) return entry;
+    return {
+      ...entry,
+      actualFileStatus: cov.actual_file_status,
+      budgetFileStatus: cov.budget_file_status,
+      isTbLocked: cov.is_tb_locked === 1,
+    };
+  });
 }
 
 /** Latest budget period on or before target (same fiscal year); null if none. */
@@ -233,7 +283,16 @@ export async function getLatestTrialBalanceUploads(
   };
 }
 
-export type FisColumnKind = 'TB_SUM' | 'YTD_VARIANCE' | 'YTD_VAR_PCT';
+export type FisColumnKind =
+  | 'TB_SUM'
+  | 'APPROVED_BUDGET'
+  | 'YTD_VARIANCE'
+  | 'YTD_VAR_PCT'
+  | 'CM_VARIANCE'
+  | 'CM_VAR_PCT'
+  | 'PERF_PCT'
+  | 'POINT_IN_TIME'
+  | 'AUDITED_PLACEHOLDER';
 export type FisColumnTbType = 'ACTUAL' | 'BUDGET';
 
 export interface FisMonthColumnDef {
@@ -430,7 +489,7 @@ export async function getReportOutputPreview(
   const safeLimit = Math.min(Math.max(limit, 1), 500);
   const rowsResult = await executeQuery<{
     output_id: number;
-    instance_id: number;
+    instance_id: number | null;
     column_id: number;
     column_label: string;
     line_item_code: string;
@@ -455,6 +514,83 @@ export async function getReportOutputPreview(
       outputId: r.output_id,
       instanceId: r.instance_id,
       columnId: r.column_id,
+      columnLabel: r.column_label,
+      lineItemCode: r.line_item_code,
+      lineItemLabel: r.line_item_label,
+      displayOrder: r.display_order,
+      amount: r.amount,
+      formatType: r.format_type,
+    })),
+  };
+}
+
+export async function getReportOutputPreviewByRunKey(
+  reportTypeCode: string,
+  entityCode: string,
+  asOfPeriod: string,
+  limit = 100,
+  fileStatus?: string | null
+): Promise<{ totalRows: number; rows: FisReportOutputRow[] }> {
+  const reportType = reportTypeCode.trim().toUpperCase();
+  const entity = entityCode.trim().toUpperCase();
+  const period = asOfPeriod.trim();
+  const statusFilter = fileStatus?.trim() || null;
+
+  const countSql = statusFilter
+    ? `SELECT COUNT(*) AS total FROM rp.fis_report_output
+       WHERE report_type_code = @reportType
+         AND entity_code = @entity
+         AND as_of_period = @period
+         AND file_status = @fileStatus`
+    : `SELECT COUNT(*) AS total FROM rp.fis_report_output
+       WHERE report_type_code = @reportType
+         AND entity_code = @entity
+         AND as_of_period = @period`;
+  const countParams: Record<string, unknown> = { reportType, entity, period };
+  if (statusFilter) countParams.fileStatus = statusFilter;
+
+  const countResult = await executeQuery<{ total: number }>(countSql, countParams);
+  if (countResult.error) throw new Error(countResult.error);
+
+  const safeLimit = Math.min(Math.max(limit, 1), 500);
+  const statusWhere = statusFilter ? ` AND o.file_status = @fileStatus` : '';
+  const rowsResult = await executeQuery<{
+    output_id: number;
+    instance_id: number | null;
+    column_id: number;
+    column_code: string | null;
+    column_label: string;
+    line_item_code: string;
+    line_item_label: string;
+    display_order: number;
+    amount: number | null;
+    format_type: string | null;
+  }>(
+    `SELECT TOP (@limit)
+       o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
+       o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
+     FROM rp.fis_report_output o
+     LEFT JOIN admin.fis_report_column_defs cd
+       ON cd.column_code = o.column_code
+      AND cd.report_type_id = (
+        SELECT report_type_id FROM admin.fis_report_types
+        WHERE report_type_code = @reportType
+      )
+     WHERE o.report_type_code = @reportType
+       AND o.entity_code = @entity
+       AND o.as_of_period = @period${statusWhere}
+     ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`,
+    { reportType, entity, period, limit: safeLimit, ...(statusFilter ? { fileStatus: statusFilter } : {}) }
+  );
+  if (rowsResult.error) throw new Error(rowsResult.error);
+
+  return {
+    totalRows: Number(countResult.data?.[0]?.total) || 0,
+    rows: (rowsResult.data || []).map((r) => ({
+      outputId: r.output_id,
+      instanceId: r.instance_id,
+      columnId: r.column_id,
+      columnCode: r.column_code,
       columnLabel: r.column_label,
       lineItemCode: r.line_item_code,
       lineItemLabel: r.line_item_label,
