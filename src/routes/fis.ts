@@ -57,6 +57,17 @@ router.post('/report-types', async (req: Request, res: Response) => {
   }
 });
 
+// PUT /api/fis/report-types/:id
+router.put('/report-types/:id', async (req: Request, res: Response) => {
+  try {
+    const reportTypeId = parseId(req.params.id, 'report type id');
+    const data = await fisService.updateReportType(reportTypeId, req.body);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
 // GET /api/fis/report-types/:id/rows
 router.get('/report-types/:id/rows', async (req: Request, res: Response) => {
   try {

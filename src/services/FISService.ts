@@ -45,6 +45,16 @@ function toBit(value: unknown, defaultValue = 0): number {
   return 0;
 }
 
+function normalizeHexColor(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const color = String(value).trim();
+  if (!color) return null;
+  if (!/^#([A-Fa-f0-9]{6})$/.test(color)) {
+    throw new FISServiceError('Color values must be valid hex codes in #RRGGBB format', 400);
+  }
+  return color.toUpperCase();
+}
+
 function pickField<T>(obj: Record<string, unknown>, camel: string, snake: string): T | undefined {
   if (obj[camel] !== undefined) return obj[camel] as T;
   if (obj[snake] !== undefined) return obj[snake] as T;
@@ -100,6 +110,7 @@ export interface FisReportType {
   reportTypeCode: string;
   reportTypeName: string;
   description: string | null;
+  chartId: string | null;
   isActive: boolean;
   createdAt: Date;
   createdBy: string | null;
@@ -117,6 +128,9 @@ export interface FisReportRow {
   isTotal: boolean;
   isSpacer: boolean;
   isTitle: boolean;
+  isBold: boolean;
+  rowColor: string | null;
+  fontColor: string | null;
   aggregationType: string;
   expression: string | null;
   signConvention: number;
@@ -203,11 +217,12 @@ export class FISService {
       report_type_code: string;
       report_type_name: string;
       description: string | null;
+      chart_id: string | null;
       is_active: boolean | number;
       created_at: Date;
       created_by: string | null;
     }>(
-      `SELECT report_type_id, report_type_code, report_type_name, description, is_active, created_at, created_by
+      `SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`
@@ -218,6 +233,7 @@ export class FISService {
       reportTypeCode: r.report_type_code,
       reportTypeName: r.report_type_name,
       description: r.description,
+      chartId: r.chart_id,
       isActive: r.is_active === true || r.is_active === 1,
       createdAt: r.created_at,
       createdBy: r.created_by,
@@ -230,6 +246,7 @@ export class FISService {
       .toUpperCase();
     const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
     const description = String(data.description ?? '').trim() || null;
+    const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
     const createdBy = (data.createdBy ?? data.created_by ?? null) as string | null;
 
     if (!reportTypeCode) {
@@ -258,11 +275,11 @@ export class FISService {
 
     const result = await executeQuery<{ report_type_id: number }>(
       `INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, created_by
+         report_type_code, report_type_name, description, chart_id, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @createdBy)`,
-      { reportTypeCode, reportTypeName, description, createdBy }
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @createdBy)`,
+      { reportTypeCode, reportTypeName, description, chartId, createdBy }
     );
     throwOnError(result.error);
     if (!result.data?.[0]?.report_type_id) {
@@ -271,13 +288,78 @@ export class FISService {
     return result.data[0].report_type_id;
   }
 
+  async updateReportType(reportTypeId: number, data: Record<string, unknown>): Promise<FisReportType> {
+    const sets: string[] = [];
+    const params: Record<string, unknown> = { reportTypeId };
+
+    if (data.reportTypeName !== undefined || data.report_type_name !== undefined) {
+      const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
+      if (!reportTypeName) {
+        throw new FISServiceError('reportTypeName cannot be empty', 400);
+      }
+      sets.push('report_type_name = @reportTypeName');
+      params.reportTypeName = reportTypeName;
+    }
+
+    if (data.description !== undefined) {
+      sets.push('description = @description');
+      params.description = String(data.description ?? '').trim() || null;
+    }
+
+    if (data.chartId !== undefined || data.chart_id !== undefined) {
+      sets.push('chart_id = @chartId');
+      params.chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
+    }
+
+    if (sets.length === 0) {
+      throw new FISServiceError('No fields to update', 400);
+    }
+
+    const update = await executeQuery(
+      `UPDATE admin.fis_report_types SET ${sets.join(', ')} WHERE report_type_id = @reportTypeId`,
+      params
+    );
+    throwOnError(update.error);
+
+    const result = await executeQuery<{
+      report_type_id: number;
+      report_type_code: string;
+      report_type_name: string;
+      description: string | null;
+      chart_id: string | null;
+      is_active: boolean | number;
+      created_at: Date;
+      created_by: string | null;
+    }>(
+      `SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+       FROM admin.fis_report_types
+       WHERE report_type_id = @reportTypeId`,
+      { reportTypeId }
+    );
+    throwOnError(result.error);
+    if (!result.data?.length) {
+      throw new FISServiceError('Report type not found', 404);
+    }
+    const r = result.data[0];
+    return {
+      reportTypeId: r.report_type_id,
+      reportTypeCode: r.report_type_code,
+      reportTypeName: r.report_type_name,
+      description: r.description,
+      chartId: r.chart_id,
+      isActive: r.is_active === true || r.is_active === 1,
+      createdAt: r.created_at,
+      createdBy: r.created_by,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Rows
   // ---------------------------------------------------------------------------
 
   private rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
-              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title,
+              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.row_color, rr.font_color,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
@@ -316,13 +398,13 @@ export class FISService {
       `INSERT INTO admin.fis_report_rows (
          report_type_id, line_item_code, line_item_label, display_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
-         sign_convention, format_type, pct_numerator_code, pct_denominator_code, notes
+         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, row_color, font_color, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
          @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
-         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @notes
+         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @rowColor, @fontColor, @notes
        )`,
       {
         reportTypeId,
@@ -348,6 +430,9 @@ export class FISService {
           : data.pct_denominator_code != null
             ? String(data.pct_denominator_code)
             : null,
+        isBold: toBit(data.isBold ?? data.is_bold),
+        rowColor: normalizeHexColor(data.rowColor ?? data.row_color),
+        fontColor: normalizeHexColor(data.fontColor ?? data.font_color),
         notes: data.notes != null ? String(data.notes) : null,
       }
     );
@@ -369,6 +454,9 @@ export class FISService {
       { key: 'isTotal', snake: 'is_total', transform: (v) => toBit(v) },
       { key: 'isSpacer', snake: 'is_spacer', transform: (v) => toBit(v) },
       { key: 'isTitle', snake: 'is_title', transform: (v) => toBit(v) },
+      { key: 'isBold', snake: 'is_bold', transform: (v) => toBit(v) },
+      { key: 'rowColor', snake: 'row_color', transform: (v) => normalizeHexColor(v) },
+      { key: 'fontColor', snake: 'font_color', transform: (v) => normalizeHexColor(v) },
       { key: 'aggregationType', snake: 'aggregation_type' },
       { key: 'expression', snake: 'expression' },
       { key: 'signConvention', snake: 'sign_convention', transform: (v) => toInt(v, 'signConvention') },
@@ -1216,6 +1304,9 @@ export class FISService {
     is_total: boolean | number;
     is_spacer: boolean | number;
     is_title: boolean | number;
+    is_bold: boolean | number;
+    row_color: string | null;
+    font_color: string | null;
     aggregation_type: string;
     expression: string | null;
     sign_convention: number;
@@ -1239,6 +1330,9 @@ export class FISService {
       isTotal: r.is_total === true || r.is_total === 1,
       isSpacer: r.is_spacer === true || r.is_spacer === 1,
       isTitle: r.is_title === true || r.is_title === 1,
+      isBold: r.is_bold === true || r.is_bold === 1,
+      rowColor: r.row_color,
+      fontColor: r.font_color,
       aggregationType: r.aggregation_type,
       expression: r.expression,
       signConvention: r.sign_convention,
