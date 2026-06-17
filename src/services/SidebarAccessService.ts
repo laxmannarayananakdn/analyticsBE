@@ -37,6 +37,7 @@ export const ADMIN_ITEMS: { id: string; label: string }[] = [
   { id: 'admin:fis-column-management', label: 'FIS Column Management' },
   { id: 'admin:fis-report-processing', label: 'FIS Report Processing' },
   { id: 'admin:fis-entity-management', label: 'FIS Entity Management' },
+  { id: 'admin:fis-currency-exchange', label: 'FIS Currency Exchange' },
   { id: 'admin:mark-grade-config', label: 'Mark Grade Translation Config' },
   { id: 'admin:users', label: 'User Management' },
   { id: 'admin:access-control', label: 'Access Control' },
