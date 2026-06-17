@@ -207,45 +207,5 @@ export async function claimSyncRunForSchedule(params) {
         return null;
     }
 }
-/**
- * Run FIS SFTP poll work only if this app instance acquires a cluster-wide lock.
- * Uses sp_getapplock on a dedicated pool connection so parallel Azure instances
- * cannot all process the same SFTP files.
- *
- * @returns fn result, or null if another instance is already polling
- */
-export async function withFisSftpPollLock(fn) {
-    const pool = await getConnection();
-    const dedicated = await pool.connect();
-    try {
-        const lockResult = await dedicated.request().query(`DECLARE @lr int;
-       EXEC @lr = sp_getapplock
-         @Resource = N'FisSftpPoll',
-         @LockMode = N'Exclusive',
-         @LockOwner = N'Session',
-         @LockTimeout = 0;
-       SELECT @lr AS lock_result;`);
-        // sp_getapplock: >= 0 means lock granted (0 after wait, 1 immediately)
-        const lr = lockResult.recordset?.[0]?.lock_result;
-        if (lr == null || lr < 0) {
-            console.log('[FisSftp] Poll skipped – another instance holds the SFTP poll lock');
-            return null;
-        }
-        return await fn();
-    }
-    catch (error) {
-        console.error('[FisSftp] Poll lock error:', error);
-        return null;
-    }
-    finally {
-        try {
-            await dedicated.request().query(`EXEC sp_releaseapplock @Resource = N'FisSftpPoll', @LockOwner = N'Session';`);
-        }
-        catch (releaseError) {
-            console.warn('[FisSftp] Failed to release SFTP poll lock:', releaseError);
-        }
-        dedicated.close();
-    }
-}
 export { sql };
 //# sourceMappingURL=database.js.map

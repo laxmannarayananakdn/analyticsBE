@@ -6,7 +6,6 @@
  */
 
 import { getFisSftpConfig, getFisSftpUploadedBy } from '../config/fisSftp.js';
-import { withFisSftpPollLock } from '../config/database.js';
 import { processFinanceFile } from './FinanceEfUploadService.js';
 import { withFisSftp, type FisSftpService, type SftpFileEntry } from './FisSftpService.js';
 import {
@@ -211,53 +210,46 @@ export async function pollFisSftpUnprocessedFiles(): Promise<FisSftpPollResult> 
   const uploadedBy = getFisSftpUploadedBy();
 
   try {
-    const pollResult = await withFisSftpPollLock(async () => {
-      await withFisSftp(config, async (sftp) => {
-        const files = await sftp.listFiles(config.unprocessedDir);
-        result.scanned = files.length;
+    await withFisSftp(config, async (sftp) => {
+      const files = await sftp.listFiles(config.unprocessedDir);
+      result.scanned = files.length;
 
-        if (files.length === 0) {
-          console.log('[FisSftp] No files in unprocessed folder');
-          return;
-        }
+      if (files.length === 0) {
+        console.log('[FisSftp] No files in unprocessed folder');
+        return;
+      }
 
-        const { dic, tb, unknown } = classifyFiles(files);
-        console.log(
-          `[FisSftp] Found ${files.length} file(s): ${dic.length} Dic, ${tb.length} TB, ${unknown.length} unknown`
+      const { dic, tb, unknown } = classifyFiles(files);
+      console.log(
+        `[FisSftp] Found ${files.length} file(s): ${dic.length} Dic, ${tb.length} TB, ${unknown.length} unknown`
+      );
+
+      for (const file of dic) {
+        await processFinanceSftpFile(
+          sftp,
+          file,
+          config.processedDir,
+          config.errorDir,
+          uploadedBy,
+          result
         );
+      }
 
-        for (const file of dic) {
-          await processFinanceSftpFile(
-            sftp,
-            file,
-            config.processedDir,
-            config.errorDir,
-            uploadedBy,
-            result
-          );
-        }
+      for (const file of tb) {
+        await processFinanceSftpFile(
+          sftp,
+          file,
+          config.processedDir,
+          config.errorDir,
+          uploadedBy,
+          result
+        );
+      }
 
-        for (const file of tb) {
-          await processFinanceSftpFile(
-            sftp,
-            file,
-            config.processedDir,
-            config.errorDir,
-            uploadedBy,
-            result
-          );
-        }
-
-        for (const file of unknown) {
-          await moveUnknownFile(sftp, file, config.errorDir, result);
-        }
-      });
-      return result;
+      for (const file of unknown) {
+        await moveUnknownFile(sftp, file, config.errorDir, result);
+      }
     });
-
-    if (pollResult === null) {
-      return result;
-    }
 
     const elapsedMs = Date.now() - startedAt;
     console.log(

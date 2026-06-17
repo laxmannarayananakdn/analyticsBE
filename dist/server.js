@@ -39,6 +39,7 @@ import microsoftTenantConfigRoutes from './routes/microsoftTenantConfig.js';
 import syncRoutes from './routes/sync.js';
 import fisRoutes from './routes/fis.js';
 import fisEntitiesRoutes from './routes/fisEntities.js';
+import fisCurrencyExchangeRoutes from './routes/fisCurrencyExchange.js';
 import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
 import { startFisSftpScheduler, stopFisSftpScheduler } from './scheduler/FisSftpScheduler.js';
 dotenv.config();
@@ -106,6 +107,7 @@ app.use('/api/sidebar-access', sidebarAccessRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/fis', fisRoutes);
 app.use('/api/fis-entities', fisEntitiesRoutes);
+app.use('/api/fis-currency-exchange', fisCurrencyExchangeRoutes);
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({

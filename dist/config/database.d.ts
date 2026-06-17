@@ -48,13 +48,5 @@ export declare function claimSyncRunForSchedule(params: {
     academicYear: string;
     triggeredBy: string;
 }): Promise<number | null>;
-/**
- * Run FIS SFTP poll work only if this app instance acquires a cluster-wide lock.
- * Uses sp_getapplock on a dedicated pool connection so parallel Azure instances
- * cannot all process the same SFTP files.
- *
- * @returns fn result, or null if another instance is already polling
- */
-export declare function withFisSftpPollLock<T>(fn: () => Promise<T>): Promise<T | null>;
 export { sql };
 //# sourceMappingURL=database.d.ts.map

@@ -91,7 +91,7 @@ older build that auto-synced FIS columns.** Redeploy from `main` (workflow
 
 Until redeployed, set `ENABLE_FIS_SFTP_POLLER=false` on AnalyticsBE to stop new auto instances.
 
-- **Scale out:** Only one instance should poll at a time. The app uses a SQL `sp_getapplock` cluster lock so duplicate uploads do not occur when multiple instances are running. For lowest cost and simpler ops, you can also set AnalyticsBE **Instance count = 1** under Scale out.
+- **Scale out:** Keep AnalyticsBE **Instance count = 1** on its App Service Plan. The poller uses an in-process guard (`pollInProgress`) only; do not scale AnalyticsBE above one instance without adding a proper distributed lock (session-scoped `sp_getapplock` is unreliable with the shared SQL connection pool during long SFTP work).
 
 - Store `FIS_SFTP_PASSWORD` in Key Vault and reference it from AnalyticsBE app settings (recommended).
 - For legacy key-based auth: store the private key in Key Vault as a secret with **real line breaks** (multi-line PEM) and reference `FIS_SFTP_PRIVATE_KEY`.
