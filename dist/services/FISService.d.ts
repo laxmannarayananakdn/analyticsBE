@@ -188,7 +188,7 @@ export declare class FISService {
         entityCode?: string;
         period?: string;
     }>;
-    /** Run-key generation for NF / PL / BS / CF (no instances). */
+    /** Run-key generation for NF / PL / BS / CF (no instances). Uses chunked SP calls internally. */
     generateReportByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, triggeredBy?: string | null): Promise<{
         reportTypeCode: string;
         entityCode: string;
@@ -197,6 +197,41 @@ export declare class FISService {
         fileStatus?: FisFileStatus;
         isTbLocked?: boolean;
     }>;
+    /** SUM rows from report row config — used for chunked generation progress. */
+    getSumRowsForRunKey(reportTypeCode: string): Promise<Array<{
+        rowId: number;
+        lineItemCode: string;
+        lineItemLabel: string;
+        displayOrder: number;
+    }>>;
+    /** Single chunk of run-key generation (init / one SUM row / finalize). */
+    generateReportRunKeyChunk(params: {
+        phase: 'init' | 'row' | 'finalize';
+        reportTypeCode: string;
+        entityCode: string;
+        asOfPeriod: string;
+        rowId?: number;
+        runId?: number | null;
+        triggeredBy?: string | null;
+    }): Promise<{
+        reportTypeCode: string;
+        entityCode: string;
+        asOfPeriod: string;
+        phase: 'init' | 'row' | 'finalize';
+        runId?: number | null;
+        fileStatus?: FisFileStatus;
+        isTbLocked?: boolean;
+        outputRowCount?: number;
+        sumRows?: Array<{
+            rowId: number;
+            lineItemCode: string;
+            lineItemLabel: string;
+            displayOrder: number;
+        }>;
+    }>;
+    private prepareRunKeyGeneration;
+    private executeGenerateMode;
+    private countRunKeyOutput;
     getDictionaryCodes(dictionaryType: string, entity?: string, search?: string): Promise<DictionaryCodeItem[]>;
     private mapRow;
 }

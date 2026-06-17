@@ -1131,8 +1131,110 @@ export class FISService {
             period: scope?.period.trim(),
         };
     }
-    /** Run-key generation for NF / PL / BS / CF (no instances). */
+    /** Run-key generation for NF / PL / BS / CF (no instances). Uses chunked SP calls internally. */
     async generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, triggeredBy) {
+        const ctx = await this.prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy);
+        try {
+            await this.executeGenerateMode(ctx.procParams, 'INIT');
+            for (const row of ctx.sumRows) {
+                await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', row.rowId);
+            }
+            await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS');
+            const outputRowCount = await this.countRunKeyOutput(ctx);
+            await completeReportRun(ctx.runId, true, outputRowCount);
+            return {
+                reportTypeCode: ctx.reportType,
+                entityCode: ctx.entity,
+                asOfPeriod: ctx.period,
+                outputRowCount,
+                ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+            };
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await completeReportRun(ctx.runId, false, 0, message);
+            if (err instanceof FISServiceError)
+                throw err;
+            throw new FISServiceError(message);
+        }
+    }
+    /** SUM rows from report row config — used for chunked generation progress. */
+    async getSumRowsForRunKey(reportTypeCode) {
+        const reportType = reportTypeCode.trim().toUpperCase();
+        if (!reportType) {
+            throw new FISServiceError('reportTypeCode is required', 400);
+        }
+        const result = await executeQuery(`SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order
+       FROM admin.fis_report_rows rr
+       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
+       WHERE rt.report_type_code = @reportType
+         AND rt.is_active = 1
+         AND rr.is_active = 1
+         AND rr.aggregation_type = 'SUM'
+       ORDER BY rr.display_order`, { reportType });
+        throwOnError(result.error);
+        return (result.data || []).map((r) => ({
+            rowId: r.row_id,
+            lineItemCode: r.line_item_code,
+            lineItemLabel: r.line_item_label,
+            displayOrder: r.display_order,
+        }));
+    }
+    /** Single chunk of run-key generation (init / one SUM row / finalize). */
+    async generateReportRunKeyChunk(params) {
+        const phase = params.phase;
+        const ctx = await this.prepareRunKeyGeneration(params.reportTypeCode, params.entityCode, params.asOfPeriod, params.triggeredBy, phase === 'init');
+        const runId = phase === 'init' ? ctx.runId : params.runId ?? null;
+        try {
+            if (phase === 'init') {
+                await this.executeGenerateMode(ctx.procParams, 'INIT');
+                return {
+                    reportTypeCode: ctx.reportType,
+                    entityCode: ctx.entity,
+                    asOfPeriod: ctx.period,
+                    phase,
+                    runId,
+                    sumRows: ctx.sumRows,
+                    ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+                };
+            }
+            if (phase === 'row') {
+                if (params.rowId == null) {
+                    throw new FISServiceError('rowId is required for row phase', 400);
+                }
+                await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', params.rowId);
+                return {
+                    reportTypeCode: ctx.reportType,
+                    entityCode: ctx.entity,
+                    asOfPeriod: ctx.period,
+                    phase,
+                    runId,
+                };
+            }
+            await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS');
+            const outputRowCount = await this.countRunKeyOutput(ctx);
+            await completeReportRun(runId, true, outputRowCount);
+            return {
+                reportTypeCode: ctx.reportType,
+                entityCode: ctx.entity,
+                asOfPeriod: ctx.period,
+                phase,
+                runId,
+                outputRowCount,
+                ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+            };
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (phase === 'finalize') {
+                await completeReportRun(runId, false, 0, message);
+            }
+            if (err instanceof FISServiceError)
+                throw err;
+            throw new FISServiceError(message);
+        }
+    }
+    async prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy, startRun = false) {
         const reportType = reportTypeCode.trim().toUpperCase();
         const entity = entityCode.trim().toUpperCase();
         const period = asOfPeriod.trim();
@@ -1172,19 +1274,21 @@ export class FISService {
             const resolved = await resolveFileStatusForPeriod(entity, period);
             fileStatus = resolved.fileStatus;
             isTbLocked = resolved.isTbLocked;
-            runId = await startReportRun({
-                reportTypeCode: reportType,
-                entityCode: entity,
-                asOfPeriod: period,
-                fileStatus: resolved.fileStatus,
-                triggeredBy: triggeredBy ?? null,
-                actualUploadId: resolved.actualUploadId,
-                budgetUploadId: resolved.budgetUploadId,
-                actualFileName: resolved.actualFileName,
-                budgetFileName: resolved.budgetFileName,
-                actualTbStatus: resolved.actualTbStatus,
-                budgetTbStatus: resolved.budgetTbStatus,
-            });
+            if (startRun) {
+                runId = await startReportRun({
+                    reportTypeCode: reportType,
+                    entityCode: entity,
+                    asOfPeriod: period,
+                    fileStatus: resolved.fileStatus,
+                    triggeredBy: triggeredBy ?? null,
+                    actualUploadId: resolved.actualUploadId,
+                    budgetUploadId: resolved.budgetUploadId,
+                    actualFileName: resolved.actualFileName,
+                    budgetFileName: resolved.budgetFileName,
+                    actualTbStatus: resolved.actualTbStatus,
+                    budgetTbStatus: resolved.budgetTbStatus,
+                });
+            }
         }
         const procParams = {
             report_type_code: reportType,
@@ -1194,42 +1298,50 @@ export class FISService {
         if (phase4 && fileStatus) {
             procParams.file_status = fileStatus;
         }
-        try {
-            const result = await executeProcedure('rp.usp_GenerateFISReport', procParams);
-            throwOnError(result.error);
-            const countSql = phase4 && fileStatus
-                ? `SELECT COUNT(*) AS total FROM rp.fis_report_output
-           WHERE report_type_code = @reportType
-             AND entity_code = @entity
-             AND as_of_period = @period
-             AND file_status = @fileStatus`
-                : `SELECT COUNT(*) AS total FROM rp.fis_report_output
-           WHERE report_type_code = @reportType
-             AND entity_code = @entity
-             AND as_of_period = @period`;
-            const countParams = { reportType, entity, period };
-            if (phase4 && fileStatus) {
-                countParams.fileStatus = fileStatus;
-            }
-            const countResult = await executeQuery(countSql, countParams);
-            throwOnError(countResult.error);
-            const outputRowCount = Number(countResult.data?.[0]?.total) || 0;
-            await completeReportRun(runId, true, outputRowCount);
-            return {
-                reportTypeCode: reportType,
-                entityCode: entity,
-                asOfPeriod: period,
-                outputRowCount,
-                ...(phase4 ? { fileStatus, isTbLocked } : {}),
-            };
+        const sumRows = await this.getSumRowsForRunKey(reportType);
+        return {
+            reportType,
+            entity,
+            period,
+            procParams,
+            phase4,
+            fileStatus,
+            isTbLocked,
+            runId,
+            sumRows,
+        };
+    }
+    async executeGenerateMode(procParams, generationMode, targetRowId) {
+        const params = {
+            ...procParams,
+            generation_mode: generationMode,
+            ...(targetRowId != null ? { target_row_id: targetRowId } : {}),
+        };
+        const result = await executeProcedure('rp.usp_GenerateFISReport', params);
+        throwOnError(result.error);
+    }
+    async countRunKeyOutput(ctx) {
+        const countSql = ctx.phase4 && ctx.fileStatus
+            ? `SELECT COUNT(*) AS total FROM rp.fis_report_output
+         WHERE report_type_code = @reportType
+           AND entity_code = @entity
+           AND as_of_period = @period
+           AND file_status = @fileStatus`
+            : `SELECT COUNT(*) AS total FROM rp.fis_report_output
+         WHERE report_type_code = @reportType
+           AND entity_code = @entity
+           AND as_of_period = @period`;
+        const countParams = {
+            reportType: ctx.reportType,
+            entity: ctx.entity,
+            period: ctx.period,
+        };
+        if (ctx.phase4 && ctx.fileStatus) {
+            countParams.fileStatus = ctx.fileStatus;
         }
-        catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            await completeReportRun(runId, false, 0, message);
-            if (err instanceof FISServiceError)
-                throw err;
-            throw new FISServiceError(message);
-        }
+        const countResult = await executeQuery(countSql, countParams);
+        throwOnError(countResult.error);
+        return Number(countResult.data?.[0]?.total) || 0;
     }
     // ---------------------------------------------------------------------------
     // Dictionary autocomplete

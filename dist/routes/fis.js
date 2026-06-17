@@ -277,11 +277,58 @@ router.get('/config', async (_req, res) => {
 });
 // POST /api/fis/reports/generate — run-key (NF/PL/BS/CF)
 router.post('/reports/generate', async (req, res) => {
+    req.setTimeout(600000);
+    res.setTimeout(600000);
     try {
         const reportTypeCode = String(req.body?.reportTypeCode ?? req.body?.report_type_code ?? '').trim();
         const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
         const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
         const data = await fisService.generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, req.user?.email ?? null);
+        return res.json({ success: true, data });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// POST /api/fis/reports/generate/chunk — one step of chunked run-key generation
+router.post('/reports/generate/chunk', async (req, res) => {
+    req.setTimeout(120000);
+    res.setTimeout(120000);
+    try {
+        const phase = String(req.body?.phase ?? '').trim().toLowerCase();
+        if (phase !== 'init' && phase !== 'row' && phase !== 'finalize') {
+            return res.status(400).json({
+                success: false,
+                error: 'phase must be init, row, or finalize',
+            });
+        }
+        const reportTypeCode = String(req.body?.reportTypeCode ?? req.body?.report_type_code ?? '').trim();
+        const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
+        const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
+        const rowIdRaw = req.body?.rowId ?? req.body?.row_id;
+        const rowId = rowIdRaw != null && rowIdRaw !== '' ? parseInt(String(rowIdRaw), 10) : undefined;
+        const runIdRaw = req.body?.runId ?? req.body?.run_id;
+        const runId = runIdRaw != null && runIdRaw !== '' ? parseInt(String(runIdRaw), 10) : null;
+        const data = await fisService.generateReportRunKeyChunk({
+            phase,
+            reportTypeCode,
+            entityCode,
+            asOfPeriod,
+            rowId: Number.isNaN(rowId) ? undefined : rowId,
+            runId: Number.isNaN(runId) ? null : runId,
+            triggeredBy: req.user?.email ?? null,
+        });
+        return res.json({ success: true, data });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// GET /api/fis/reports/generate/rows?reportTypeCode=PL
+router.get('/reports/generate/rows', async (req, res) => {
+    try {
+        const reportTypeCode = String(req.query.reportTypeCode ?? req.query.report_type_code ?? '').trim();
+        const data = await fisService.getSumRowsForRunKey(reportTypeCode);
         return res.json({ success: true, data });
     }
     catch (error) {
