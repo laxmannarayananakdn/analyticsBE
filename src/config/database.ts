@@ -234,6 +234,7 @@ export async function claimSyncRunForSchedule(params: {
 export async function withFisSftpPollLock<T>(fn: () => Promise<T>): Promise<T | null> {
   const pool = await getConnection();
   const dedicated = await pool.connect();
+  let lockHeld = false;
 
   try {
     const lockResult = await dedicated.request().query<{ lock_result: number }>(
@@ -253,17 +254,20 @@ export async function withFisSftpPollLock<T>(fn: () => Promise<T>): Promise<T | 
       return null;
     }
 
+    lockHeld = true;
     return await fn();
   } catch (error: unknown) {
     console.error('[FisSftp] Poll lock error:', error);
     return null;
   } finally {
-    try {
-      await dedicated.request().query(
-        `EXEC sp_releaseapplock @Resource = N'FisSftpPoll', @LockOwner = N'Session';`
-      );
-    } catch (releaseError) {
-      console.warn('[FisSftp] Failed to release SFTP poll lock:', releaseError);
+    if (lockHeld) {
+      try {
+        await dedicated.request().query(
+          `EXEC sp_releaseapplock @Resource = N'FisSftpPoll', @LockOwner = N'Session';`
+        );
+      } catch (releaseError) {
+        console.warn('[FisSftp] Failed to release SFTP poll lock:', releaseError);
+      }
     }
     dedicated.close();
   }
