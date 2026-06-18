@@ -3,7 +3,13 @@
  */
 import { executeQuery, executeProcedure, getConnection, sql } from '../config/database.js';
 import { assertTrialBalanceDataForPeriod, buildMonthColumnSet, compareFisReportColumns, } from './FISTrialBalanceProcessService.js';
-import { completeReportRun, isFisPhase4Enabled, resolveFileStatusForPeriod, startReportRun, } from './FISRunTrackingService.js';
+import { completeReportRun, isFisPhase4Enabled, resolveFileStatusForPeriod, resolveRunLoggingContext, startReportRun, } from './FISRunTrackingService.js';
+/** Fixed processing order when multiple report types are selected. */
+export const FIS_REPORT_GENERATION_ORDER = ['NF', 'BS', 'PL', 'CF'];
+export function sortReportTypesForGeneration(reportTypeCodes) {
+    const wanted = new Set(reportTypeCodes.map((c) => c.trim().toUpperCase()).filter(Boolean));
+    return FIS_REPORT_GENERATION_ORDER.filter((code) => wanted.has(code));
+}
 export class FISServiceError extends Error {
     statusCode;
     constructor(message, statusCode = 500) {
@@ -1131,15 +1137,15 @@ export class FISService {
             period: scope?.period.trim(),
         };
     }
-    /** Run-key generation for NF / PL / BS / CF (no instances). Uses chunked SP calls internally. */
-    async generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, triggeredBy) {
-        const ctx = await this.prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy);
+    /** Run-key generation — server-side batched SP calls (fast path). */
+    async generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, triggeredBy, onProgress) {
+        const ctx = await this.prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy, true);
         try {
+            onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
             await this.executeGenerateMode(ctx.procParams, 'INIT');
-            for (const row of ctx.sumRows) {
-                await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', { targetRowId: row.rowId });
-            }
-            await this.runFinalizeChunks(ctx);
+            onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
+            await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
+            await this.runFinalizeChunks(ctx, onProgress);
             const outputRowCount = await this.countRunKeyOutput(ctx);
             await completeReportRun(ctx.runId, true, outputRowCount);
             return {
@@ -1157,6 +1163,43 @@ export class FISService {
                 throw err;
             throw new FISServiceError(message);
         }
+    }
+    /** Generate multiple run-key reports in NF → BS → PL → CF order. */
+    async generateReportsByRunKey(reportTypeCodes, entityCode, asOfPeriod, triggeredBy, onProgress) {
+        const ordered = sortReportTypesForGeneration(reportTypeCodes);
+        if (!ordered.length) {
+            throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
+        }
+        const reports = [];
+        let fileStatus;
+        let isTbLocked = false;
+        for (let i = 0; i < ordered.length; i++) {
+            const reportType = ordered[i];
+            const batchIndex = i + 1;
+            const batchTotal = ordered.length;
+            const result = await this.generateReportByRunKey(reportType, entityCode, asOfPeriod, triggeredBy, (inner) => {
+                onProgress?.({
+                    ...inner,
+                    reportTypeCode: reportType,
+                    batchIndex,
+                    batchTotal,
+                });
+            });
+            reports.push({
+                reportTypeCode: result.reportTypeCode,
+                outputRowCount: result.outputRowCount,
+            });
+            if (result.fileStatus)
+                fileStatus = result.fileStatus;
+            if (result.isTbLocked != null)
+                isTbLocked = result.isTbLocked;
+        }
+        return {
+            entityCode: entityCode.trim().toUpperCase(),
+            asOfPeriod: asOfPeriod.trim(),
+            reports,
+            ...(fileStatus ? { fileStatus, isTbLocked } : {}),
+        };
     }
     /** SUM rows from report row config — used for chunked generation progress. */
     async getSumRowsForRunKey(reportTypeCode) {
@@ -1256,12 +1299,12 @@ export class FISService {
                 await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
             }
             else if (phase === 'finalize-variance') {
-                if (params.columnKey == null || params.rowId == null) {
-                    throw new FISServiceError('columnKey and rowId are required for finalize-variance', 400);
+                if (params.columnKey == null) {
+                    throw new FISServiceError('columnKey is required for finalize-variance', 400);
                 }
                 await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
                     targetColumnKey: params.columnKey,
-                    targetRowId: params.rowId,
+                    ...(params.rowId != null ? { targetRowId: params.rowId } : {}),
                 });
             }
             else if (phase === 'finalize-expression') {
@@ -1307,21 +1350,44 @@ export class FISService {
             throw new FISServiceError(message);
         }
     }
-    async runFinalizeChunks(ctx) {
+    async runFinalizeChunks(ctx, onProgress) {
+        const total = 1 + ctx.varianceColumns.length + 2;
+        let current = 0;
+        onProgress?.({
+            phase: 'finalize',
+            finalizeStep: 'pit',
+            current: ++current,
+            total,
+            label: 'Point-in-time columns',
+        });
         await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
         for (const column of ctx.varianceColumns) {
-            for (const row of ctx.sumRows) {
-                await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
-                    targetColumnKey: column.columnKey,
-                    targetRowId: row.rowId,
-                });
-            }
-        }
-        for (const row of ctx.expressionRows) {
-            await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION', {
-                targetRowId: row.rowId,
+            onProgress?.({
+                phase: 'finalize',
+                finalizeStep: 'variance',
+                current: ++current,
+                total,
+                label: column.columnLabel,
+            });
+            await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
+                targetColumnKey: column.columnKey,
             });
         }
+        onProgress?.({
+            phase: 'finalize',
+            finalizeStep: 'expression',
+            current: ++current,
+            total,
+            label: 'Expression rows',
+        });
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION');
+        onProgress?.({
+            phase: 'finalize',
+            finalizeStep: 'normalize',
+            current: total,
+            total,
+            label: 'Normalizing output',
+        });
         await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_NORMALIZE');
     }
     async prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy, startRun = false) {
@@ -1360,25 +1426,39 @@ export class FISService {
         let fileStatus;
         let isTbLocked = false;
         let runId = null;
+        let runLoggingContext = null;
         if (phase4) {
             const resolved = await resolveFileStatusForPeriod(entity, period);
             fileStatus = resolved.fileStatus;
             isTbLocked = resolved.isTbLocked;
-            if (startRun) {
-                runId = await startReportRun({
-                    reportTypeCode: reportType,
-                    entityCode: entity,
-                    asOfPeriod: period,
-                    fileStatus: resolved.fileStatus,
-                    triggeredBy: triggeredBy ?? null,
-                    actualUploadId: resolved.actualUploadId,
-                    budgetUploadId: resolved.budgetUploadId,
-                    actualFileName: resolved.actualFileName,
-                    budgetFileName: resolved.budgetFileName,
-                    actualTbStatus: resolved.actualTbStatus,
-                    budgetTbStatus: resolved.budgetTbStatus,
-                });
-            }
+            runLoggingContext = {
+                fileStatus: resolved.fileStatus,
+                actualUploadId: resolved.actualUploadId,
+                budgetUploadId: resolved.budgetUploadId,
+                actualFileName: resolved.actualFileName,
+                budgetFileName: resolved.budgetFileName,
+                actualTbStatus: resolved.actualTbStatus,
+                budgetTbStatus: resolved.budgetTbStatus,
+            };
+        }
+        else if (startRun) {
+            runLoggingContext = await resolveRunLoggingContext(entity, period);
+            fileStatus = runLoggingContext.fileStatus;
+        }
+        if (startRun && runLoggingContext) {
+            runId = await startReportRun({
+                reportTypeCode: reportType,
+                entityCode: entity,
+                asOfPeriod: period,
+                fileStatus: runLoggingContext.fileStatus,
+                triggeredBy: triggeredBy ?? null,
+                actualUploadId: runLoggingContext.actualUploadId,
+                budgetUploadId: runLoggingContext.budgetUploadId,
+                actualFileName: runLoggingContext.actualFileName,
+                budgetFileName: runLoggingContext.budgetFileName,
+                actualTbStatus: runLoggingContext.actualTbStatus,
+                budgetTbStatus: runLoggingContext.budgetTbStatus,
+            });
         }
         const procParams = {
             report_type_code: reportType,
@@ -1446,7 +1526,11 @@ export class FISService {
       SELECT TOP 100 code, description
       FROM FIN.DictionaryData
       WHERE dictionary_type = @dictionaryType
-        AND (suspended IS NULL OR LTRIM(RTRIM(suspended)) = '')
+        AND (
+          suspended IS NULL
+          OR LTRIM(RTRIM(suspended)) = ''
+          OR UPPER(LTRIM(RTRIM(suspended))) NOT IN ('YES', 'Y', 'TRUE', '1', 'SUSPENDED')
+        )
     `;
         const params = { dictionaryType };
         if (entity) {

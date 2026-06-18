@@ -28,6 +28,15 @@ export interface ResolvedTbFileStatus {
     isTbLocked: boolean;
 }
 export declare function resolveFileStatusForPeriod(entityCode: string, period: string): Promise<ResolvedTbFileStatus>;
+export declare function resolveRunLoggingContext(entityCode: string, period: string): Promise<{
+    fileStatus: FisFileStatus;
+    actualUploadId: number | null;
+    budgetUploadId: number | null;
+    actualFileName: string | null;
+    budgetFileName: string | null;
+    actualTbStatus: FisFileStatus;
+    budgetTbStatus: FisFileStatus;
+}>;
 export declare function startReportRun(params: {
     reportTypeCode: string;
     entityCode: string;

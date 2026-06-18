@@ -269,6 +269,40 @@ async function queryDominantTbStatus(
   return status === 'Final' || status === 'Preliminary' ? status : null;
 }
 
+export async function resolveRunLoggingContext(
+  entityCode: string,
+  period: string
+): Promise<{
+  fileStatus: FisFileStatus;
+  actualUploadId: number | null;
+  budgetUploadId: number | null;
+  actualFileName: string | null;
+  budgetFileName: string | null;
+  actualTbStatus: FisFileStatus;
+  budgetTbStatus: FisFileStatus;
+}> {
+  const entity = entityCode.trim().toUpperCase();
+  const periodNorm = period.trim();
+  const uploads = await getLatestTrialBalanceUploads(entity, periodNorm);
+
+  const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+  const budgetPeriod = uploads.budgetUsesFallback
+    ? uploads.budgetSourcePeriod ?? periodNorm
+    : periodNorm;
+  const budgetStatus = await queryDominantTbStatus(entity, budgetPeriod, 'BUDGET');
+  const fileStatus: FisFileStatus = actualStatus ?? budgetStatus ?? 'Preliminary';
+
+  return {
+    fileStatus,
+    actualUploadId: uploads.actual?.uploadId ?? null,
+    budgetUploadId: uploads.budget?.uploadId ?? null,
+    actualFileName: uploads.actual?.fileName ?? null,
+    budgetFileName: uploads.budget?.fileName ?? null,
+    actualTbStatus: actualStatus ?? fileStatus,
+    budgetTbStatus: budgetStatus ?? fileStatus,
+  };
+}
+
 export async function startReportRun(params: {
   reportTypeCode: string;
   entityCode: string;
@@ -282,8 +316,6 @@ export async function startReportRun(params: {
   actualTbStatus: FisFileStatus;
   budgetTbStatus: FisFileStatus;
 }): Promise<number | null> {
-  if (!isFisPhase4Enabled()) return null;
-
   const result = await executeQuery<{ run_id: number }>(
     `INSERT INTO admin.fis_report_runs (
        report_type_code, entity_code, as_of_period, file_status, run_status, triggered_by,
@@ -320,7 +352,7 @@ export async function completeReportRun(
   outputRowCount: number,
   errorMessage?: string | null
 ): Promise<void> {
-  if (!isFisPhase4Enabled() || runId == null) return;
+  if (runId == null) return;
 
   const result = await executeQuery(
     `UPDATE admin.fis_report_runs

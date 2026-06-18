@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { fisService, FISServiceError } from '../services/FISService.js';
 import { listTrialBalanceEntityPeriods, getLatestTrialBalanceUploads, buildColumnsFromEntityTrialBalance, getReportOutputPreview, getReportOutputPreviewByRunKey, } from '../services/FISTrialBalanceProcessService.js';
 import { getPeriodCoverage, getRunCalendar, isFisPhase4Enabled, resolveFileStatusForPeriod, } from '../services/FISRunTrackingService.js';
+import { listSftpPullLog, listReportProcessingAttempts, } from '../services/FISProcessingLogService.js';
 const router = express.Router();
 router.use(authenticate);
 function parseId(value, name) {
@@ -275,16 +276,87 @@ router.get('/config', async (_req, res) => {
         return handleError(res, error);
     }
 });
-// POST /api/fis/reports/generate — run-key (NF/PL/BS/CF)
+// POST /api/fis/reports/generate-batch — NF → BS → PL → CF for selected types
+router.post('/reports/generate-batch', async (req, res) => {
+    try {
+        const rawTypes = req.body?.reportTypeCodes ?? req.body?.report_type_codes ?? req.body?.reportTypes;
+        const reportTypeCodes = Array.isArray(rawTypes)
+            ? rawTypes.map((c) => String(c).trim()).filter(Boolean)
+            : String(rawTypes ?? '')
+                .split(',')
+                .map((c) => c.trim())
+                .filter(Boolean);
+        const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
+        const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
+        const { createGenerationJob, updateGenerationJobProgress, completeGenerationJob, failGenerationJob, } = await import('../services/FISReportGenerationJobService.js');
+        const jobId = createGenerationJob();
+        res.json({ success: true, data: { jobId, status: 'pending' } });
+        void (async () => {
+            try {
+                const data = await fisService.generateReportsByRunKey(reportTypeCodes, entityCode, asOfPeriod, req.user?.email ?? null, (progress) => updateGenerationJobProgress(jobId, progress));
+                completeGenerationJob(jobId, data);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : 'Report generation failed';
+                failGenerationJob(jobId, message);
+            }
+        })();
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// POST /api/fis/sftp/poll — manually poll SFTP unprocessed folder (loads TB into FIN.TrialBalance)
+router.post('/sftp/poll', async (_req, res) => {
+    try {
+        const { isFisSftpPollerEnabled } = await import('../config/fisSftp.js');
+        if (!isFisSftpPollerEnabled()) {
+            return res.status(400).json({
+                success: false,
+                error: 'FIS SFTP poller is disabled. Set ENABLE_FIS_SFTP_POLLER=true in backend .env',
+            });
+        }
+        const { pollFisSftpUnprocessedFiles } = await import('../services/FisSftpPoller.js');
+        const result = await pollFisSftpUnprocessedFiles();
+        return res.json({ success: true, data: result });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// POST /api/fis/reports/generate — start async batched run-key generation (single report)
 router.post('/reports/generate', async (req, res) => {
-    req.setTimeout(600000);
-    res.setTimeout(600000);
     try {
         const reportTypeCode = String(req.body?.reportTypeCode ?? req.body?.report_type_code ?? '').trim();
         const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
         const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
-        const data = await fisService.generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, req.user?.email ?? null);
-        return res.json({ success: true, data });
+        const { createGenerationJob, updateGenerationJobProgress, completeGenerationJob, failGenerationJob, } = await import('../services/FISReportGenerationJobService.js');
+        const jobId = createGenerationJob();
+        res.json({ success: true, data: { jobId, status: 'pending' } });
+        void (async () => {
+            try {
+                const data = await fisService.generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, req.user?.email ?? null, (progress) => updateGenerationJobProgress(jobId, progress));
+                completeGenerationJob(jobId, data);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : 'Report generation failed';
+                failGenerationJob(jobId, message);
+            }
+        })();
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// GET /api/fis/reports/generate/jobs/:jobId — poll generation progress
+router.get('/reports/generate/jobs/:jobId', async (req, res) => {
+    try {
+        const { getGenerationJob } = await import('../services/FISReportGenerationJobService.js');
+        const job = getGenerationJob(req.params.jobId);
+        if (!job) {
+            return res.status(404).json({ success: false, error: 'Generation job not found' });
+        }
+        return res.json({ success: true, data: job });
     }
     catch (error) {
         return handleError(res, error);
@@ -542,6 +614,32 @@ router.get('/trial-balance/columns-for-entity', async (req, res) => {
             return res.status(400).json({ success: false, error: 'entity_code query parameter is required' });
         }
         const data = await buildColumnsFromEntityTrialBalance(entityCode, period);
+        return res.json({ success: true, data });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// GET /api/fis/logs/sftp-pulls?entity=&period=&limit=
+router.get('/logs/sftp-pulls', async (req, res) => {
+    try {
+        const entityCode = req.query.entity ? String(req.query.entity).trim() : undefined;
+        const period = req.query.period ? String(req.query.period).trim() : undefined;
+        const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+        const data = await listSftpPullLog({ entityCode, period, limit });
+        return res.json({ success: true, data });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// GET /api/fis/logs/report-processing?entity=&period=&limit=
+router.get('/logs/report-processing', async (req, res) => {
+    try {
+        const entityCode = req.query.entity ? String(req.query.entity).trim() : undefined;
+        const period = req.query.period ? String(req.query.period).trim() : undefined;
+        const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+        const data = await listReportProcessingAttempts({ entityCode, period, limit });
         return res.json({ success: true, data });
     }
     catch (error) {

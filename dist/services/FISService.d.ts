@@ -3,6 +3,10 @@
  */
 import { type FisColumnKind, type FisColumnTbType } from './FISTrialBalanceProcessService.js';
 import { type FisFileStatus } from './FISRunTrackingService.js';
+import type { FisGenerationJobProgress } from './FISReportGenerationJobService.js';
+/** Fixed processing order when multiple report types are selected. */
+export declare const FIS_REPORT_GENERATION_ORDER: readonly ["NF", "BS", "PL", "CF"];
+export declare function sortReportTypesForGeneration(reportTypeCodes: string[]): string[];
 export declare class FISServiceError extends Error {
     statusCode: number;
     constructor(message: string, statusCode?: number);
@@ -188,12 +192,23 @@ export declare class FISService {
         entityCode?: string;
         period?: string;
     }>;
-    /** Run-key generation for NF / PL / BS / CF (no instances). Uses chunked SP calls internally. */
-    generateReportByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, triggeredBy?: string | null): Promise<{
+    /** Run-key generation — server-side batched SP calls (fast path). */
+    generateReportByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, triggeredBy?: string | null, onProgress?: (progress: FisGenerationJobProgress) => void): Promise<{
         reportTypeCode: string;
         entityCode: string;
         asOfPeriod: string;
         outputRowCount: number;
+        fileStatus?: FisFileStatus;
+        isTbLocked?: boolean;
+    }>;
+    /** Generate multiple run-key reports in NF → BS → PL → CF order. */
+    generateReportsByRunKey(reportTypeCodes: string[], entityCode: string, asOfPeriod: string, triggeredBy?: string | null, onProgress?: (progress: FisGenerationJobProgress) => void): Promise<{
+        entityCode: string;
+        asOfPeriod: string;
+        reports: Array<{
+            reportTypeCode: string;
+            outputRowCount: number;
+        }>;
         fileStatus?: FisFileStatus;
         isTbLocked?: boolean;
     }>;

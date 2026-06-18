@@ -196,9 +196,27 @@ async function queryDominantTbStatus(entity, period, tbType) {
     const status = result.data?.[0]?.file_status;
     return status === 'Final' || status === 'Preliminary' ? status : null;
 }
+export async function resolveRunLoggingContext(entityCode, period) {
+    const entity = entityCode.trim().toUpperCase();
+    const periodNorm = period.trim();
+    const uploads = await getLatestTrialBalanceUploads(entity, periodNorm);
+    const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+    const budgetPeriod = uploads.budgetUsesFallback
+        ? uploads.budgetSourcePeriod ?? periodNorm
+        : periodNorm;
+    const budgetStatus = await queryDominantTbStatus(entity, budgetPeriod, 'BUDGET');
+    const fileStatus = actualStatus ?? budgetStatus ?? 'Preliminary';
+    return {
+        fileStatus,
+        actualUploadId: uploads.actual?.uploadId ?? null,
+        budgetUploadId: uploads.budget?.uploadId ?? null,
+        actualFileName: uploads.actual?.fileName ?? null,
+        budgetFileName: uploads.budget?.fileName ?? null,
+        actualTbStatus: actualStatus ?? fileStatus,
+        budgetTbStatus: budgetStatus ?? fileStatus,
+    };
+}
 export async function startReportRun(params) {
-    if (!isFisPhase4Enabled())
-        return null;
     const result = await executeQuery(`INSERT INTO admin.fis_report_runs (
        report_type_code, entity_code, as_of_period, file_status, run_status, triggered_by,
        actual_upload_id, budget_upload_id, actual_file_name, budget_file_name,
@@ -227,7 +245,7 @@ export async function startReportRun(params) {
     return result.data?.[0]?.run_id ?? null;
 }
 export async function completeReportRun(runId, success, outputRowCount, errorMessage) {
-    if (!isFisPhase4Enabled() || runId == null)
+    if (runId == null)
         return;
     const result = await executeQuery(`UPDATE admin.fis_report_runs
      SET run_status = @runStatus,

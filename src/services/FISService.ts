@@ -15,9 +15,21 @@ import {
   completeReportRun,
   isFisPhase4Enabled,
   resolveFileStatusForPeriod,
+  resolveRunLoggingContext,
   startReportRun,
   type FisFileStatus,
 } from './FISRunTrackingService.js';
+import type { FisGenerationJobProgress } from './FISReportGenerationJobService.js';
+
+/** Fixed processing order when multiple report types are selected. */
+export const FIS_REPORT_GENERATION_ORDER = ['NF', 'BS', 'PL', 'CF'] as const;
+
+export function sortReportTypesForGeneration(reportTypeCodes: string[]): string[] {
+  const wanted = new Set(
+    reportTypeCodes.map((c) => c.trim().toUpperCase()).filter(Boolean)
+  );
+  return FIS_REPORT_GENERATION_ORDER.filter((code) => wanted.has(code));
+}
 
 export class FISServiceError extends Error {
   statusCode: number;
@@ -1707,12 +1719,13 @@ export class FISService {
     };
   }
 
-  /** Run-key generation for NF / PL / BS / CF (no instances). Uses chunked SP calls internally. */
+  /** Run-key generation — server-side batched SP calls (fast path). */
   async generateReportByRunKey(
     reportTypeCode: string,
     entityCode: string,
     asOfPeriod: string,
-    triggeredBy?: string | null
+    triggeredBy?: string | null,
+    onProgress?: (progress: FisGenerationJobProgress) => void
   ): Promise<{
     reportTypeCode: string;
     entityCode: string;
@@ -1721,16 +1734,22 @@ export class FISService {
     fileStatus?: FisFileStatus;
     isTbLocked?: boolean;
   }> {
-    const ctx = await this.prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy);
+    const ctx = await this.prepareRunKeyGeneration(
+      reportTypeCode,
+      entityCode,
+      asOfPeriod,
+      triggeredBy,
+      true
+    );
 
     try {
+      onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
       await this.executeGenerateMode(ctx.procParams, 'INIT');
 
-      for (const row of ctx.sumRows) {
-        await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', { targetRowId: row.rowId });
-      }
+      onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
+      await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
 
-      await this.runFinalizeChunks(ctx);
+      await this.runFinalizeChunks(ctx, onProgress);
 
       const outputRowCount = await this.countRunKeyOutput(ctx);
       await completeReportRun(ctx.runId, true, outputRowCount);
@@ -1748,6 +1767,65 @@ export class FISService {
       if (err instanceof FISServiceError) throw err;
       throw new FISServiceError(message);
     }
+  }
+
+  /** Generate multiple run-key reports in NF → BS → PL → CF order. */
+  async generateReportsByRunKey(
+    reportTypeCodes: string[],
+    entityCode: string,
+    asOfPeriod: string,
+    triggeredBy?: string | null,
+    onProgress?: (progress: FisGenerationJobProgress) => void
+  ): Promise<{
+    entityCode: string;
+    asOfPeriod: string;
+    reports: Array<{ reportTypeCode: string; outputRowCount: number }>;
+    fileStatus?: FisFileStatus;
+    isTbLocked?: boolean;
+  }> {
+    const ordered = sortReportTypesForGeneration(reportTypeCodes);
+    if (!ordered.length) {
+      throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
+    }
+
+    const reports: Array<{ reportTypeCode: string; outputRowCount: number }> = [];
+    let fileStatus: FisFileStatus | undefined;
+    let isTbLocked = false;
+
+    for (let i = 0; i < ordered.length; i++) {
+      const reportType = ordered[i];
+      const batchIndex = i + 1;
+      const batchTotal = ordered.length;
+
+      const result = await this.generateReportByRunKey(
+        reportType,
+        entityCode,
+        asOfPeriod,
+        triggeredBy,
+        (inner) => {
+          onProgress?.({
+            ...inner,
+            reportTypeCode: reportType,
+            batchIndex,
+            batchTotal,
+          });
+        }
+      );
+
+      reports.push({
+        reportTypeCode: result.reportTypeCode,
+        outputRowCount: result.outputRowCount,
+      });
+      if (result.fileStatus) fileStatus = result.fileStatus;
+      if (result.isTbLocked != null) isTbLocked = result.isTbLocked;
+    }
+
+    return {
+      entityCode: entityCode.trim().toUpperCase(),
+      asOfPeriod: asOfPeriod.trim(),
+      reports,
+      ...(fileStatus ? { fileStatus, isTbLocked } : {}),
+    };
   }
 
   /** SUM rows from report row config — used for chunked generation progress. */
@@ -1918,12 +1996,12 @@ export class FISService {
       if (phase === 'finalize-pit') {
         await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
       } else if (phase === 'finalize-variance') {
-        if (params.columnKey == null || params.rowId == null) {
-          throw new FISServiceError('columnKey and rowId are required for finalize-variance', 400);
+        if (params.columnKey == null) {
+          throw new FISServiceError('columnKey is required for finalize-variance', 400);
         }
         await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
           targetColumnKey: params.columnKey,
-          targetRowId: params.rowId,
+          ...(params.rowId != null ? { targetRowId: params.rowId } : {}),
         });
       } else if (phase === 'finalize-expression') {
         if (params.rowId == null) {
@@ -1966,26 +2044,54 @@ export class FISService {
     }
   }
 
-  private async runFinalizeChunks(ctx: {
-    procParams: Record<string, unknown>;
-    sumRows: Array<{ rowId: number }>;
-    varianceColumns: Array<{ columnKey: number }>;
-    expressionRows: Array<{ rowId: number }>;
-  }): Promise<void> {
+  private async runFinalizeChunks(
+    ctx: {
+      procParams: Record<string, unknown>;
+      varianceColumns: Array<{ columnKey: number; columnLabel: string }>;
+    },
+    onProgress?: (progress: FisGenerationJobProgress) => void
+  ): Promise<void> {
+    const total = 1 + ctx.varianceColumns.length + 2;
+    let current = 0;
+
+    onProgress?.({
+      phase: 'finalize',
+      finalizeStep: 'pit',
+      current: ++current,
+      total,
+      label: 'Point-in-time columns',
+    });
     await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
+
     for (const column of ctx.varianceColumns) {
-      for (const row of ctx.sumRows) {
-        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
-          targetColumnKey: column.columnKey,
-          targetRowId: row.rowId,
-        });
-      }
-    }
-    for (const row of ctx.expressionRows) {
-      await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION', {
-        targetRowId: row.rowId,
+      onProgress?.({
+        phase: 'finalize',
+        finalizeStep: 'variance',
+        current: ++current,
+        total,
+        label: column.columnLabel,
+      });
+      await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
+        targetColumnKey: column.columnKey,
       });
     }
+
+    onProgress?.({
+      phase: 'finalize',
+      finalizeStep: 'expression',
+      current: ++current,
+      total,
+      label: 'Expression rows',
+    });
+    await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION');
+
+    onProgress?.({
+      phase: 'finalize',
+      finalizeStep: 'normalize',
+      current: total,
+      total,
+      label: 'Normalizing output',
+    });
     await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_NORMALIZE');
   }
 
@@ -2053,26 +2159,48 @@ export class FISService {
     let fileStatus: FisFileStatus | undefined;
     let isTbLocked = false;
     let runId: number | null = null;
+    let runLoggingContext: {
+      fileStatus: FisFileStatus;
+      actualUploadId: number | null;
+      budgetUploadId: number | null;
+      actualFileName: string | null;
+      budgetFileName: string | null;
+      actualTbStatus: FisFileStatus;
+      budgetTbStatus: FisFileStatus;
+    } | null = null;
 
     if (phase4) {
       const resolved = await resolveFileStatusForPeriod(entity, period);
       fileStatus = resolved.fileStatus;
       isTbLocked = resolved.isTbLocked;
-      if (startRun) {
-        runId = await startReportRun({
-          reportTypeCode: reportType,
-          entityCode: entity,
-          asOfPeriod: period,
-          fileStatus: resolved.fileStatus,
-          triggeredBy: triggeredBy ?? null,
-          actualUploadId: resolved.actualUploadId,
-          budgetUploadId: resolved.budgetUploadId,
-          actualFileName: resolved.actualFileName,
-          budgetFileName: resolved.budgetFileName,
-          actualTbStatus: resolved.actualTbStatus,
-          budgetTbStatus: resolved.budgetTbStatus,
-        });
-      }
+      runLoggingContext = {
+        fileStatus: resolved.fileStatus,
+        actualUploadId: resolved.actualUploadId,
+        budgetUploadId: resolved.budgetUploadId,
+        actualFileName: resolved.actualFileName,
+        budgetFileName: resolved.budgetFileName,
+        actualTbStatus: resolved.actualTbStatus,
+        budgetTbStatus: resolved.budgetTbStatus,
+      };
+    } else if (startRun) {
+      runLoggingContext = await resolveRunLoggingContext(entity, period);
+      fileStatus = runLoggingContext.fileStatus;
+    }
+
+    if (startRun && runLoggingContext) {
+      runId = await startReportRun({
+        reportTypeCode: reportType,
+        entityCode: entity,
+        asOfPeriod: period,
+        fileStatus: runLoggingContext.fileStatus,
+        triggeredBy: triggeredBy ?? null,
+        actualUploadId: runLoggingContext.actualUploadId,
+        budgetUploadId: runLoggingContext.budgetUploadId,
+        actualFileName: runLoggingContext.actualFileName,
+        budgetFileName: runLoggingContext.budgetFileName,
+        actualTbStatus: runLoggingContext.actualTbStatus,
+        budgetTbStatus: runLoggingContext.budgetTbStatus,
+      });
     }
 
     const procParams: Record<string, unknown> = {
@@ -2080,7 +2208,11 @@ export class FISService {
       entity_code: entity,
       as_of_period: period,
     };
-    if (phase4 && fileStatus) {
+    if (!fileStatus) {
+      const resolved = await resolveRunLoggingContext(entity, period);
+      fileStatus = resolved.fileStatus;
+    }
+    if (fileStatus) {
       procParams.file_status = fileStatus;
     }
 
@@ -2108,6 +2240,7 @@ export class FISService {
     generationMode:
       | 'INIT'
       | 'SUM_ROW'
+      | 'SUM_ALL'
       | 'POSTPROCESS'
       | 'POSTPROCESS_PIT'
       | 'POSTPROCESS_VARIANCE'
