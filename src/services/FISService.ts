@@ -1727,10 +1727,10 @@ export class FISService {
       await this.executeGenerateMode(ctx.procParams, 'INIT');
 
       for (const row of ctx.sumRows) {
-        await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', row.rowId);
+        await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', { targetRowId: row.rowId });
       }
 
-      await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS');
+      await this.runFinalizeChunks(ctx);
 
       const outputRowCount = await this.countRunKeyOutput(ctx);
       await completeReportRun(ctx.runId, true, outputRowCount);
@@ -1784,25 +1784,94 @@ export class FISService {
     }));
   }
 
-  /** Single chunk of run-key generation (init / one SUM row / finalize). */
+  /** Calculated columns (variance / perf %) for chunked finalize. */
+  async getVarianceColumnsForRunKey(reportTypeCode: string): Promise<
+    Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>
+  > {
+    const reportType = reportTypeCode.trim().toUpperCase();
+    const result = await executeQuery<{
+      column_key: number;
+      column_code: string;
+      column_label: string;
+      display_order: number;
+    }>(
+      `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
+       FROM admin.fis_report_column_defs d
+       INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
+       WHERE rt.report_type_code = @reportType
+         AND rt.is_active = 1
+         AND d.is_active = 1
+         AND d.column_kind IN ('YTD_VARIANCE', 'YTD_VAR_PCT', 'CM_VARIANCE', 'CM_VAR_PCT', 'PERF_PCT', 'AUDITED_PLACEHOLDER')
+       ORDER BY d.display_order`,
+      { reportType }
+    );
+    throwOnError(result.error);
+    return (result.data || []).map((r) => ({
+      columnKey: r.column_key,
+      columnCode: r.column_code,
+      columnLabel: r.column_label,
+      displayOrder: r.display_order,
+    }));
+  }
+
+  /** Expression rows for chunked finalize. */
+  async getExpressionRowsForRunKey(reportTypeCode: string): Promise<
+    Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>
+  > {
+    const reportType = reportTypeCode.trim().toUpperCase();
+    const result = await executeQuery<{
+      row_id: number;
+      line_item_code: string;
+      line_item_label: string;
+      display_order: number;
+    }>(
+      `SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order
+       FROM admin.fis_report_rows rr
+       INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
+       WHERE rt.report_type_code = @reportType
+         AND rt.is_active = 1
+         AND rr.is_active = 1
+         AND rr.aggregation_type = 'EXPRESSION'
+       ORDER BY rr.display_order`,
+      { reportType }
+    );
+    throwOnError(result.error);
+    return (result.data || []).map((r) => ({
+      rowId: r.row_id,
+      lineItemCode: r.line_item_code,
+      lineItemLabel: r.line_item_label,
+      displayOrder: r.display_order,
+    }));
+  }
+
+  /** Single chunk of run-key generation. */
   async generateReportRunKeyChunk(params: {
-    phase: 'init' | 'row' | 'finalize';
+    phase:
+      | 'init'
+      | 'row'
+      | 'finalize-pit'
+      | 'finalize-variance'
+      | 'finalize-expression'
+      | 'finalize-normalize';
     reportTypeCode: string;
     entityCode: string;
     asOfPeriod: string;
     rowId?: number;
+    columnKey?: number;
     runId?: number | null;
     triggeredBy?: string | null;
   }): Promise<{
     reportTypeCode: string;
     entityCode: string;
     asOfPeriod: string;
-    phase: 'init' | 'row' | 'finalize';
+    phase: string;
     runId?: number | null;
     fileStatus?: FisFileStatus;
     isTbLocked?: boolean;
     outputRowCount?: number;
     sumRows?: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
+    varianceColumns?: Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>;
+    expressionRows?: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
   }> {
     const phase = params.phase;
     const ctx = await this.prepareRunKeyGeneration(
@@ -1814,6 +1883,7 @@ export class FISService {
     );
 
     const runId = phase === 'init' ? ctx.runId : params.runId ?? null;
+    const isFinalizePhase = phase.startsWith('finalize-');
 
     try {
       if (phase === 'init') {
@@ -1825,6 +1895,8 @@ export class FISService {
           phase,
           runId,
           sumRows: ctx.sumRows,
+          varianceColumns: ctx.varianceColumns,
+          expressionRows: ctx.expressionRows,
           ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
         };
       }
@@ -1833,7 +1905,7 @@ export class FISService {
         if (params.rowId == null) {
           throw new FISServiceError('rowId is required for row phase', 400);
         }
-        await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', params.rowId);
+        await this.executeGenerateMode(ctx.procParams, 'SUM_ROW', { targetRowId: params.rowId });
         return {
           reportTypeCode: ctx.reportType,
           entityCode: ctx.entity,
@@ -1843,9 +1915,39 @@ export class FISService {
         };
       }
 
-      await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS');
-      const outputRowCount = await this.countRunKeyOutput(ctx);
-      await completeReportRun(runId, true, outputRowCount);
+      if (phase === 'finalize-pit') {
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
+      } else if (phase === 'finalize-variance') {
+        if (params.columnKey == null || params.rowId == null) {
+          throw new FISServiceError('columnKey and rowId are required for finalize-variance', 400);
+        }
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
+          targetColumnKey: params.columnKey,
+          targetRowId: params.rowId,
+        });
+      } else if (phase === 'finalize-expression') {
+        if (params.rowId == null) {
+          throw new FISServiceError('rowId is required for finalize-expression', 400);
+        }
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION', {
+          targetRowId: params.rowId,
+        });
+      } else if (phase === 'finalize-normalize') {
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_NORMALIZE');
+        const outputRowCount = await this.countRunKeyOutput(ctx);
+        await completeReportRun(runId, true, outputRowCount);
+        return {
+          reportTypeCode: ctx.reportType,
+          entityCode: ctx.entity,
+          asOfPeriod: ctx.period,
+          phase,
+          runId,
+          outputRowCount,
+          ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+        };
+      } else {
+        throw new FISServiceError(`Unsupported chunk phase: ${phase}`, 400);
+      }
 
       return {
         reportTypeCode: ctx.reportType,
@@ -1853,17 +1955,38 @@ export class FISService {
         asOfPeriod: ctx.period,
         phase,
         runId,
-        outputRowCount,
-        ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (phase === 'finalize') {
+      if (isFinalizePhase) {
         await completeReportRun(runId, false, 0, message);
       }
       if (err instanceof FISServiceError) throw err;
       throw new FISServiceError(message);
     }
+  }
+
+  private async runFinalizeChunks(ctx: {
+    procParams: Record<string, unknown>;
+    sumRows: Array<{ rowId: number }>;
+    varianceColumns: Array<{ columnKey: number }>;
+    expressionRows: Array<{ rowId: number }>;
+  }): Promise<void> {
+    await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_PIT');
+    for (const column of ctx.varianceColumns) {
+      for (const row of ctx.sumRows) {
+        await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_VARIANCE', {
+          targetColumnKey: column.columnKey,
+          targetRowId: row.rowId,
+        });
+      }
+    }
+    for (const row of ctx.expressionRows) {
+      await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_EXPRESSION', {
+        targetRowId: row.rowId,
+      });
+    }
+    await this.executeGenerateMode(ctx.procParams, 'POSTPROCESS_NORMALIZE');
   }
 
   private async prepareRunKeyGeneration(
@@ -1882,6 +2005,8 @@ export class FISService {
     isTbLocked: boolean;
     runId: number | null;
     sumRows: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
+    varianceColumns: Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>;
+    expressionRows: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
   }> {
     const reportType = reportTypeCode.trim().toUpperCase();
     const entity = entityCode.trim().toUpperCase();
@@ -1960,6 +2085,8 @@ export class FISService {
     }
 
     const sumRows = await this.getSumRowsForRunKey(reportType);
+    const varianceColumns = await this.getVarianceColumnsForRunKey(reportType);
+    const expressionRows = await this.getExpressionRowsForRunKey(reportType);
 
     return {
       reportType,
@@ -1971,18 +2098,29 @@ export class FISService {
       isTbLocked,
       runId,
       sumRows,
+      varianceColumns,
+      expressionRows,
     };
   }
 
   private async executeGenerateMode(
     procParams: Record<string, unknown>,
-    generationMode: 'INIT' | 'SUM_ROW' | 'POSTPROCESS' | 'FULL',
-    targetRowId?: number
+    generationMode:
+      | 'INIT'
+      | 'SUM_ROW'
+      | 'POSTPROCESS'
+      | 'POSTPROCESS_PIT'
+      | 'POSTPROCESS_VARIANCE'
+      | 'POSTPROCESS_EXPRESSION'
+      | 'POSTPROCESS_NORMALIZE'
+      | 'FULL',
+    targets?: { targetRowId?: number; targetColumnKey?: number }
   ): Promise<void> {
     const params = {
       ...procParams,
       generation_mode: generationMode,
-      ...(targetRowId != null ? { target_row_id: targetRowId } : {}),
+      ...(targets?.targetRowId != null ? { target_row_id: targets.targetRowId } : {}),
+      ...(targets?.targetColumnKey != null ? { target_column_key: targets.targetColumnKey } : {}),
     };
     const result = await executeProcedure('rp.usp_GenerateFISReport', params);
     throwOnError(result.error);
@@ -2032,7 +2170,11 @@ export class FISService {
       SELECT TOP 100 code, description
       FROM FIN.DictionaryData
       WHERE dictionary_type = @dictionaryType
-        AND (suspended IS NULL OR LTRIM(RTRIM(suspended)) = '')
+        AND (
+          suspended IS NULL
+          OR LTRIM(RTRIM(suspended)) = ''
+          OR UPPER(LTRIM(RTRIM(suspended))) NOT IN ('YES', 'Y', 'TRUE', '1', 'SUSPENDED')
+        )
     `;
     const params: Record<string, unknown> = { dictionaryType };
 

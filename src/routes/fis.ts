@@ -317,10 +317,18 @@ router.post('/reports/generate/chunk', async (req: Request, res: Response) => {
   res.setTimeout(120000);
   try {
     const phase = String(req.body?.phase ?? '').trim().toLowerCase();
-    if (phase !== 'init' && phase !== 'row' && phase !== 'finalize') {
+    const allowedPhases = new Set([
+      'init',
+      'row',
+      'finalize-pit',
+      'finalize-variance',
+      'finalize-expression',
+      'finalize-normalize',
+    ]);
+    if (!allowedPhases.has(phase)) {
       return res.status(400).json({
         success: false,
-        error: 'phase must be init, row, or finalize',
+        error: 'phase must be init, row, finalize-pit, finalize-variance, finalize-expression, or finalize-normalize',
       });
     }
     const reportTypeCode = String(req.body?.reportTypeCode ?? req.body?.report_type_code ?? '').trim();
@@ -328,15 +336,25 @@ router.post('/reports/generate/chunk', async (req: Request, res: Response) => {
     const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
     const rowIdRaw = req.body?.rowId ?? req.body?.row_id;
     const rowId = rowIdRaw != null && rowIdRaw !== '' ? parseInt(String(rowIdRaw), 10) : undefined;
+    const columnKeyRaw = req.body?.columnKey ?? req.body?.column_key;
+    const columnKey =
+      columnKeyRaw != null && columnKeyRaw !== '' ? parseInt(String(columnKeyRaw), 10) : undefined;
     const runIdRaw = req.body?.runId ?? req.body?.run_id;
     const runId = runIdRaw != null && runIdRaw !== '' ? parseInt(String(runIdRaw), 10) : null;
 
     const data = await fisService.generateReportRunKeyChunk({
-      phase,
+      phase: phase as
+        | 'init'
+        | 'row'
+        | 'finalize-pit'
+        | 'finalize-variance'
+        | 'finalize-expression'
+        | 'finalize-normalize',
       reportTypeCode,
       entityCode,
       asOfPeriod,
       rowId: Number.isNaN(rowId) ? undefined : rowId,
+      columnKey: Number.isNaN(columnKey) ? undefined : columnKey,
       runId: Number.isNaN(runId) ? null : runId,
       triggeredBy: req.user?.email ?? null,
     });

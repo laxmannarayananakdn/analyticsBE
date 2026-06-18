@@ -204,20 +204,35 @@ export declare class FISService {
         lineItemLabel: string;
         displayOrder: number;
     }>>;
-    /** Single chunk of run-key generation (init / one SUM row / finalize). */
+    /** Calculated columns (variance / perf %) for chunked finalize. */
+    getVarianceColumnsForRunKey(reportTypeCode: string): Promise<Array<{
+        columnKey: number;
+        columnCode: string;
+        columnLabel: string;
+        displayOrder: number;
+    }>>;
+    /** Expression rows for chunked finalize. */
+    getExpressionRowsForRunKey(reportTypeCode: string): Promise<Array<{
+        rowId: number;
+        lineItemCode: string;
+        lineItemLabel: string;
+        displayOrder: number;
+    }>>;
+    /** Single chunk of run-key generation. */
     generateReportRunKeyChunk(params: {
-        phase: 'init' | 'row' | 'finalize';
+        phase: 'init' | 'row' | 'finalize-pit' | 'finalize-variance' | 'finalize-expression' | 'finalize-normalize';
         reportTypeCode: string;
         entityCode: string;
         asOfPeriod: string;
         rowId?: number;
+        columnKey?: number;
         runId?: number | null;
         triggeredBy?: string | null;
     }): Promise<{
         reportTypeCode: string;
         entityCode: string;
         asOfPeriod: string;
-        phase: 'init' | 'row' | 'finalize';
+        phase: string;
         runId?: number | null;
         fileStatus?: FisFileStatus;
         isTbLocked?: boolean;
@@ -228,7 +243,20 @@ export declare class FISService {
             lineItemLabel: string;
             displayOrder: number;
         }>;
+        varianceColumns?: Array<{
+            columnKey: number;
+            columnCode: string;
+            columnLabel: string;
+            displayOrder: number;
+        }>;
+        expressionRows?: Array<{
+            rowId: number;
+            lineItemCode: string;
+            lineItemLabel: string;
+            displayOrder: number;
+        }>;
     }>;
+    private runFinalizeChunks;
     private prepareRunKeyGeneration;
     private executeGenerateMode;
     private countRunKeyOutput;
