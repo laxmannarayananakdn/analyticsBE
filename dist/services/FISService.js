@@ -86,26 +86,38 @@ function columnFromInput(col) {
         columnKind: columnKind ? String(columnKind).trim().toUpperCase() : 'TB_SUM',
     };
 }
+function normalizeAdditionalChartIds(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw)
+        return null;
+    const ids = [...new Set(raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean))];
+    return ids.length ? ids.join(', ') : null;
+}
+function mapReportTypeRow(r) {
+    return {
+        reportTypeId: r.report_type_id,
+        reportTypeCode: r.report_type_code,
+        reportTypeName: r.report_type_name,
+        description: r.description,
+        chartId: r.chart_id,
+        additionalChartIds: r.additional_chart_ids ?? null,
+        isActive: r.is_active === true || r.is_active === 1,
+        createdAt: r.created_at,
+        createdBy: r.created_by,
+    };
+}
 export class FISService {
     // ---------------------------------------------------------------------------
     // Report types
     // ---------------------------------------------------------------------------
     async getReportTypes() {
-        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description,
+              chart_id, additional_chart_ids, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`);
         throwOnError(result.error);
-        return (result.data || []).map((r) => ({
-            reportTypeId: r.report_type_id,
-            reportTypeCode: r.report_type_code,
-            reportTypeName: r.report_type_name,
-            description: r.description,
-            chartId: r.chart_id,
-            isActive: r.is_active === true || r.is_active === 1,
-            createdAt: r.created_at,
-            createdBy: r.created_by,
-        }));
+        return (result.data || []).map(mapReportTypeRow);
     }
     async createReportType(data) {
         const reportTypeCode = String(data.reportTypeCode ?? data.report_type_code ?? '')
@@ -114,6 +126,7 @@ export class FISService {
         const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
         const description = String(data.description ?? '').trim() || null;
         const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
+        const additionalChartIds = normalizeAdditionalChartIds(data.additionalChartIds ?? data.additional_chart_ids);
         const createdBy = (data.createdBy ?? data.created_by ?? null);
         if (!reportTypeCode) {
             throw new FISServiceError('reportTypeCode is required', 400);
@@ -132,10 +145,10 @@ export class FISService {
             throw new FISServiceError('A report type with this code already exists', 409);
         }
         const result = await executeQuery(`INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, chart_id, created_by
+         report_type_code, report_type_name, description, chart_id, additional_chart_ids, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @createdBy)`, { reportTypeCode, reportTypeName, description, chartId, createdBy });
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds, @createdBy)`, { reportTypeCode, reportTypeName, description, chartId, additionalChartIds, createdBy });
         throwOnError(result.error);
         if (!result.data?.[0]?.report_type_id) {
             throw new FISServiceError('Failed to create report type');
@@ -161,29 +174,24 @@ export class FISService {
             sets.push('chart_id = @chartId');
             params.chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
         }
+        if (data.additionalChartIds !== undefined || data.additional_chart_ids !== undefined) {
+            sets.push('additional_chart_ids = @additionalChartIds');
+            params.additionalChartIds = normalizeAdditionalChartIds(data.additionalChartIds ?? data.additional_chart_ids);
+        }
         if (sets.length === 0) {
             throw new FISServiceError('No fields to update', 400);
         }
         const update = await executeQuery(`UPDATE admin.fis_report_types SET ${sets.join(', ')} WHERE report_type_id = @reportTypeId`, params);
         throwOnError(update.error);
-        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+        const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description,
+              chart_id, additional_chart_ids, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE report_type_id = @reportTypeId`, { reportTypeId });
         throwOnError(result.error);
         if (!result.data?.length) {
             throw new FISServiceError('Report type not found', 404);
         }
-        const r = result.data[0];
-        return {
-            reportTypeId: r.report_type_id,
-            reportTypeCode: r.report_type_code,
-            reportTypeName: r.report_type_name,
-            description: r.description,
-            chartId: r.chart_id,
-            isActive: r.is_active === true || r.is_active === 1,
-            createdAt: r.created_at,
-            createdBy: r.created_by,
-        };
+        return mapReportTypeRow(result.data[0]);
     }
     // ---------------------------------------------------------------------------
     // Rows
@@ -1465,7 +1473,11 @@ export class FISService {
             entity_code: entity,
             as_of_period: period,
         };
-        if (phase4 && fileStatus) {
+        if (!fileStatus) {
+            const resolved = await resolveRunLoggingContext(entity, period);
+            fileStatus = resolved.fileStatus;
+        }
+        if (fileStatus) {
             procParams.file_status = fileStatus;
         }
         const sumRows = await this.getSumRowsForRunKey(reportType);

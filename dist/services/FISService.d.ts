@@ -17,6 +17,7 @@ export interface FisReportType {
     reportTypeName: string;
     description: string | null;
     chartId: string | null;
+    additionalChartIds: string | null;
     isActive: boolean;
     createdAt: Date;
     createdBy: string | null;

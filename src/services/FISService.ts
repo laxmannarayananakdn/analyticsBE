@@ -130,6 +130,7 @@ export interface FisReportType {
   reportTypeName: string;
   description: string | null;
   chartId: string | null;
+  additionalChartIds: string | null;
   isActive: boolean;
   createdAt: Date;
   createdBy: string | null;
@@ -260,6 +261,37 @@ export interface DictionaryCodeItem {
   description: string | null;
 }
 
+function normalizeAdditionalChartIds(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const ids = [...new Set(raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean))];
+  return ids.length ? ids.join(', ') : null;
+}
+
+function mapReportTypeRow(r: {
+  report_type_id: number;
+  report_type_code: string;
+  report_type_name: string;
+  description: string | null;
+  chart_id: string | null;
+  additional_chart_ids?: string | null;
+  is_active: boolean | number;
+  created_at: Date;
+  created_by: string | null;
+}): FisReportType {
+  return {
+    reportTypeId: r.report_type_id,
+    reportTypeCode: r.report_type_code,
+    reportTypeName: r.report_type_name,
+    description: r.description,
+    chartId: r.chart_id,
+    additionalChartIds: r.additional_chart_ids ?? null,
+    isActive: r.is_active === true || r.is_active === 1,
+    createdAt: r.created_at,
+    createdBy: r.created_by,
+  };
+}
+
 export class FISService {
   // ---------------------------------------------------------------------------
   // Report types
@@ -272,26 +304,19 @@ export class FISService {
       report_type_name: string;
       description: string | null;
       chart_id: string | null;
+      additional_chart_ids: string | null;
       is_active: boolean | number;
       created_at: Date;
       created_by: string | null;
     }>(
-      `SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+      `SELECT report_type_id, report_type_code, report_type_name, description,
+              chart_id, additional_chart_ids, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`
     );
     throwOnError(result.error);
-    return (result.data || []).map((r) => ({
-      reportTypeId: r.report_type_id,
-      reportTypeCode: r.report_type_code,
-      reportTypeName: r.report_type_name,
-      description: r.description,
-      chartId: r.chart_id,
-      isActive: r.is_active === true || r.is_active === 1,
-      createdAt: r.created_at,
-      createdBy: r.created_by,
-    }));
+    return (result.data || []).map(mapReportTypeRow);
   }
 
   async createReportType(data: Record<string, unknown>): Promise<number> {
@@ -301,6 +326,9 @@ export class FISService {
     const reportTypeName = String(data.reportTypeName ?? data.report_type_name ?? '').trim();
     const description = String(data.description ?? '').trim() || null;
     const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
+    const additionalChartIds = normalizeAdditionalChartIds(
+      data.additionalChartIds ?? data.additional_chart_ids
+    );
     const createdBy = (data.createdBy ?? data.created_by ?? null) as string | null;
 
     if (!reportTypeCode) {
@@ -329,11 +357,11 @@ export class FISService {
 
     const result = await executeQuery<{ report_type_id: number }>(
       `INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, chart_id, created_by
+         report_type_code, report_type_name, description, chart_id, additional_chart_ids, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @createdBy)`,
-      { reportTypeCode, reportTypeName, description, chartId, createdBy }
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds, @createdBy)`,
+      { reportTypeCode, reportTypeName, description, chartId, additionalChartIds, createdBy }
     );
     throwOnError(result.error);
     if (!result.data?.[0]?.report_type_id) {
@@ -365,6 +393,13 @@ export class FISService {
       params.chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
     }
 
+    if (data.additionalChartIds !== undefined || data.additional_chart_ids !== undefined) {
+      sets.push('additional_chart_ids = @additionalChartIds');
+      params.additionalChartIds = normalizeAdditionalChartIds(
+        data.additionalChartIds ?? data.additional_chart_ids
+      );
+    }
+
     if (sets.length === 0) {
       throw new FISServiceError('No fields to update', 400);
     }
@@ -381,11 +416,13 @@ export class FISService {
       report_type_name: string;
       description: string | null;
       chart_id: string | null;
+      additional_chart_ids: string | null;
       is_active: boolean | number;
       created_at: Date;
       created_by: string | null;
     }>(
-      `SELECT report_type_id, report_type_code, report_type_name, description, chart_id, is_active, created_at, created_by
+      `SELECT report_type_id, report_type_code, report_type_name, description,
+              chart_id, additional_chart_ids, is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE report_type_id = @reportTypeId`,
       { reportTypeId }
@@ -394,17 +431,7 @@ export class FISService {
     if (!result.data?.length) {
       throw new FISServiceError('Report type not found', 404);
     }
-    const r = result.data[0];
-    return {
-      reportTypeId: r.report_type_id,
-      reportTypeCode: r.report_type_code,
-      reportTypeName: r.report_type_name,
-      description: r.description,
-      chartId: r.chart_id,
-      isActive: r.is_active === true || r.is_active === 1,
-      createdAt: r.created_at,
-      createdBy: r.created_by,
-    };
+    return mapReportTypeRow(result.data[0]);
   }
 
   // ---------------------------------------------------------------------------
