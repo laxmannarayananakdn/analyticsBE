@@ -8,10 +8,12 @@ export type FisGenerationJobProgress = {
   current: number;
   total: number;
   label?: string;
+  sumStep?: 'column';
   finalizeStep?: 'pit' | 'variance' | 'expression' | 'normalize';
   reportTypeCode?: string;
   batchIndex?: number;
   batchTotal?: number;
+  startedAt?: number;
 };
 
 export type FisGenerationJobStatus = 'pending' | 'running' | 'success' | 'failed';

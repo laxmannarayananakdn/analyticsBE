@@ -1773,8 +1773,7 @@ export class FISService {
       onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
       await this.executeGenerateMode(ctx.procParams, 'INIT');
 
-      onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
-      await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
+      await this.runSumColumnChunks(ctx, onProgress);
 
       await this.runFinalizeChunks(ctx, onProgress);
 
@@ -1853,6 +1852,50 @@ export class FISService {
       reports,
       ...(fileStatus ? { fileStatus, isTbLocked } : {}),
     };
+  }
+
+  /** TB-backed columns for chunked SUM progress (matches SP column cursor). */
+  async getTbSumColumnsForRunKey(
+    reportTypeCode: string,
+    asOfPeriod: string
+  ): Promise<
+    Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>
+  > {
+    const reportType = reportTypeCode.trim().toUpperCase();
+    const period = asOfPeriod.trim();
+    if (!/^\d{6}$/.test(period)) {
+      throw new FISServiceError('asOfPeriod must be YYYYMM', 400);
+    }
+    const reportMonth = parseInt(period.slice(4, 6), 10);
+
+    const result = await executeQuery<{
+      column_key: number;
+      column_code: string;
+      column_label: string;
+      display_order: number;
+    }>(
+      `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
+       FROM admin.fis_report_column_defs d
+       INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
+       WHERE rt.report_type_code = @reportType
+         AND rt.is_active = 1
+         AND d.is_active = 1
+         AND d.column_kind IN ('TB_SUM', 'APPROVED_BUDGET', 'POINT_IN_TIME')
+         AND NOT (
+           d.column_kind = 'POINT_IN_TIME'
+           AND d.period_scope = 'MONTH'
+           AND d.reference_month > @reportMonth
+         )
+       ORDER BY d.display_order`,
+      { reportType, reportMonth }
+    );
+    throwOnError(result.error);
+    return (result.data || []).map((r) => ({
+      columnKey: r.column_key,
+      columnCode: r.column_code,
+      columnLabel: r.column_label,
+      displayOrder: r.display_order,
+    }));
   }
 
   /** SUM rows from report row config — used for chunked generation progress. */
@@ -2071,6 +2114,35 @@ export class FISService {
     }
   }
 
+  private async runSumColumnChunks(
+    ctx: {
+      procParams: Record<string, unknown>;
+      tbSumColumns: Array<{ columnKey: number; columnLabel: string }>;
+    },
+    onProgress?: (progress: FisGenerationJobProgress) => void
+  ): Promise<void> {
+    const total = ctx.tbSumColumns.length;
+    if (total === 0) {
+      onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
+      await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
+      return;
+    }
+
+    for (let i = 0; i < ctx.tbSumColumns.length; i++) {
+      const column = ctx.tbSumColumns[i];
+      onProgress?.({
+        phase: 'sum',
+        sumStep: 'column',
+        current: i + 1,
+        total,
+        label: column.columnLabel,
+      });
+      await this.executeGenerateMode(ctx.procParams, 'SUM_COLUMN', {
+        targetColumnKey: column.columnKey,
+      });
+    }
+  }
+
   private async runFinalizeChunks(
     ctx: {
       procParams: Record<string, unknown>;
@@ -2138,6 +2210,7 @@ export class FISService {
     isTbLocked: boolean;
     runId: number | null;
     sumRows: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
+    tbSumColumns: Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>;
     varianceColumns: Array<{ columnKey: number; columnCode: string; columnLabel: string; displayOrder: number }>;
     expressionRows: Array<{ rowId: number; lineItemCode: string; lineItemLabel: string; displayOrder: number }>;
   }> {
@@ -2244,6 +2317,7 @@ export class FISService {
     }
 
     const sumRows = await this.getSumRowsForRunKey(reportType);
+    const tbSumColumns = await this.getTbSumColumnsForRunKey(reportType, period);
     const varianceColumns = await this.getVarianceColumnsForRunKey(reportType);
     const expressionRows = await this.getExpressionRowsForRunKey(reportType);
 
@@ -2257,6 +2331,7 @@ export class FISService {
       isTbLocked,
       runId,
       sumRows,
+      tbSumColumns,
       varianceColumns,
       expressionRows,
     };
@@ -2267,6 +2342,7 @@ export class FISService {
     generationMode:
       | 'INIT'
       | 'SUM_ROW'
+      | 'SUM_COLUMN'
       | 'SUM_ALL'
       | 'POSTPROCESS'
       | 'POSTPROCESS_PIT'
