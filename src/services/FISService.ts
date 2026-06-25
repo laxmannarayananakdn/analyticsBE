@@ -131,6 +131,8 @@ export interface FisReportType {
   description: string | null;
   chartId: string | null;
   additionalChartIds: string | null;
+  summaryChartId: string | null;
+  additionalSummaryChartIds: string | null;
   isActive: boolean;
   createdAt: Date;
   createdBy: string | null;
@@ -149,6 +151,7 @@ export interface FisReportRow {
   isSpacer: boolean;
   isTitle: boolean;
   isBold: boolean;
+  showOnSummary: boolean;
   rowColor: string | null;
   fontColor: string | null;
   aggregationType: string;
@@ -275,6 +278,8 @@ function mapReportTypeRow(r: {
   description: string | null;
   chart_id: string | null;
   additional_chart_ids?: string | null;
+  summary_chart_id?: string | null;
+  additional_summary_chart_ids?: string | null;
   is_active: boolean | number;
   created_at: Date;
   created_by: string | null;
@@ -286,6 +291,8 @@ function mapReportTypeRow(r: {
     description: r.description,
     chartId: r.chart_id,
     additionalChartIds: r.additional_chart_ids ?? null,
+    summaryChartId: r.summary_chart_id ?? null,
+    additionalSummaryChartIds: r.additional_summary_chart_ids ?? null,
     isActive: r.is_active === true || r.is_active === 1,
     createdAt: r.created_at,
     createdBy: r.created_by,
@@ -305,12 +312,15 @@ export class FISService {
       description: string | null;
       chart_id: string | null;
       additional_chart_ids: string | null;
+      summary_chart_id: string | null;
+      additional_summary_chart_ids: string | null;
       is_active: boolean | number;
       created_at: Date;
       created_by: string | null;
     }>(
       `SELECT report_type_id, report_type_code, report_type_name, description,
-              chart_id, additional_chart_ids, is_active, created_at, created_by
+              chart_id, additional_chart_ids, summary_chart_id, additional_summary_chart_ids,
+              is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`
@@ -328,6 +338,10 @@ export class FISService {
     const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
     const additionalChartIds = normalizeAdditionalChartIds(
       data.additionalChartIds ?? data.additional_chart_ids
+    );
+    const summaryChartId = String(data.summaryChartId ?? data.summary_chart_id ?? '').trim() || null;
+    const additionalSummaryChartIds = normalizeAdditionalChartIds(
+      data.additionalSummaryChartIds ?? data.additional_summary_chart_ids
     );
     const createdBy = (data.createdBy ?? data.created_by ?? null) as string | null;
 
@@ -357,11 +371,22 @@ export class FISService {
 
     const result = await executeQuery<{ report_type_id: number }>(
       `INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, chart_id, additional_chart_ids, created_by
+         report_type_code, report_type_name, description, chart_id, additional_chart_ids,
+         summary_chart_id, additional_summary_chart_ids, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds, @createdBy)`,
-      { reportTypeCode, reportTypeName, description, chartId, additionalChartIds, createdBy }
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds,
+               @summaryChartId, @additionalSummaryChartIds, @createdBy)`,
+      {
+        reportTypeCode,
+        reportTypeName,
+        description,
+        chartId,
+        additionalChartIds,
+        summaryChartId,
+        additionalSummaryChartIds,
+        createdBy,
+      }
     );
     throwOnError(result.error);
     if (!result.data?.[0]?.report_type_id) {
@@ -399,6 +424,19 @@ export class FISService {
         data.additionalChartIds ?? data.additional_chart_ids
       );
     }
+    if (data.summaryChartId !== undefined || data.summary_chart_id !== undefined) {
+      sets.push('summary_chart_id = @summaryChartId');
+      params.summaryChartId = String(data.summaryChartId ?? data.summary_chart_id ?? '').trim() || null;
+    }
+    if (
+      data.additionalSummaryChartIds !== undefined ||
+      data.additional_summary_chart_ids !== undefined
+    ) {
+      sets.push('additional_summary_chart_ids = @additionalSummaryChartIds');
+      params.additionalSummaryChartIds = normalizeAdditionalChartIds(
+        data.additionalSummaryChartIds ?? data.additional_summary_chart_ids
+      );
+    }
 
     if (sets.length === 0) {
       throw new FISServiceError('No fields to update', 400);
@@ -417,12 +455,15 @@ export class FISService {
       description: string | null;
       chart_id: string | null;
       additional_chart_ids: string | null;
+      summary_chart_id: string | null;
+      additional_summary_chart_ids: string | null;
       is_active: boolean | number;
       created_at: Date;
       created_by: string | null;
     }>(
       `SELECT report_type_id, report_type_code, report_type_name, description,
-              chart_id, additional_chart_ids, is_active, created_at, created_by
+              chart_id, additional_chart_ids, summary_chart_id, additional_summary_chart_ids,
+              is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE report_type_id = @reportTypeId`,
       { reportTypeId }
@@ -440,7 +481,7 @@ export class FISService {
 
   private rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
-              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.row_color, rr.font_color,
+              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.show_on_summary, rr.row_color, rr.font_color,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
@@ -479,13 +520,13 @@ export class FISService {
       `INSERT INTO admin.fis_report_rows (
          report_type_id, line_item_code, line_item_label, display_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
-         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, row_color, font_color, notes
+         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, show_on_summary, row_color, font_color, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
          @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
-         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @rowColor, @fontColor, @notes
+         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @showOnSummary, @rowColor, @fontColor, @notes
        )`,
       {
         reportTypeId,
@@ -512,6 +553,7 @@ export class FISService {
             ? String(data.pct_denominator_code)
             : null,
         isBold: toBit(data.isBold ?? data.is_bold),
+        showOnSummary: toBit(data.showOnSummary ?? data.show_on_summary),
         rowColor: normalizeHexColor(data.rowColor ?? data.row_color),
         fontColor: normalizeHexColor(data.fontColor ?? data.font_color),
         notes: data.notes != null ? String(data.notes) : null,
@@ -536,6 +578,7 @@ export class FISService {
       { key: 'isSpacer', snake: 'is_spacer', transform: (v) => toBit(v) },
       { key: 'isTitle', snake: 'is_title', transform: (v) => toBit(v) },
       { key: 'isBold', snake: 'is_bold', transform: (v) => toBit(v) },
+      { key: 'showOnSummary', snake: 'show_on_summary', transform: (v) => toBit(v) },
       { key: 'rowColor', snake: 'row_color', transform: (v) => normalizeHexColor(v) },
       { key: 'fontColor', snake: 'font_color', transform: (v) => normalizeHexColor(v) },
       { key: 'aggregationType', snake: 'aggregation_type' },
@@ -2444,6 +2487,7 @@ export class FISService {
     is_spacer: boolean | number;
     is_title: boolean | number;
     is_bold: boolean | number;
+    show_on_summary: boolean | number;
     row_color: string | null;
     font_color: string | null;
     aggregation_type: string;
@@ -2470,6 +2514,7 @@ export class FISService {
       isSpacer: r.is_spacer === true || r.is_spacer === 1,
       isTitle: r.is_title === true || r.is_title === 1,
       isBold: r.is_bold === true || r.is_bold === 1,
+      showOnSummary: r.show_on_summary === true || r.show_on_summary === 1,
       rowColor: r.row_color,
       fontColor: r.font_color,
       aggregationType: r.aggregation_type,

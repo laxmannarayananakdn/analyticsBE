@@ -101,6 +101,8 @@ function mapReportTypeRow(r) {
         description: r.description,
         chartId: r.chart_id,
         additionalChartIds: r.additional_chart_ids ?? null,
+        summaryChartId: r.summary_chart_id ?? null,
+        additionalSummaryChartIds: r.additional_summary_chart_ids ?? null,
         isActive: r.is_active === true || r.is_active === 1,
         createdAt: r.created_at,
         createdBy: r.created_by,
@@ -112,7 +114,8 @@ export class FISService {
     // ---------------------------------------------------------------------------
     async getReportTypes() {
         const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description,
-              chart_id, additional_chart_ids, is_active, created_at, created_by
+              chart_id, additional_chart_ids, summary_chart_id, additional_summary_chart_ids,
+              is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE is_active = 1
        ORDER BY report_type_name`);
@@ -127,6 +130,8 @@ export class FISService {
         const description = String(data.description ?? '').trim() || null;
         const chartId = String(data.chartId ?? data.chart_id ?? '').trim() || null;
         const additionalChartIds = normalizeAdditionalChartIds(data.additionalChartIds ?? data.additional_chart_ids);
+        const summaryChartId = String(data.summaryChartId ?? data.summary_chart_id ?? '').trim() || null;
+        const additionalSummaryChartIds = normalizeAdditionalChartIds(data.additionalSummaryChartIds ?? data.additional_summary_chart_ids);
         const createdBy = (data.createdBy ?? data.created_by ?? null);
         if (!reportTypeCode) {
             throw new FISServiceError('reportTypeCode is required', 400);
@@ -145,10 +150,21 @@ export class FISService {
             throw new FISServiceError('A report type with this code already exists', 409);
         }
         const result = await executeQuery(`INSERT INTO admin.fis_report_types (
-         report_type_code, report_type_name, description, chart_id, additional_chart_ids, created_by
+         report_type_code, report_type_name, description, chart_id, additional_chart_ids,
+         summary_chart_id, additional_summary_chart_ids, created_by
        )
        OUTPUT INSERTED.report_type_id
-       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds, @createdBy)`, { reportTypeCode, reportTypeName, description, chartId, additionalChartIds, createdBy });
+       VALUES (@reportTypeCode, @reportTypeName, @description, @chartId, @additionalChartIds,
+               @summaryChartId, @additionalSummaryChartIds, @createdBy)`, {
+            reportTypeCode,
+            reportTypeName,
+            description,
+            chartId,
+            additionalChartIds,
+            summaryChartId,
+            additionalSummaryChartIds,
+            createdBy,
+        });
         throwOnError(result.error);
         if (!result.data?.[0]?.report_type_id) {
             throw new FISServiceError('Failed to create report type');
@@ -178,13 +194,23 @@ export class FISService {
             sets.push('additional_chart_ids = @additionalChartIds');
             params.additionalChartIds = normalizeAdditionalChartIds(data.additionalChartIds ?? data.additional_chart_ids);
         }
+        if (data.summaryChartId !== undefined || data.summary_chart_id !== undefined) {
+            sets.push('summary_chart_id = @summaryChartId');
+            params.summaryChartId = String(data.summaryChartId ?? data.summary_chart_id ?? '').trim() || null;
+        }
+        if (data.additionalSummaryChartIds !== undefined ||
+            data.additional_summary_chart_ids !== undefined) {
+            sets.push('additional_summary_chart_ids = @additionalSummaryChartIds');
+            params.additionalSummaryChartIds = normalizeAdditionalChartIds(data.additionalSummaryChartIds ?? data.additional_summary_chart_ids);
+        }
         if (sets.length === 0) {
             throw new FISServiceError('No fields to update', 400);
         }
         const update = await executeQuery(`UPDATE admin.fis_report_types SET ${sets.join(', ')} WHERE report_type_id = @reportTypeId`, params);
         throwOnError(update.error);
         const result = await executeQuery(`SELECT report_type_id, report_type_code, report_type_name, description,
-              chart_id, additional_chart_ids, is_active, created_at, created_by
+              chart_id, additional_chart_ids, summary_chart_id, additional_summary_chart_ids,
+              is_active, created_at, created_by
        FROM admin.fis_report_types
        WHERE report_type_id = @reportTypeId`, { reportTypeId });
         throwOnError(result.error);
@@ -1151,8 +1177,7 @@ export class FISService {
         try {
             onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
             await this.executeGenerateMode(ctx.procParams, 'INIT');
-            onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
-            await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
+            await this.runSumColumnChunks(ctx, onProgress);
             await this.runFinalizeChunks(ctx, onProgress);
             const outputRowCount = await this.countRunKeyOutput(ctx);
             await completeReportRun(ctx.runId, true, outputRowCount);
@@ -1208,6 +1233,35 @@ export class FISService {
             reports,
             ...(fileStatus ? { fileStatus, isTbLocked } : {}),
         };
+    }
+    /** TB-backed columns for chunked SUM progress (matches SP column cursor). */
+    async getTbSumColumnsForRunKey(reportTypeCode, asOfPeriod) {
+        const reportType = reportTypeCode.trim().toUpperCase();
+        const period = asOfPeriod.trim();
+        if (!/^\d{6}$/.test(period)) {
+            throw new FISServiceError('asOfPeriod must be YYYYMM', 400);
+        }
+        const reportMonth = parseInt(period.slice(4, 6), 10);
+        const result = await executeQuery(`SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
+       FROM admin.fis_report_column_defs d
+       INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
+       WHERE rt.report_type_code = @reportType
+         AND rt.is_active = 1
+         AND d.is_active = 1
+         AND d.column_kind IN ('TB_SUM', 'APPROVED_BUDGET', 'POINT_IN_TIME')
+         AND NOT (
+           d.column_kind = 'POINT_IN_TIME'
+           AND d.period_scope = 'MONTH'
+           AND d.reference_month > @reportMonth
+         )
+       ORDER BY d.display_order`, { reportType, reportMonth });
+        throwOnError(result.error);
+        return (result.data || []).map((r) => ({
+            columnKey: r.column_key,
+            columnCode: r.column_code,
+            columnLabel: r.column_label,
+            displayOrder: r.display_order,
+        }));
     }
     /** SUM rows from report row config — used for chunked generation progress. */
     async getSumRowsForRunKey(reportTypeCode) {
@@ -1358,6 +1412,27 @@ export class FISService {
             throw new FISServiceError(message);
         }
     }
+    async runSumColumnChunks(ctx, onProgress) {
+        const total = ctx.tbSumColumns.length;
+        if (total === 0) {
+            onProgress?.({ phase: 'sum', current: 0, total: 1, label: 'Aggregating trial balance' });
+            await this.executeGenerateMode(ctx.procParams, 'SUM_ALL');
+            return;
+        }
+        for (let i = 0; i < ctx.tbSumColumns.length; i++) {
+            const column = ctx.tbSumColumns[i];
+            onProgress?.({
+                phase: 'sum',
+                sumStep: 'column',
+                current: i + 1,
+                total,
+                label: column.columnLabel,
+            });
+            await this.executeGenerateMode(ctx.procParams, 'SUM_COLUMN', {
+                targetColumnKey: column.columnKey,
+            });
+        }
+    }
     async runFinalizeChunks(ctx, onProgress) {
         const total = 1 + ctx.varianceColumns.length + 2;
         let current = 0;
@@ -1481,6 +1556,7 @@ export class FISService {
             procParams.file_status = fileStatus;
         }
         const sumRows = await this.getSumRowsForRunKey(reportType);
+        const tbSumColumns = await this.getTbSumColumnsForRunKey(reportType, period);
         const varianceColumns = await this.getVarianceColumnsForRunKey(reportType);
         const expressionRows = await this.getExpressionRowsForRunKey(reportType);
         return {
@@ -1493,6 +1569,7 @@ export class FISService {
             isTbLocked,
             runId,
             sumRows,
+            tbSumColumns,
             varianceColumns,
             expressionRows,
         };

@@ -18,6 +18,8 @@ export interface FisReportType {
     description: string | null;
     chartId: string | null;
     additionalChartIds: string | null;
+    summaryChartId: string | null;
+    additionalSummaryChartIds: string | null;
     isActive: boolean;
     createdAt: Date;
     createdBy: string | null;
@@ -213,6 +215,13 @@ export declare class FISService {
         fileStatus?: FisFileStatus;
         isTbLocked?: boolean;
     }>;
+    /** TB-backed columns for chunked SUM progress (matches SP column cursor). */
+    getTbSumColumnsForRunKey(reportTypeCode: string, asOfPeriod: string): Promise<Array<{
+        columnKey: number;
+        columnCode: string;
+        columnLabel: string;
+        displayOrder: number;
+    }>>;
     /** SUM rows from report row config — used for chunked generation progress. */
     getSumRowsForRunKey(reportTypeCode: string): Promise<Array<{
         rowId: number;
@@ -272,6 +281,7 @@ export declare class FISService {
             displayOrder: number;
         }>;
     }>;
+    private runSumColumnChunks;
     private runFinalizeChunks;
     private prepareRunKeyGeneration;
     private executeGenerateMode;
