@@ -21,6 +21,8 @@ interface SyncScheduleRow {
   load_rp_schema: boolean | number;
   build_student_assessments_by_academic_year: boolean | number;
   include_descendants: boolean | number;
+  run_managebac: boolean | number;
+  run_nexquare: boolean | number;
 }
 
 const RELOAD_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -42,7 +44,9 @@ async function loadActiveSchedules(): Promise<SyncScheduleRow[]> {
     `SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
             ISNULL(load_rp_schema, 1) AS load_rp_schema,
             ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
-            include_descendants
+            include_descendants,
+            ISNULL(run_managebac, 1) AS run_managebac,
+            ISNULL(run_nexquare, 1) AS run_nexquare
      FROM admin.sync_schedules
      WHERE is_active = 1
      ORDER BY id`
@@ -111,14 +115,18 @@ function registerSchedule(schedule: SyncScheduleRow): void {
 
         const endpointsMb = parseEndpoints(schedule.endpoints_mb);
         const endpointsNex = parseEndpoints(schedule.endpoints_nex);
+        const runManagebac = !!(schedule.run_managebac ?? true);
+        const runNexquare = !!(schedule.run_nexquare ?? true);
 
         const result = await runSync({
           nodeIds: [schedule.node_id],
           academicYear: schedule.academic_year,
           scheduleId: schedule.id,
           existingRunId: claimedRunId,
-          endpointsMb: endpointsMb ?? undefined,
-          endpointsNex: endpointsNex ?? undefined,
+          endpointsMb: runManagebac ? (endpointsMb ?? undefined) : undefined,
+          endpointsNex: runNexquare ? (endpointsNex ?? undefined) : undefined,
+          runManagebac,
+          runNexquare,
           loadRpSchema: !!(schedule.load_rp_schema ?? true),
           buildStudentAssessmentsByAcademicYear: !!(schedule.build_student_assessments_by_academic_year),
           includeDescendants: !!(schedule.include_descendants),

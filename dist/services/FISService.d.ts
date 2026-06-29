@@ -37,6 +37,7 @@ export interface FisReportRow {
     isSpacer: boolean;
     isTitle: boolean;
     isBold: boolean;
+    showOnSummary: boolean;
     rowColor: string | null;
     fontColor: string | null;
     aggregationType: string;

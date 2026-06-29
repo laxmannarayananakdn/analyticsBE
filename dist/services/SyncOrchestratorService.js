@@ -122,14 +122,18 @@ export async function runSync(params) {
         configIdsMb: params.configIdsMb,
         configIdsNex: params.configIdsNex,
     });
+    const runManagebac = params.runManagebac !== false;
+    const runNexquare = params.runNexquare !== false;
+    const mbConfigs = runManagebac ? mb : [];
+    const nexConfigs = runNexquare ? nex : [];
     const schoolItems = [];
-    for (const c of mb) {
+    for (const c of mbConfigs) {
         const sid = c.school_id != null ? String(c.school_id) : '';
         if (sid) {
             schoolItems.push({ config: c, source: 'mb', schoolId: sid, schoolName: c.school_name });
         }
     }
-    for (const c of nex) {
+    for (const c of nexConfigs) {
         const sid = c.school_id?.trim() ?? '';
         if (sid) {
             schoolItems.push({ config: c, source: 'nex', schoolId: sid, schoolName: c.school_name });
@@ -137,8 +141,12 @@ export async function runSync(params) {
     }
     const totalSchools = schoolItems.length;
     await executeQuery(`UPDATE admin.sync_runs SET total_schools = @total WHERE id = @runId`, { total: totalSchools, runId });
-    const endpointsMb = params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL;
-    const endpointsNex = params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL;
+    const endpointsMb = runManagebac
+        ? (params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL)
+        : [];
+    const endpointsNex = runNexquare
+        ? (params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL)
+        : [];
     const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
     const runBuildStudentAssessmentsByAcademicYear = params.buildStudentAssessmentsByAcademicYear === true;
     const itemsWithIds = [];

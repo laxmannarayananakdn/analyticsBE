@@ -27,7 +27,9 @@ async function loadActiveSchedules() {
     const result = await executeQuery(`SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
             ISNULL(load_rp_schema, 1) AS load_rp_schema,
             ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
-            include_descendants
+            include_descendants,
+            ISNULL(run_managebac, 1) AS run_managebac,
+            ISNULL(run_nexquare, 1) AS run_nexquare
      FROM admin.sync_schedules
      WHERE is_active = 1
      ORDER BY id`);
@@ -80,13 +82,17 @@ function registerSchedule(schedule) {
             }
             const endpointsMb = parseEndpoints(schedule.endpoints_mb);
             const endpointsNex = parseEndpoints(schedule.endpoints_nex);
+            const runManagebac = !!(schedule.run_managebac ?? true);
+            const runNexquare = !!(schedule.run_nexquare ?? true);
             const result = await runSync({
                 nodeIds: [schedule.node_id],
                 academicYear: schedule.academic_year,
                 scheduleId: schedule.id,
                 existingRunId: claimedRunId,
-                endpointsMb: endpointsMb ?? undefined,
-                endpointsNex: endpointsNex ?? undefined,
+                endpointsMb: runManagebac ? (endpointsMb ?? undefined) : undefined,
+                endpointsNex: runNexquare ? (endpointsNex ?? undefined) : undefined,
+                runManagebac,
+                runNexquare,
                 loadRpSchema: !!(schedule.load_rp_schema ?? true),
                 buildStudentAssessmentsByAcademicYear: !!(schedule.build_student_assessments_by_academic_year),
                 includeDescendants: !!(schedule.include_descendants),

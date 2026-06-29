@@ -174,6 +174,8 @@ router.get('/schedules', async (req: Request, res: Response) => {
       `SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
               ISNULL(load_rp_schema, 1) AS load_rp_schema,
               ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
+              ISNULL(run_managebac, 1) AS run_managebac,
+              ISNULL(run_nexquare, 1) AS run_nexquare,
               include_descendants, is_active, created_at, updated_at, created_by
        FROM admin.sync_schedules
        ORDER BY node_id, academic_year`
@@ -199,25 +201,33 @@ router.get('/schedules', async (req: Request, res: Response) => {
  */
 router.post('/schedules', async (req: Request, res: Response) => {
   try {
-    const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, created_by } = req.body;
+    const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, run_managebac, run_nexquare, created_by } = req.body;
 
     if (!node_id || !academic_year || !cron_expression) {
       return res.status(400).json({ error: 'node_id, academic_year, and cron_expression are required' });
     }
 
+    const runMb = run_managebac !== false;
+    const runNex = run_nexquare !== false;
+    if (!runMb && !runNex) {
+      return res.status(400).json({ error: 'At least one data source (ManageBac or Nexquare) must be enabled' });
+    }
+
     const result = await executeQuery<any>(
-      `INSERT INTO admin.sync_schedules (node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, created_by)
+      `INSERT INTO admin.sync_schedules (node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, run_managebac, run_nexquare, created_by)
        OUTPUT INSERTED.id, INSERTED.node_id, INSERTED.academic_year, INSERTED.cron_expression
-       VALUES (@node_id, @academic_year, @cron_expression, @endpoints_mb, @endpoints_nex, @load_rp_schema, @build_student_assessments_by_academic_year, @include_descendants, @created_by)`,
+       VALUES (@node_id, @academic_year, @cron_expression, @endpoints_mb, @endpoints_nex, @load_rp_schema, @build_student_assessments_by_academic_year, @include_descendants, @run_managebac, @run_nexquare, @created_by)`,
       {
         node_id,
         academic_year,
         cron_expression,
-        endpoints_mb: endpoints_mb ? JSON.stringify(endpoints_mb) : null,
-        endpoints_nex: endpoints_nex ? JSON.stringify(endpoints_nex) : null,
+        endpoints_mb: runMb && endpoints_mb ? JSON.stringify(endpoints_mb) : null,
+        endpoints_nex: runNex && endpoints_nex ? JSON.stringify(endpoints_nex) : null,
         load_rp_schema: load_rp_schema !== false ? 1 : 0,
         build_student_assessments_by_academic_year: build_student_assessments_by_academic_year ? 1 : 0,
         include_descendants: include_descendants ? 1 : 0,
+        run_managebac: runMb ? 1 : 0,
+        run_nexquare: runNex ? 1 : 0,
         created_by: created_by || req.user?.email || null,
       }
     );
@@ -248,7 +258,7 @@ router.put('/schedules/:id', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid schedule ID' });
     }
 
-    const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, is_active } = req.body;
+    const { node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex, load_rp_schema, build_student_assessments_by_academic_year, include_descendants, run_managebac, run_nexquare, is_active } = req.body;
 
     const updates: string[] = [];
     const params: Record<string, any> = { id };
@@ -285,6 +295,14 @@ router.put('/schedules/:id', async (req: Request, res: Response) => {
       updates.push('include_descendants = @include_descendants');
       params.include_descendants = include_descendants ? 1 : 0;
     }
+    if (run_managebac !== undefined) {
+      updates.push('run_managebac = @run_managebac');
+      params.run_managebac = run_managebac !== false ? 1 : 0;
+    }
+    if (run_nexquare !== undefined) {
+      updates.push('run_nexquare = @run_nexquare');
+      params.run_nexquare = run_nexquare !== false ? 1 : 0;
+    }
     if (is_active !== undefined) {
       updates.push('is_active = @is_active');
       params.is_active = is_active ? 1 : 0;
@@ -292,6 +310,10 @@ router.put('/schedules/:id', async (req: Request, res: Response) => {
 
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    if (run_managebac === false && run_nexquare === false) {
+      return res.status(400).json({ error: 'At least one data source (ManageBac or Nexquare) must be enabled' });
     }
 
     updates.push('updated_at = SYSDATETIMEOFFSET()');
@@ -309,6 +331,8 @@ router.put('/schedules/:id', async (req: Request, res: Response) => {
       `SELECT id, node_id, academic_year, cron_expression, endpoints_mb, endpoints_nex,
               ISNULL(load_rp_schema, 1) AS load_rp_schema,
               ISNULL(build_student_assessments_by_academic_year, 0) AS build_student_assessments_by_academic_year,
+              ISNULL(run_managebac, 1) AS run_managebac,
+              ISNULL(run_nexquare, 1) AS run_nexquare,
               include_descendants, is_active, updated_at
        FROM admin.sync_schedules WHERE id = @id`,
       { id }
@@ -373,7 +397,7 @@ router.delete('/schedules/:id', async (req: Request, res: Response) => {
  */
 router.post('/trigger', async (req: Request, res: Response) => {
   try {
-    const { nodeIds, nodeId, academicYear, all, includeDescendants, endpointsMb, endpointsNex, loadRpSchema, buildStudentAssessmentsByAcademicYear } = req.body;
+    const { nodeIds, nodeId, academicYear, all, includeDescendants, endpointsMb, endpointsNex, loadRpSchema, buildStudentAssessmentsByAcademicYear, runManagebac, runNexquare } = req.body;
     const triggeredBy = req.user?.email || 'manual';
 
     const resolvedNodeIds = nodeIds ?? (nodeId ? [nodeId] : undefined);
@@ -382,6 +406,12 @@ router.post('/trigger', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: 'Provide nodeIds (or nodeId), or all: true to sync all configs',
       });
+    }
+
+    const runMb = runManagebac !== false;
+    const runNex = runNexquare !== false;
+    if (!runMb && !runNex) {
+      return res.status(400).json({ error: 'At least one data source (ManageBac or Nexquare) must be enabled' });
     }
 
     const nodeIdStr = all ? 'all' : (Array.isArray(resolvedNodeIds) ? resolvedNodeIds.join(',') : (resolvedNodeIds?.[0] ?? ''));
@@ -412,8 +442,10 @@ router.post('/trigger', async (req: Request, res: Response) => {
           triggeredBy,
           existingRunId: runId,
           abortSignal: abortController.signal,
-          endpointsMb: Array.isArray(endpointsMb) && endpointsMb.length > 0 ? endpointsMb : undefined,
-          endpointsNex: Array.isArray(endpointsNex) && endpointsNex.length > 0 ? endpointsNex : undefined,
+          endpointsMb: runMb && Array.isArray(endpointsMb) && endpointsMb.length > 0 ? endpointsMb : undefined,
+          endpointsNex: runNex && Array.isArray(endpointsNex) && endpointsNex.length > 0 ? endpointsNex : undefined,
+          runManagebac: runMb,
+          runNexquare: runNex,
           loadRpSchema: loadRpSchema !== false,
           buildStudentAssessmentsByAcademicYear: !!buildStudentAssessmentsByAcademicYear,
         });

@@ -224,7 +224,7 @@ export class FISService {
     // ---------------------------------------------------------------------------
     rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
               rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
-              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.row_color, rr.font_color,
+              rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.show_on_summary, rr.row_color, rr.font_color,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
               rr.is_active, rr.notes, rr.created_at, rr.updated_at
@@ -253,13 +253,13 @@ export class FISService {
         const result = await executeQuery(`INSERT INTO admin.fis_report_rows (
          report_type_id, line_item_code, line_item_label, display_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
-         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, row_color, font_color, notes
+         sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, show_on_summary, row_color, font_color, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
          @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
-         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @rowColor, @fontColor, @notes
+         @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @showOnSummary, @rowColor, @fontColor, @notes
        )`, {
             reportTypeId,
             lineItemCode,
@@ -285,6 +285,7 @@ export class FISService {
                     ? String(data.pct_denominator_code)
                     : null,
             isBold: toBit(data.isBold ?? data.is_bold),
+            showOnSummary: toBit(data.showOnSummary ?? data.show_on_summary),
             rowColor: normalizeHexColor(data.rowColor ?? data.row_color),
             fontColor: normalizeHexColor(data.fontColor ?? data.font_color),
             notes: data.notes != null ? String(data.notes) : null,
@@ -307,6 +308,7 @@ export class FISService {
             { key: 'isSpacer', snake: 'is_spacer', transform: (v) => toBit(v) },
             { key: 'isTitle', snake: 'is_title', transform: (v) => toBit(v) },
             { key: 'isBold', snake: 'is_bold', transform: (v) => toBit(v) },
+            { key: 'showOnSummary', snake: 'show_on_summary', transform: (v) => toBit(v) },
             { key: 'rowColor', snake: 'row_color', transform: (v) => normalizeHexColor(v) },
             { key: 'fontColor', snake: 'font_color', transform: (v) => normalizeHexColor(v) },
             { key: 'aggregationType', snake: 'aggregation_type' },
@@ -1649,6 +1651,7 @@ export class FISService {
             isSpacer: r.is_spacer === true || r.is_spacer === 1,
             isTitle: r.is_title === true || r.is_title === 1,
             isBold: r.is_bold === true || r.is_bold === 1,
+            showOnSummary: r.show_on_summary === true || r.show_on_summary === 1,
             rowColor: r.row_color,
             fontColor: r.font_color,
             aggregationType: r.aggregation_type,
