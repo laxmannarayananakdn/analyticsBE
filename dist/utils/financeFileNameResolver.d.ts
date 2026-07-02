@@ -33,5 +33,10 @@ export declare function parseTrialBalanceFileName(fileName: string): ParsedTrial
 /**
  * Build column metadata from entity + YYYYMM period (no file name required).
  */
+/**
+ * Ensure TB filename parses and matches the submitted file type (Actual/Budget).
+ * Throws when entity, period, or tb type cannot be derived or do not agree.
+ */
+export declare function validateTrialBalanceFileIdentity(fileName: string, fileTypeCode: string): ParsedTrialBalanceFileName;
 export declare function parseTrialBalancePeriod(entityCode: string, periodYyyymm: string): ParsedTrialBalanceFileName | null;
 //# sourceMappingURL=financeFileNameResolver.d.ts.map

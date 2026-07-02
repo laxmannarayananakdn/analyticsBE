@@ -137,6 +137,44 @@ export function parseTrialBalanceFileName(fileName: string): ParsedTrialBalanceF
 /**
  * Build column metadata from entity + YYYYMM period (no file name required).
  */
+/**
+ * Ensure TB filename parses and matches the submitted file type (Actual/Budget).
+ * Throws when entity, period, or tb type cannot be derived or do not agree.
+ */
+export function validateTrialBalanceFileIdentity(
+  fileName: string,
+  fileTypeCode: string
+): ParsedTrialBalanceFileName {
+  const base = fileName.trim().replace(/^.*[/\\]/, '');
+  const parsed = parseTrialBalanceFileName(base);
+  if (!parsed) {
+    throw new Error(
+      `Trial balance filename "${base}" is invalid. ` +
+        'Expected format: TB_YYYYMM_ENTITY_Actual|Budget.xlsx'
+    );
+  }
+
+  const upper = fileTypeCode.trim().toUpperCase();
+  const expectedCode = parsed.tbKind === 'BUDGET' ? 'FIN_TB_BUDGET' : 'FIN_TB_ACTUAL';
+  if (upper !== expectedCode) {
+    throw new Error(
+      `Trial balance filename "${base}" indicates ${parsed.tbKind} ` +
+        `(entity ${parsed.entityCode}, period ${parsed.periodYyyymm}) ` +
+        `but the file was submitted as ${fileTypeCode}.`
+    );
+  }
+
+  const resolved = resolveFinanceFileType(base);
+  if (!resolved || resolved.fileTypeCode !== expectedCode) {
+    throw new Error(
+      `Trial balance filename "${base}" does not match its Actual/Budget suffix ` +
+        `(entity ${parsed.entityCode}, period ${parsed.periodYyyymm}, type ${parsed.tbKind}).`
+    );
+  }
+
+  return parsed;
+}
+
 export function parseTrialBalancePeriod(
   entityCode: string,
   periodYyyymm: string

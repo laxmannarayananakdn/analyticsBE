@@ -24,7 +24,7 @@ import {
 } from '../utils/fileValidation.js';
 import { ErrorCode, UploadError } from '../types/errors.js';
 import { processFinanceFile } from '../services/FinanceEfUploadService.js';
-import { isFinanceFileTypeCode } from '../utils/financeFileNameResolver.js';
+import { isFinanceFileTypeCode, validateTrialBalanceFileIdentity } from '../utils/financeFileNameResolver.js';
 
 // Import multer - using default import with esModuleInterop
 // @ts-ignore - multer is CommonJS but esModuleInterop handles it
@@ -402,8 +402,12 @@ router.post('/upload', (req, res, next) => {
       const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
       await efService.deleteAllFINDictionaryByType(dictionaryType);
     } else if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
-      const tbType = fileTypeUpper === 'FIN_TB_ACTUAL' ? 'ACTUAL' : 'BUDGET';
-      await efService.deleteFINTrialBalanceByFileName(fileName, tbType);
+      const tbIdentity = validateTrialBalanceFileIdentity(fileName, fileTypeUpper);
+      await efService.deleteFINTrialBalanceByEntityPeriod(
+        tbIdentity.entityCode,
+        tbIdentity.periodYyyymm,
+        tbIdentity.tbKind
+      );
     }
     const insertFunction = insertRegistry[fileTypeUpper];
 

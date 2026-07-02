@@ -14,7 +14,11 @@ import {
   validateFileSize,
   validateRowCount,
 } from '../utils/fileValidation.js';
-import { isFinanceFileTypeCode, parseTrialBalanceFileName } from '../utils/financeFileNameResolver.js';
+import {
+  isFinanceFileTypeCode,
+  type ParsedTrialBalanceFileName,
+  validateTrialBalanceFileIdentity,
+} from '../utils/financeFileNameResolver.js';
 import {
   assertHomogeneousTbStatus,
   assertTbUploadAllowed,
@@ -90,18 +94,25 @@ const insertRegistry: Record<string, InsertFunction> = {
     efService.insertFINTrialBalance(id, name, by, 'BUDGET', recs as FinanceTrialBalanceRecord[]),
 };
 
-async function deleteExistingFinanceData(fileTypeUpper: string, fileName: string): Promise<void> {
+async function deleteExistingFinanceData(
+  fileTypeUpper: string,
+  fileName: string,
+  tbIdentity?: ParsedTrialBalanceFileName
+): Promise<void> {
   if (FINANCE_DICTIONARY_FILE_TYPES.includes(fileTypeUpper)) {
     const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
     await efService.deleteAllFINDictionaryByType(dictionaryType);
     return;
   }
-  if (fileTypeUpper === 'FIN_TB_ACTUAL') {
-    await efService.deleteFINTrialBalanceByFileName(fileName, 'ACTUAL');
-    return;
-  }
-  if (fileTypeUpper === 'FIN_TB_BUDGET') {
-    await efService.deleteFINTrialBalanceByFileName(fileName, 'BUDGET');
+  if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+    if (!tbIdentity) {
+      throw new Error('Trial balance identity must be validated before replace');
+    }
+    await efService.deleteFINTrialBalanceByEntityPeriod(
+      tbIdentity.entityCode,
+      tbIdentity.periodYyyymm,
+      tbIdentity.tbKind
+    );
   }
 }
 
@@ -163,6 +174,26 @@ export async function processFinanceFile(
 
     uploadId = await efService.createUpload(fileTypeCode, fileName, fileSize, uploadedBy);
 
+    let tbIdentity: ParsedTrialBalanceFileName | undefined;
+    if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
+      try {
+        tbIdentity = validateTrialBalanceFileIdentity(fileName, fileTypeUpper);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await efService.updateUploadStatus(uploadId, 'FAILED', 0, message);
+        return {
+          success: false,
+          uploadId,
+          errorMessage: message,
+          errors: [{
+            code: ErrorCode.INVALID_FILE_TYPE,
+            message,
+            step: 'VALIDATION',
+          }],
+        };
+      }
+    }
+
     const parseResult = await fileParserFactory.parseFile(fileTypeCode, fileBuffer, skipInvalidRows);
 
     if (!parseResult.valid) {
@@ -213,21 +244,16 @@ export async function processFinanceFile(
 
     let tbFileStatus: ReturnType<typeof assertHomogeneousTbStatus> | undefined;
     if (fileTypeUpper === 'FIN_TB_ACTUAL' || fileTypeUpper === 'FIN_TB_BUDGET') {
-      const parsed = parseTrialBalanceFileName(fileName);
-      if (!parsed?.entityCode || !parsed.periodYyyymm) {
-        const message =
-          `Cannot parse entity/period from trial balance filename "${fileName}". ` +
-          'Expected TB_YYYYMM_ENTITY_Actual|Budget.xlsx';
-        await efService.updateUploadStatus(uploadId, 'FAILED', records.length, message);
-        return { success: false, uploadId, errorMessage: message };
+      if (!tbIdentity) {
+        throw new Error('Trial balance identity missing after validation');
       }
       if (isFisPhase4Enabled()) {
-        await assertTbUploadAllowed(parsed.entityCode, parsed.periodYyyymm);
+        await assertTbUploadAllowed(tbIdentity.entityCode, tbIdentity.periodYyyymm);
         tbFileStatus = assertHomogeneousTbStatus(records as FinanceTrialBalanceRecord[]);
       }
     }
 
-    await deleteExistingFinanceData(fileTypeUpper, fileName);
+    await deleteExistingFinanceData(fileTypeUpper, fileName, tbIdentity);
 
     const insertFunction = insertRegistry[fileTypeUpper];
     if (!insertFunction) {
@@ -248,21 +274,17 @@ export async function processFinanceFile(
           'No FIS report instance or admin.fis_report_columns changes.'
       );
 
-      if (isFisPhase4Enabled()) {
-        const parsed = parseTrialBalanceFileName(fileName);
-        if (parsed?.entityCode && parsed.periodYyyymm && tbFileStatus) {
-          const tbType = fileTypeUpper === 'FIN_TB_BUDGET' ? 'BUDGET' : 'ACTUAL';
-          await upsertTbPeriodCoverage({
-            entityCode: parsed.entityCode,
-            period: parsed.periodYyyymm,
-            tbType,
-            uploadId,
-            fileName,
-            fileStatus: tbFileStatus,
-            rowCount,
-          });
-          await maybeLockEntityPeriod(parsed.entityCode, parsed.periodYyyymm, uploadedBy);
-        }
+      if (isFisPhase4Enabled() && tbIdentity && tbFileStatus) {
+        await upsertTbPeriodCoverage({
+          entityCode: tbIdentity.entityCode,
+          period: tbIdentity.periodYyyymm,
+          tbType: tbIdentity.tbKind,
+          uploadId,
+          fileName,
+          fileStatus: tbFileStatus,
+          rowCount,
+        });
+        await maybeLockEntityPeriod(tbIdentity.entityCode, tbIdentity.periodYyyymm, uploadedBy);
       }
     }
 

@@ -990,9 +990,51 @@ export class EFService {
   }
 
   /**
-   * Replace only rows from a prior upload of the same file (keeps other months/entities).
-   * Do NOT use deleteAllFINTrialBalanceByType for routine uploads — it wipes every month.
+   * Replace trial balance rows for one entity-period and type (keeps other entities/periods).
+   * Also removes legacy rows that match the canonical filename when entity_code/period were not backfilled.
    */
+  async deleteFINTrialBalanceByEntityPeriod(
+    entityCode: string,
+    period: string,
+    tbType: 'ACTUAL' | 'BUDGET'
+  ): Promise<void> {
+    const entity = entityCode.trim().toUpperCase();
+    const periodNorm = period.trim();
+    const tbSuffix = tbType === 'BUDGET' ? 'Budget' : 'Actual';
+    const canonicalFileName = `TB_${periodNorm}_${entity}_${tbSuffix}.xlsx`;
+
+    const result = await executeQuery(
+      `DELETE FROM FIN.TrialBalance
+       WHERE tb_type = @tbType
+         AND (
+           (entity_code = @entity AND period = @period)
+           OR (
+             (entity_code IS NULL OR period IS NULL)
+             AND (
+               file_name = @canonicalFileName
+               OR file_name LIKE @canonicalFilePrefix
+             )
+           )
+         );`,
+      {
+        tbType,
+        entity,
+        period: periodNorm,
+        canonicalFileName,
+        canonicalFilePrefix: `TB_${periodNorm}_${entity}_${tbSuffix}%`,
+      }
+    );
+    if (result.error) {
+      throw new Error(
+        `Failed to delete FIN trial balance for ${entity} period ${periodNorm} (${tbType}): ${result.error}`
+      );
+    }
+    console.log(
+      `[EFService] Replaced prior TB rows for ${entity} / ${periodNorm} (${tbType}) before insert`
+    );
+  }
+
+  /** @deprecated Prefer deleteFINTrialBalanceByEntityPeriod for routine uploads. */
   async deleteFINTrialBalanceByFileName(
     fileName: string,
     tbType: 'ACTUAL' | 'BUDGET'

@@ -33,6 +33,12 @@ SFTP / EF upload loads **TB\*** files into `FIN.TrialBalance` only. Report insta
 `admin.fis_report_columns` are **not** created automatically — use **FIS Report Processing**
 in the admin UI to create an instance and generate the report.
 
+**Replace scope:** Before insert, existing rows for the same `entity_code + period + tb_type`
+are deleted (other entities and months are untouched). The filename must parse as
+`TB_YYYYMM_ENTITY_Actual|Budget.xlsx` and match the resolved file type; otherwise the upload
+is marked `FAILED` in `EF.Uploads` (visible on **FIS Processing Log → SFTP Pulls**) and the
+file is moved to `ErrorFilesNew`.
+
 **Budget fallback:** Budget files are optional after January. The **monthly Budget** column uses
 the latest budget on or before that month (typically January). **YTD Budget** sums only months
 that have their own budget upload (January baseline plus any monthly budget-change files); months

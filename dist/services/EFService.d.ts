@@ -63,9 +63,11 @@ export declare class EFService {
     /** Full wipe by type — admin/maintenance only; not for per-file SFTP uploads. */
     deleteAllFINTrialBalanceByType(tbType: 'ACTUAL' | 'BUDGET'): Promise<void>;
     /**
-     * Replace only rows from a prior upload of the same file (keeps other months/entities).
-     * Do NOT use deleteAllFINTrialBalanceByType for routine uploads — it wipes every month.
+     * Replace trial balance rows for one entity-period and type (keeps other entities/periods).
+     * Also removes legacy rows that match the canonical filename when entity_code/period were not backfilled.
      */
+    deleteFINTrialBalanceByEntityPeriod(entityCode: string, period: string, tbType: 'ACTUAL' | 'BUDGET'): Promise<void>;
+    /** @deprecated Prefer deleteFINTrialBalanceByEntityPeriod for routine uploads. */
     deleteFINTrialBalanceByFileName(fileName: string, tbType: 'ACTUAL' | 'BUDGET'): Promise<void>;
     insertFINDictionary(uploadId: number, fileName: string, uploadedBy: string, dictionaryType: string, records: FinanceDictionaryRecord[]): Promise<number>;
     insertFINTrialBalance(uploadId: number, fileName: string, uploadedBy: string, tbType: 'ACTUAL' | 'BUDGET', records: FinanceTrialBalanceRecord[]): Promise<number>;
