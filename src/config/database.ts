@@ -20,7 +20,7 @@ const config: sql.config = {
     connectionTimeout: 30000
   },
   pool: {
-    max: 10,
+    max: parseInt(process.env.AZURE_SQL_POOL_MAX ?? '10', 10) || 10,
     min: 0,
     idleTimeoutMillis: 30000
   }

@@ -16,6 +16,12 @@ export type FisGenerationJobProgress = {
   startedAt?: number;
 };
 
+export type FisV2GenerationJobProgress = {
+  reports: Record<string, FisGenerationJobProgress | null>;
+  activeReportTypeCode?: string;
+  publishPhase?: string;
+};
+
 export type FisGenerationJobStatus = 'pending' | 'running' | 'success' | 'failed';
 
 export type FisGenerationJobReportResult = {
@@ -27,6 +33,8 @@ export type FisGenerationJob = {
   jobId: string;
   status: FisGenerationJobStatus;
   progress: FisGenerationJobProgress | null;
+  v2Progress?: FisV2GenerationJobProgress | null;
+  pipeline?: 'v1' | 'v2';
   result?: {
     reportTypeCode?: string;
     entityCode: string;
@@ -53,13 +61,15 @@ function pruneOldJobs(): void {
   }
 }
 
-export function createGenerationJob(): string {
+export function createGenerationJob(pipeline: 'v1' | 'v2' = 'v1'): string {
   pruneOldJobs();
   const jobId = `fis-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   jobs.set(jobId, {
     jobId,
     status: 'pending',
     progress: null,
+    v2Progress: pipeline === 'v2' ? { reports: {} } : null,
+    pipeline,
     startedAt: Date.now(),
   });
   return jobId;
@@ -70,6 +80,19 @@ export function updateGenerationJobProgress(jobId: string, progress: FisGenerati
   if (!job || job.status === 'success' || job.status === 'failed') return;
   job.status = 'running';
   job.progress = progress;
+}
+
+export function updateV2GenerationJobProgress(jobId: string, progress: FisV2GenerationJobProgress): void {
+  const job = jobs.get(jobId);
+  if (!job || job.status === 'success' || job.status === 'failed') return;
+  job.status = 'running';
+  job.v2Progress = progress;
+  if (progress.activeReportTypeCode && progress.reports[progress.activeReportTypeCode]) {
+    job.progress = {
+      ...progress.reports[progress.activeReportTypeCode]!,
+      reportTypeCode: progress.activeReportTypeCode,
+    };
+  }
 }
 
 export function completeGenerationJob(
