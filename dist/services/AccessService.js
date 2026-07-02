@@ -140,14 +140,23 @@ export async function revokeNodeAccess(email, nodeId) {
  * Get nodes the user has access to (from Access Groups only, including descendant nodes via hierarchy).
  * Used when you need node access WITHOUT involving Node_School (e.g. node picker, "your nodes").
  * Each node is returned once with its description.
+ * Optional departmentId filters to nodes granted for that department (e.g. ACADEMIC for Education).
  */
-export async function getUserAccessibleNodes(email) {
+export async function getUserAccessibleNodes(email, departmentId) {
+    const params = { email };
+    const deptFilter = departmentId
+        ? `AND gna.Department_ID = @departmentId`
+        : '';
+    if (departmentId) {
+        params.departmentId = departmentId;
+    }
     const result = await executeQuery(`WITH UserGroupNodes AS (
         SELECT DISTINCT gna.Node_ID
         FROM admin.User_Group ug
         INNER JOIN admin.[User] u ON ug.User_ID = u.User_ID
         INNER JOIN admin.Group_Node_Access gna ON ug.Group_ID = gna.Group_ID
         WHERE u.User_ID = @email AND u.Is_Active = 1
+        ${deptFilter}
     ),
     NodeHierarchy AS (
         SELECT Node_ID AS Descendant_Node_ID FROM UserGroupNodes
@@ -155,16 +164,39 @@ export async function getUserAccessibleNodes(email) {
         SELECT n.Node_ID AS Descendant_Node_ID
         FROM NodeHierarchy nh
         INNER JOIN admin.Node n ON nh.Descendant_Node_ID = n.Parent_Node_ID
+    ),
+    Accessible AS (
+        SELECT DISTINCT Descendant_Node_ID AS Node_ID FROM NodeHierarchy
+    ),
+    CountryWalk AS (
+        SELECT a.Node_ID AS Start_Node_ID, n.Node_ID AS Walk_Node_ID, n.Parent_Node_ID, n.Country_Code, 0 AS Depth
+        FROM Accessible a
+        INNER JOIN admin.Node n ON a.Node_ID = n.Node_ID
+        UNION ALL
+        SELECT cw.Start_Node_ID, p.Node_ID, p.Parent_Node_ID, p.Country_Code, cw.Depth + 1
+        FROM CountryWalk cw
+        INNER JOIN admin.Node p ON cw.Parent_Node_ID = p.Node_ID
+        WHERE cw.Parent_Node_ID IS NOT NULL AND cw.Depth < 15
+    ),
+    NodeCountry AS (
+        SELECT Start_Node_ID AS Node_ID,
+               (SELECT TOP 1 cw.Country_Code
+                FROM CountryWalk cw
+                WHERE cw.Start_Node_ID = c.Start_Node_ID AND cw.Country_Code IS NOT NULL
+                ORDER BY cw.Depth) AS Country_Code
+        FROM (SELECT DISTINCT Start_Node_ID FROM CountryWalk) c
     )
-    SELECT DISTINCT nh.Node_ID, n.Node_Description
-    FROM (SELECT DISTINCT Descendant_Node_ID AS Node_ID FROM NodeHierarchy) nh
-    INNER JOIN admin.Node n ON nh.Node_ID = n.Node_ID
-    ORDER BY n.Node_Description`, { email });
+    SELECT a.Node_ID, n.Node_Description, nc.Country_Code
+    FROM Accessible a
+    INNER JOIN admin.Node n ON a.Node_ID = n.Node_ID
+    LEFT JOIN NodeCountry nc ON nc.Node_ID = a.Node_ID
+    ORDER BY nc.Country_Code, n.Node_Description`, params);
     if (result.error)
         throw new Error(result.error);
     return (result.data || []).map((r) => ({
         nodeId: r.Node_ID,
         nodeDescription: r.Node_Description,
+        countryCode: r.Country_Code ?? null,
     }));
 }
 /**

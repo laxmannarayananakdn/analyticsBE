@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import { executeQuery } from '../config/database.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
-import { runSync } from '../services/SyncOrchestratorService.js';
+import { runSync, filterActiveNexEndpoints } from '../services/SyncOrchestratorService.js';
 import { getSyncSchedulerTimezone, isSyncSchedulerEnabled } from '../scheduler/SyncScheduler.js';
 const router = Router();
 /** Registry of AbortControllers for API-triggered runs. Cancel only works for these. */
@@ -180,7 +180,7 @@ router.post('/schedules', async (req, res) => {
             academic_year,
             cron_expression,
             endpoints_mb: runMb && endpoints_mb ? JSON.stringify(endpoints_mb) : null,
-            endpoints_nex: runNex && endpoints_nex ? JSON.stringify(endpoints_nex) : null,
+            endpoints_nex: runNex && endpoints_nex ? JSON.stringify(filterActiveNexEndpoints(endpoints_nex)) : null,
             load_rp_schema: load_rp_schema !== false ? 1 : 0,
             build_student_assessments_by_academic_year: build_student_assessments_by_academic_year ? 1 : 0,
             include_descendants: include_descendants ? 1 : 0,
@@ -233,7 +233,7 @@ router.put('/schedules/:id', async (req, res) => {
         }
         if (endpoints_nex !== undefined) {
             updates.push('endpoints_nex = @endpoints_nex');
-            params.endpoints_nex = endpoints_nex ? JSON.stringify(endpoints_nex) : null;
+            params.endpoints_nex = endpoints_nex ? JSON.stringify(filterActiveNexEndpoints(endpoints_nex)) : null;
         }
         if (load_rp_schema !== undefined) {
             updates.push('load_rp_schema = @load_rp_schema');

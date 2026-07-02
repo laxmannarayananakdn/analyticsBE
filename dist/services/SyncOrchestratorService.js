@@ -12,7 +12,11 @@ import { databaseService } from './DatabaseService.js';
 // year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
 // memberships must run before term-grades: term grades use MB.class_memberships to find classes
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes', 'memberships', 'term-grades'];
-const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'daily-plans', 'daily-attendance', 'student-assessments'];
+/** Active Nexquare sync endpoints. daily-plans and daily-attendance temporarily excluded (Nexquare data issue). */
+const NEX_ENDPOINTS_ALL = ['schools', 'students', 'staff', 'classes', 'allocation-master', 'student-allocations', 'staff-allocations', 'student-assessments'];
+export function filterActiveNexEndpoints(endpoints) {
+    return endpoints.filter((e) => NEX_ENDPOINTS_ALL.includes(e));
+}
 function normalizeWhitespace(value) {
     return value.replace(/\s+/g, ' ').trim();
 }
@@ -145,7 +149,7 @@ export async function runSync(params) {
         ? (params.endpointsMb?.length ? params.endpointsMb : MB_ENDPOINTS_ALL)
         : [];
     const endpointsNex = runNexquare
-        ? (params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL)
+        ? filterActiveNexEndpoints(params.endpointsNex?.length ? params.endpointsNex : NEX_ENDPOINTS_ALL)
         : [];
     const loadRpSchema = params.loadRpSchema !== false; // default true for backward compat
     const runBuildStudentAssessmentsByAcademicYear = params.buildStudentAssessmentsByAcademicYear === true;
@@ -262,7 +266,7 @@ export async function runSync(params) {
         return trackResults;
     };
     const runNexPipeline = async (trackItems) => {
-        const filtered = endpointsNex.filter((e) => NEX_ENDPOINTS_ALL.includes(e));
+        const filtered = filterActiveNexEndpoints(endpointsNex);
         // Enforce canonical order: schools → students → staff → ... → student-assessments.
         // RP refresh needs NEX.students, NEX.student_allocations, etc. before student-assessments.
         const orderMap = new Map(NEX_ENDPOINTS_ALL.map((e, i) => [e, i]));
@@ -660,7 +664,7 @@ async function runNexquareSingleEndpoint(config, schoolId, endpointName, ctx) {
  * Checks abortSignal before each endpoint for immediate cancel.
  */
 async function syncNexquareSchool(config, schoolId, options) {
-    const eps = options?.endpoints ?? NEX_ENDPOINTS_ALL;
+    const eps = filterActiveNexEndpoints(options?.endpoints ?? NEX_ENDPOINTS_ALL);
     const { start, end } = getDateRangeFromAcademicYear(options?.academicYear);
     const ay = options?.academicYear || new Date().getFullYear().toString();
     const signal = options?.abortSignal;

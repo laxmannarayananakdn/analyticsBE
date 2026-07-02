@@ -29,15 +29,18 @@ export declare function updateAccess(email: string, nodeId: string, updateReques
  * Revoke all user access to a node
  */
 export declare function revokeNodeAccess(email: string, nodeId: string): Promise<void>;
+export interface AccessibleNode {
+    nodeId: string;
+    nodeDescription: string;
+    countryCode: string | null;
+}
 /**
  * Get nodes the user has access to (from Access Groups only, including descendant nodes via hierarchy).
  * Used when you need node access WITHOUT involving Node_School (e.g. node picker, "your nodes").
  * Each node is returned once with its description.
+ * Optional departmentId filters to nodes granted for that department (e.g. ACADEMIC for Education).
  */
-export declare function getUserAccessibleNodes(email: string): Promise<Array<{
-    nodeId: string;
-    nodeDescription: string;
-}>>;
+export declare function getUserAccessibleNodes(email: string, departmentId?: string): Promise<AccessibleNode[]>;
 /**
  * Get node IDs the user has access to (from Access Groups only, including descendant nodes via hierarchy).
  * Used for scope-based report filtering.

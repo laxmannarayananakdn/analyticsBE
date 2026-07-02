@@ -45,6 +45,7 @@ export interface RunSyncResult {
     schoolsFailed: number;
     errorSummary?: string;
 }
+export declare function filterActiveNexEndpoints(endpoints: string[]): string[];
 /**
  * Run sync for the given scope.
  * MB and Nex tracks run in parallel; within each track, schools process serially.

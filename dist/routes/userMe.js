@@ -53,13 +53,17 @@ router.get('/me/schools', async (req, res) => {
  * GET /users/me/nodes
  * Get nodes the user has access to (from Access Groups only).
  * Use this when you need "which nodes can this user access" - never uses Node_School.
+ * Query: ?department=ACADEMIC to filter by department (Education).
  */
 router.get('/me/nodes', async (req, res) => {
     try {
         if (!req.user) {
             return res.status(401).json({ error: 'Authentication required' });
         }
-        const nodes = await getUserAccessibleNodes(req.user.email);
+        const department = typeof req.query.department === 'string' && req.query.department.trim()
+            ? req.query.department.trim()
+            : undefined;
+        const nodes = await getUserAccessibleNodes(req.user.email, department);
         res.json(nodes);
     }
     catch (error) {
