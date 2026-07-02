@@ -14,7 +14,7 @@ import {
   getGroupPageAccess,
   setGroupPageAccess,
 } from '../services/GroupService.js';
-import { ADMIN_ITEMS } from '../services/SidebarAccessService.js';
+import { ADMIN_FOLDERS, ADMIN_ITEMS } from '../services/SidebarAccessService.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -26,7 +26,7 @@ router.use(requireAdmin);
  * Must be before /:id so "available-pages" is not captured as id.
  */
 router.get('/available-pages', (req, res) => {
-  res.json({ items: ADMIN_ITEMS });
+  res.json({ items: ADMIN_ITEMS, folders: ADMIN_FOLDERS });
 });
 
 /**

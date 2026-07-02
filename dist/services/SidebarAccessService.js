@@ -5,45 +5,53 @@
  * - Has rows = only listed items are visible
  */
 import { executeQuery } from '../config/database.js';
+/** Admin sidebar folders (presentation only; permissions stay page-level) */
+export const ADMIN_FOLDERS = [
+    { id: 'data-integration', label: 'Data Integration' },
+    { id: 'education-data-integration', label: 'Education Data Integration' },
+    { id: 'fis-reporting', label: 'FIS Reporting' },
+    { id: 'platform-configuration', label: 'Platform Configuration' },
+    { id: 'organization-access', label: 'Organization & Access' },
+];
 /** Admin/dashboard page items for Group_Page_Access (exported for API/UI) */
 export const ADMIN_ITEMS = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'admin:superset-config', label: 'Superset Dashboards Config' },
-    { id: 'admin:ef-upload', label: 'Upload External Files' },
-    { id: 'admin:nexquare-config', label: 'Nexquare Configuration' },
-    { id: 'admin:managebac-config', label: 'ManageBac Configuration' },
-    { id: 'admin:mb-term-grade-config', label: 'ManageBac Term Grade Config' },
-    { id: 'admin:nexquare-sync', label: 'Nexquare Data Sync' },
-    { id: 'admin:managebac-sync', label: 'ManageBac Data Sync' },
-    { id: 'admin:sync-schedules', label: 'Sync Schedules' },
-    { id: 'admin:sync-history', label: 'Sync History' },
-    { id: 'admin:rp-config', label: 'RP Configuration' },
-    { id: 'admin:fis-row-management', label: 'FIS Reports Management' },
-    { id: 'admin:fis-column-management', label: 'FIS Column Management' },
-    { id: 'admin:fis-report-processing', label: 'FIS Report Processing' },
-    { id: 'admin:fis-processing-log', label: 'FIS Processing Log' },
-    { id: 'admin:fis-entity-management', label: 'FIS Entity Management' },
-    { id: 'admin:fis-currency-exchange', label: 'FIS Currency Exchange' },
-    { id: 'admin:mark-grade-config', label: 'Mark Grade Translation Config' },
-    { id: 'admin:users', label: 'User Management' },
-    { id: 'admin:access-control', label: 'Access Control' },
-    { id: 'admin:access-groups', label: 'Access Groups' },
-    { id: 'admin:sidebar-access', label: 'Sidebar Access' },
-    { id: 'admin:report-groups', label: 'Report Groups' },
-    { id: 'admin:microsoft-tenant-config', label: 'Microsoft Tenant Config' },
-    { id: 'admin:nodes', label: 'Node Management' },
-    { id: 'admin:departments', label: 'Department Management' },
-    { id: 'admin:school-assignment', label: 'School Assignment' },
+    { id: 'admin:ef-upload', label: 'Upload External Files', folder: 'data-integration' },
+    { id: 'admin:nexquare-config', label: 'Nexquare Configuration', folder: 'education-data-integration' },
+    { id: 'admin:managebac-config', label: 'ManageBac Configuration', folder: 'education-data-integration' },
+    { id: 'admin:mb-term-grade-config', label: 'ManageBac Term Grade Config', folder: 'education-data-integration' },
+    { id: 'admin:nexquare-sync', label: 'Nexquare Data Sync', folder: 'education-data-integration' },
+    { id: 'admin:managebac-sync', label: 'ManageBac Data Sync', folder: 'education-data-integration' },
+    { id: 'admin:sync-schedules', label: 'Sync Schedules', folder: 'education-data-integration' },
+    { id: 'admin:sync-history', label: 'Sync History', folder: 'education-data-integration' },
+    { id: 'admin:rp-config', label: 'RP Configuration', folder: 'education-data-integration' },
+    { id: 'admin:fis-row-management', label: 'FIS Reports Management', folder: 'fis-reporting' },
+    { id: 'admin:fis-column-management', label: 'FIS Column Management', folder: 'fis-reporting' },
+    { id: 'admin:fis-report-processing', label: 'FIS Report Processing', folder: 'fis-reporting' },
+    { id: 'admin:fis-processing-log', label: 'FIS Processing Log', folder: 'fis-reporting' },
+    { id: 'admin:fis-entity-management', label: 'FIS Entity Management', folder: 'fis-reporting' },
+    { id: 'admin:fis-currency-exchange', label: 'FIS Currency Exchange', folder: 'fis-reporting' },
+    { id: 'admin:superset-config', label: 'Superset Dashboards Config', folder: 'platform-configuration' },
+    { id: 'admin:mark-grade-config', label: 'Mark Grade Translation Config', folder: 'education-data-integration' },
+    { id: 'admin:report-groups', label: 'Report Groups', folder: 'platform-configuration' },
+    { id: 'admin:microsoft-tenant-config', label: 'Microsoft Tenant Config', folder: 'platform-configuration' },
+    { id: 'admin:nodes', label: 'Node Management', folder: 'organization-access' },
+    { id: 'admin:departments', label: 'Department Management', folder: 'organization-access' },
+    { id: 'admin:school-assignment', label: 'School Assignment', folder: 'organization-access' },
+    { id: 'admin:users', label: 'User Management', folder: 'organization-access' },
+    { id: 'admin:access-control', label: 'Access Control', folder: 'organization-access' },
+    { id: 'admin:access-groups', label: 'Access Groups', folder: 'organization-access' },
+    { id: 'admin:sidebar-access', label: 'RBAC Configuration', folder: 'organization-access' },
 ];
 /**
  * Get all sidebar items (static + dynamic reports from superset_dashboard_configs)
  */
 export async function getSidebarItems() {
-    const staticItems = ADMIN_ITEMS.map((a, i) => ({
+    const staticItems = ADMIN_ITEMS.map((a) => ({
         id: a.id,
         label: a.label,
         category: a.id === 'dashboard' ? 'main' : 'admin',
-        folder: undefined,
+        folder: a.folder,
     }));
     const dashResult = await executeQuery(`SELECT uuid, name, folder FROM admin.superset_dashboard_configs WHERE is_active = 1 ORDER BY folder ASC, sort_order ASC, name ASC`);
     const reportItems = (dashResult.data || []).map((d) => ({

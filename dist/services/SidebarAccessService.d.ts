@@ -18,10 +18,16 @@ export interface SidebarAccessMatrix {
     items: SidebarItem[];
     permissions: Record<string, string[]>;
 }
+/** Admin sidebar folders (presentation only; permissions stay page-level) */
+export declare const ADMIN_FOLDERS: {
+    id: string;
+    label: string;
+}[];
 /** Admin/dashboard page items for Group_Page_Access (exported for API/UI) */
 export declare const ADMIN_ITEMS: {
     id: string;
     label: string;
+    folder?: string;
 }[];
 /**
  * Get all sidebar items (static + dynamic reports from superset_dashboard_configs)
