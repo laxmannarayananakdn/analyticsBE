@@ -16,7 +16,7 @@ const config: sql.config = {
     encrypt: true, // Required for Azure
     trustServerCertificate: false,
     enableArithAbort: true,
-    requestTimeout: 1800000, // 30 minutes for long-running queries (e.g., large RP sync operations)
+    requestTimeout: parseInt(process.env.AZURE_SQL_REQUEST_TIMEOUT_MS ?? '3600000', 10) || 3600000, // 60 min default for long FIS/RP ops
     connectionTimeout: 30000
   },
   pool: {
