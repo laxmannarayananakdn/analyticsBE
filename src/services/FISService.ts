@@ -2309,7 +2309,7 @@ export class FISService {
       actualFileName: string | null;
       budgetFileName: string | null;
       actualTbStatus: FisFileStatus;
-      budgetTbStatus: FisFileStatus;
+      budgetTbStatus: FisFileStatus | null;
     } | null = null;
 
     if (phase4) {

@@ -311,7 +311,10 @@ export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
     }
     return columns;
 }
-/** Actual required for the period; budget may fall back to January (or latest revision). */
+/**
+ * Actual is required for the period. Budget is optional: if no budget exists, the report
+ * still runs and budget columns are left as-is (the report proc handles the missing budget).
+ */
 export async function assertTrialBalanceDataForPeriod(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
@@ -324,10 +327,6 @@ export async function assertTrialBalanceDataForPeriod(entityCode, period) {
         throw new Error(result.error);
     if (!result.data?.[0]?.actual_cnt) {
         throw new Error(`No Actual trial balance data for ${entity} period ${periodNorm}`);
-    }
-    const budgetSource = await resolveBudgetSourcePeriod(entity, periodNorm);
-    if (!budgetSource) {
-        throw new Error(`No Budget trial balance data for ${entity} fiscal year ${periodNorm.slice(0, 4)}. Upload January budget first.`);
     }
 }
 export async function getReportOutputPreview(instanceId, limit = 100) {

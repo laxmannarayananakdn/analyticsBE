@@ -24,7 +24,7 @@ export interface ResolvedTbFileStatus {
     actualFileName: string | null;
     budgetFileName: string | null;
     actualTbStatus: FisFileStatus;
-    budgetTbStatus: FisFileStatus;
+    budgetTbStatus: FisFileStatus | null;
     isTbLocked: boolean;
 }
 export declare function resolveFileStatusForPeriod(entityCode: string, period: string): Promise<ResolvedTbFileStatus>;
@@ -48,7 +48,7 @@ export declare function startReportRun(params: {
     actualFileName: string | null;
     budgetFileName: string | null;
     actualTbStatus: FisFileStatus;
-    budgetTbStatus: FisFileStatus;
+    budgetTbStatus: FisFileStatus | null;
 }): Promise<number | null>;
 export declare function completeReportRun(runId: number | null, success: boolean, outputRowCount: number, errorMessage?: string | null): Promise<void>;
 export interface FisRunCalendarRow {

@@ -71,7 +71,10 @@ export declare function compareFisReportColumns(a: FisColumnSortInput, b: FisCol
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export declare function buildMonthColumnSet(period: string, startOrder?: number): FisMonthColumnDef[];
 export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<FisMonthColumnDef[]>;
-/** Actual required for the period; budget may fall back to January (or latest revision). */
+/**
+ * Actual is required for the period. Budget is optional: if no budget exists, the report
+ * still runs and budget columns are left as-is (the report proc handles the missing budget).
+ */
 export declare function assertTrialBalanceDataForPeriod(entityCode: string, period: string): Promise<void>;
 export declare function getReportOutputPreview(instanceId: number, limit?: number): Promise<{
     totalRows: number;
