@@ -173,6 +173,16 @@ export class FISReportV2Service {
       });
     }
 
+    // All reports (including CF) are published — enrich descriptions once for the
+    // whole entity-period so the dimension descriptions are populated in one pass.
+    emit(undefined, undefined, { publishPhase: 'enrich' });
+    await this.enrichDescriptionsForBatch(
+      reports.map((r) => r.reportTypeCode),
+      entityCode,
+      asOfPeriod,
+      fileStatus
+    );
+
     emit(undefined, undefined, { publishPhase: 'complete' });
 
     return {
@@ -242,6 +252,49 @@ export class FISReportV2Service {
       }
       if (err instanceof FISServiceError) throw err;
       throw new FISServiceError(message);
+    }
+  }
+
+  /**
+   * Enrich dimension descriptions (region/funding source/operating unit/department/project)
+   * and coalesce NULL data-row amounts to 0 on the V2 live table for the whole entity-period.
+   * Runs after all reports (including CF) are published. Failures here are logged but do not
+   * fail the batch, since the report data itself is already committed.
+   */
+  private async enrichDescriptionsForBatch(
+    reportTypeCodes: string[],
+    entityCode: string,
+    asOfPeriod: string,
+    fileStatus?: FisFileStatus
+  ): Promise<void> {
+    const entity = entityCode.trim().toUpperCase();
+    const period = asOfPeriod.trim();
+
+    for (const reportTypeCode of reportTypeCodes) {
+      const startedAt = Date.now();
+      try {
+        const result = await executeProcedure('rp.usp_EnrichFISReportOutputDescriptions', {
+          report_type_code: reportTypeCode,
+          entity_code: entity,
+          as_of_period: period,
+          target: 'V2',
+          ...(fileStatus ? { file_status: fileStatus } : {}),
+        });
+        if (result.error) {
+          console.warn(
+            `[FIS V2] Description enrichment failed for ${reportTypeCode} ${entity} ${period}: ${result.error}`
+          );
+        } else {
+          console.log(
+            `[FIS V2 timing] ${reportTypeCode} ENRICH took ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[FIS V2] Description enrichment error for ${reportTypeCode} ${entity} ${period}: ${message}`
+        );
+      }
     }
   }
 
