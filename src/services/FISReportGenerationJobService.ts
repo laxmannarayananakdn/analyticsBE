@@ -9,7 +9,7 @@ export type FisGenerationJobProgress = {
   total: number;
   label?: string;
   sumStep?: 'column';
-  finalizeStep?: 'pit' | 'variance' | 'expression' | 'normalize';
+  finalizeStep?: 'pit' | 'variance' | 'expression' | 'normalize' | 'publish';
   reportTypeCode?: string;
   batchIndex?: number;
   batchTotal?: number;

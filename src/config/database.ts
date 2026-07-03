@@ -127,6 +127,14 @@ export async function executeProcedure<T = any>(
     const connection = await getConnection();
     const request = connection.request();
 
+    // Surface SQL PRINT / RAISERROR(...,0/10,...) messages to the backend terminal.
+    // Without this, node-mssql silently discards all PRINT output.
+    request.on('info', (info) => {
+      if (info?.message) {
+        console.log(`[SQL:${procedureName}] ${info.message}`);
+      }
+    });
+
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (typeof value === 'number') {

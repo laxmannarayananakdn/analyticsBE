@@ -213,8 +213,12 @@ export class FISReportV2Service {
       await this.runSumColumnChunks(ctx, onProgress);
       await this.runFinalizeChunks(ctx, onProgress);
 
-      onProgress?.({ phase: 'finalize', finalizeStep: 'normalize', current: 1, total: 1, label: 'Publishing' });
+      onProgress?.({ phase: 'finalize', finalizeStep: 'publish', current: 1, total: 1, label: 'Publishing to live table' });
+      const publishStartedAt = Date.now();
       await this.publishReport(runKey, stageSlotId, ctx);
+      console.log(
+        `[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`
+      );
 
       const outputRowCount = await this.countNewLiveOutput(ctx);
       await completeReportRun(ctx.runId, true, outputRowCount);
@@ -363,7 +367,13 @@ export class FISReportV2Service {
       ...(targets?.targetRowId != null ? { target_row_id: targets.targetRowId } : {}),
       ...(targets?.targetColumnKey != null ? { target_column_key: targets.targetColumnKey } : {}),
     };
+    const label = `${procParams.report_type_code ?? '?'} ${generationMode}${
+      targets?.targetColumnKey != null ? ` col=${targets.targetColumnKey}` : ''
+    }`;
+    const startedAt = Date.now();
     const result = await executeProcedure('rp.usp_GenerateFISReport_new', params);
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`[FIS V2 timing] ${label} took ${(elapsedMs / 1000).toFixed(1)}s`);
     if (result.error) throw new FISServiceError(result.error);
   }
 
