@@ -357,18 +357,19 @@ export async function getReportOutputPreview(instanceId, limit = 100) {
         })),
     };
 }
-export async function getReportOutputPreviewByRunKey(reportTypeCode, entityCode, asOfPeriod, limit = 100, fileStatus) {
+export async function getReportOutputPreviewByRunKey(reportTypeCode, entityCode, asOfPeriod, limit = 100, fileStatus, options) {
     const reportType = reportTypeCode.trim().toUpperCase();
     const entity = entityCode.trim().toUpperCase();
     const period = asOfPeriod.trim();
     const statusFilter = fileStatus?.trim() || null;
+    const tableName = options?.outputTable === 'new' ? 'rp.fis_report_output_new' : 'rp.fis_report_output';
     const countSql = statusFilter
-        ? `SELECT COUNT(*) AS total FROM rp.fis_report_output
+        ? `SELECT COUNT(*) AS total FROM ${tableName}
        WHERE report_type_code = @reportType
          AND entity_code = @entity
          AND as_of_period = @period
          AND file_status = @fileStatus`
-        : `SELECT COUNT(*) AS total FROM rp.fis_report_output
+        : `SELECT COUNT(*) AS total FROM ${tableName}
        WHERE report_type_code = @reportType
          AND entity_code = @entity
          AND as_of_period = @period`;
@@ -383,7 +384,7 @@ export async function getReportOutputPreviewByRunKey(reportTypeCode, entityCode,
     const rowsResult = await executeQuery(`SELECT TOP (@limit)
        o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
        o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
-     FROM rp.fis_report_output o
+     FROM ${tableName} o
      LEFT JOIN admin.fis_report_column_defs cd
        ON cd.column_code = o.column_code
       AND cd.report_type_id = (

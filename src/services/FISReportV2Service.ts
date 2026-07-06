@@ -43,6 +43,16 @@ function v2MaxConcurrentNormalize(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 20) : 20;
 }
 
+function v2UpdateStatsEnabled(): boolean {
+  const raw = String(process.env.FIS_V2_UPDATE_STATS ?? 'false').toLowerCase();
+  return raw === 'true' || raw === '1';
+}
+
+function v2BulkPublishEnabled(): boolean {
+  const raw = String(process.env.FIS_V2_BULK_PUBLISH ?? 'true').toLowerCase();
+  return raw !== 'false' && raw !== '0';
+}
+
 class Semaphore {
   private active = 0;
   private readonly queue: Array<() => void> = [];
@@ -83,6 +93,9 @@ export class FISReportV2Service {
   private readonly semaphore = new Semaphore(v2MaxConcurrentReports());
   /** Normalize is log-heavy; default 1 avoids NF/PL starving when BS runs in parallel. */
   private readonly normalizeSemaphore = new Semaphore(v2MaxConcurrentNormalize());
+  /** Serializes bulk index drop/recreate across overlapping batch jobs. */
+  private readonly bulkPublishSemaphore = new Semaphore(1);
+  private bulkPublishRefCount = 0;
 
   async leaseStageSlot(runKey: string, leasedBy?: string | null): Promise<number> {
     const connection = await getConnection();
@@ -131,6 +144,18 @@ export class FISReportV2Service {
         ...extra,
       });
     };
+
+    if (v2UpdateStatsEnabled()) {
+      emit(undefined, undefined, { publishPhase: 'stats' });
+      console.log('[FIS V2] Updating live table statistics (sampled, not fullscan)...');
+      await this.updateLiveTableStats();
+    }
+
+    if (v2BulkPublishEnabled()) {
+      emit(undefined, undefined, { publishPhase: 'bulk_prep' });
+      console.log('[FIS V2] Dropping secondary indexes for bulk publish...');
+      await this.prepareBulkPublishIndexes();
+    }
 
     const reports: Array<{ reportTypeCode: string; outputRowCount: number }> = [];
     let fileStatus: FisFileStatus | undefined;
@@ -185,6 +210,11 @@ export class FISReportV2Service {
 
     emit(undefined, undefined, { publishPhase: 'complete' });
 
+    if (v2BulkPublishEnabled()) {
+      emit(undefined, undefined, { publishPhase: 'bulk_finalize' });
+      await this.finalizeBulkPublishIndexes();
+    }
+
     return {
       entityCode: entityCode.trim().toUpperCase(),
       asOfPeriod: asOfPeriod.trim(),
@@ -217,6 +247,15 @@ export class FISReportV2Service {
       ctx.procParams.run_key = runKey;
       ctx.procParams.stage_slot_id = stageSlotId;
 
+      if (ctx.reportType === 'CF') {
+        onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Building CF cross-report cache' });
+        const cacheStartedAt = Date.now();
+        await this.buildCfCrossReportCache(runKey, ctx);
+        console.log(
+          `[FIS V2 timing] CF BUILD_CACHE took ${((Date.now() - cacheStartedAt) / 1000).toFixed(1)}s`
+        );
+      }
+
       onProgress?.({ phase: 'init', current: 1, total: 1, label: 'Clearing stage' });
       await this.executeGenerateMode(ctx.procParams, 'INIT');
 
@@ -232,6 +271,11 @@ export class FISReportV2Service {
 
       const outputRowCount = await this.countNewLiveOutput(ctx);
       await completeReportRun(ctx.runId, true, outputRowCount);
+
+      if (ctx.reportType === 'CF') {
+        await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
+      }
+
       stageSlotId = null;
 
       return {
@@ -249,6 +293,9 @@ export class FISReportV2Service {
           run_key: runKey,
           stage_slot_id: stageSlotId,
         });
+      }
+      if (ctx.reportType === 'CF') {
+        await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
       }
       if (err instanceof FISServiceError) throw err;
       throw new FISServiceError(message);
@@ -303,6 +350,63 @@ export class FISReportV2Service {
       run_key: runKey,
       stage_slot_id: stageSlotId,
       report_type_code: ctx.reportType,
+      entity_code: ctx.entity,
+      as_of_period: ctx.period,
+      use_bulk_insert: v2BulkPublishEnabled() ? 1 : 0,
+      ...(ctx.fileStatus ? { file_status: ctx.fileStatus } : {}),
+    });
+    if (result.error) throw new FISServiceError(result.error);
+  }
+
+  private async updateLiveTableStats(): Promise<void> {
+    const startedAt = Date.now();
+    const result = await executeProcedure('rp.usp_UpdateFISReportOutputNewStats_new', {});
+    if (result.error) {
+      console.warn(`[FIS V2] UPDATE STATS failed (non-fatal): ${result.error}`);
+      return;
+    }
+    console.log(`[FIS V2 timing] UPDATE_STATS took ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  }
+
+  private async prepareBulkPublishIndexes(): Promise<void> {
+    await this.bulkPublishSemaphore.acquire();
+    try {
+      if (this.bulkPublishRefCount > 0) {
+        this.bulkPublishRefCount += 1;
+        return;
+      }
+      const startedAt = Date.now();
+      const result = await executeProcedure('rp.usp_PrepareFISReportOutputNewBulkPublish_new', {});
+      if (result.error) throw new FISServiceError(result.error);
+      this.bulkPublishRefCount = 1;
+      console.log(
+        `[FIS V2 timing] BULK_PUBLISH_PREP took ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+      );
+    } finally {
+      this.bulkPublishSemaphore.release();
+    }
+  }
+
+  private async finalizeBulkPublishIndexes(): Promise<void> {
+    await this.bulkPublishSemaphore.acquire();
+    try {
+      if (this.bulkPublishRefCount <= 0) return;
+      this.bulkPublishRefCount -= 1;
+      if (this.bulkPublishRefCount > 0) return;
+      const startedAt = Date.now();
+      const result = await executeProcedure('rp.usp_FinalizeFISReportOutputNewBulkPublish_new', {});
+      if (result.error) throw new FISServiceError(result.error);
+      console.log(
+        `[FIS V2 timing] BULK_PUBLISH_FINALIZE took ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+      );
+    } finally {
+      this.bulkPublishSemaphore.release();
+    }
+  }
+
+  private async buildCfCrossReportCache(runKey: string, ctx: RunKeyContext): Promise<void> {
+    const result = await executeProcedure('rp.usp_BuildFISCFReportCache_new', {
+      run_key: runKey,
       entity_code: ctx.entity,
       as_of_period: ctx.period,
       ...(ctx.fileStatus ? { file_status: ctx.fileStatus } : {}),

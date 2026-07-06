@@ -12,13 +12,15 @@ function pruneOldJobs() {
         }
     }
 }
-export function createGenerationJob() {
+export function createGenerationJob(pipeline = 'v1') {
     pruneOldJobs();
     const jobId = `fis-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     jobs.set(jobId, {
         jobId,
         status: 'pending',
         progress: null,
+        v2Progress: pipeline === 'v2' ? { reports: {} } : null,
+        pipeline,
         startedAt: Date.now(),
     });
     return jobId;
@@ -29,6 +31,19 @@ export function updateGenerationJobProgress(jobId, progress) {
         return;
     job.status = 'running';
     job.progress = progress;
+}
+export function updateV2GenerationJobProgress(jobId, progress) {
+    const job = jobs.get(jobId);
+    if (!job || job.status === 'success' || job.status === 'failed')
+        return;
+    job.status = 'running';
+    job.v2Progress = progress;
+    if (progress.activeReportTypeCode && progress.reports[progress.activeReportTypeCode]) {
+        job.progress = {
+            ...progress.reports[progress.activeReportTypeCode],
+            reportTypeCode: progress.activeReportTypeCode,
+        };
+    }
 }
 export function completeGenerationJob(jobId, result) {
     const job = jobs.get(jobId);

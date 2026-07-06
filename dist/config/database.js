@@ -13,11 +13,11 @@ const config = {
         encrypt: true, // Required for Azure
         trustServerCertificate: false,
         enableArithAbort: true,
-        requestTimeout: 1800000, // 30 minutes for long-running queries (e.g., large RP sync operations)
+        requestTimeout: parseInt(process.env.AZURE_SQL_REQUEST_TIMEOUT_MS ?? '3600000', 10) || 3600000, // 60 min default for long FIS/RP ops
         connectionTimeout: 30000
     },
     pool: {
-        max: 10,
+        max: parseInt(process.env.AZURE_SQL_POOL_MAX ?? '10', 10) || 10,
         min: 0,
         idleTimeoutMillis: 30000
     }
@@ -118,6 +118,13 @@ export async function executeProcedure(procedureName, params) {
     try {
         const connection = await getConnection();
         const request = connection.request();
+        // Surface SQL PRINT / RAISERROR(...,0/10,...) messages to the backend terminal.
+        // Without this, node-mssql silently discards all PRINT output.
+        request.on('info', (info) => {
+            if (info?.message) {
+                console.log(`[SQL:${procedureName}] ${info.message}`);
+            }
+        });
         if (params) {
             Object.entries(params).forEach(([key, value]) => {
                 if (typeof value === 'number') {

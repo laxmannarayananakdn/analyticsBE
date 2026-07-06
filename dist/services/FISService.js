@@ -393,7 +393,8 @@ export class FISService {
     columnDefSelectSql = `SELECT cd.column_def_id, cd.report_type_id, rt.report_type_code,
               cd.column_code, cd.column_label, cd.display_order, cd.column_kind, cd.period_scope,
               cd.tb_type, cd.reference_month, cd.fiscal_year_offset, cd.source_column_codes,
-              cd.format_type, cd.is_active, cd.notes, cd.created_at, cd.updated_at
+              cd.format_type, cd.header_background_color, cd.header_font_color,
+              cd.is_active, cd.notes, cd.created_at, cd.updated_at
        FROM admin.fis_report_column_defs cd
        INNER JOIN admin.fis_report_types rt ON cd.report_type_id = rt.report_type_id`;
     mapColumnDef(r) {
@@ -411,6 +412,8 @@ export class FISService {
             fiscalYearOffset: r.fiscal_year_offset,
             sourceColumnCodes: r.source_column_codes,
             formatType: r.format_type,
+            headerBackgroundColor: r.header_background_color ?? null,
+            headerFontColor: r.header_font_color ?? null,
             isActive: r.is_active === true || r.is_active === 1,
             notes: r.notes,
             createdAt: r.created_at,
@@ -596,6 +599,8 @@ export class FISService {
             { key: 'columnLabel', snake: 'column_label' },
             { key: 'notes', snake: 'notes' },
             { key: 'formatType', snake: 'format_type' },
+            { key: 'headerBackgroundColor', snake: 'header_background_color' },
+            { key: 'headerFontColor', snake: 'header_font_color' },
             { key: 'isActive', snake: 'is_active', transform: (v) => toBit(v) },
         ];
         if (!isCalculated) {

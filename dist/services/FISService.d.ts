@@ -102,6 +102,8 @@ export interface FisReportColumnDef {
     fiscalYearOffset: number;
     sourceColumnCodes: string | null;
     formatType: string;
+    headerBackgroundColor: string | null;
+    headerFontColor: string | null;
     isActive: boolean;
     notes: string | null;
     createdAt?: Date;

@@ -80,7 +80,9 @@ export declare function getReportOutputPreview(instanceId: number, limit?: numbe
     totalRows: number;
     rows: FisReportOutputRow[];
 }>;
-export declare function getReportOutputPreviewByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, limit?: number, fileStatus?: string | null): Promise<{
+export declare function getReportOutputPreviewByRunKey(reportTypeCode: string, entityCode: string, asOfPeriod: string, limit?: number, fileStatus?: string | null, options?: {
+    outputTable?: 'live' | 'new';
+}): Promise<{
     totalRows: number;
     rows: FisReportOutputRow[];
 }>;

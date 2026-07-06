@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { fisService, FISServiceError } from '../services/FISService.js';
 import { listTrialBalanceEntityPeriods, getLatestTrialBalanceUploads, buildColumnsFromEntityTrialBalance, getReportOutputPreview, getReportOutputPreviewByRunKey, } from '../services/FISTrialBalanceProcessService.js';
 import { getPeriodCoverage, getRunCalendar, isFisPhase4Enabled, resolveFileStatusForPeriod, } from '../services/FISRunTrackingService.js';
+import { isFisPipelineV2Enabled } from '../services/FISReportV2Service.js';
 import { listSftpPullLog, listReportProcessingAttempts, } from '../services/FISProcessingLogService.js';
 const router = express.Router();
 router.use(authenticate);
@@ -269,6 +270,7 @@ router.get('/config', async (_req, res) => {
             success: true,
             data: {
                 phase4Enabled: isFisPhase4Enabled(),
+                pipelineV2Enabled: isFisPipelineV2Enabled(),
             },
         });
     }
@@ -294,6 +296,43 @@ router.post('/reports/generate-batch', async (req, res) => {
         void (async () => {
             try {
                 const data = await fisService.generateReportsByRunKey(reportTypeCodes, entityCode, asOfPeriod, req.user?.email ?? null, (progress) => updateGenerationJobProgress(jobId, progress));
+                completeGenerationJob(jobId, data);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : 'Report generation failed';
+                failGenerationJob(jobId, message);
+            }
+        })();
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// POST /api/fis/reports/generate-batch-v2 — parallel NF/BS/PL then CF into rp.fis_report_output_new
+router.post('/reports/generate-batch-v2', async (req, res) => {
+    try {
+        if (!isFisPipelineV2Enabled()) {
+            return res.status(400).json({
+                success: false,
+                error: 'FIS V2 pipeline is disabled. Set FIS_PIPELINE_V2=true in backend .env',
+            });
+        }
+        const rawTypes = req.body?.reportTypeCodes ?? req.body?.report_type_codes ?? req.body?.reportTypes;
+        const reportTypeCodes = Array.isArray(rawTypes)
+            ? rawTypes.map((c) => String(c).trim()).filter(Boolean)
+            : String(rawTypes ?? '')
+                .split(',')
+                .map((c) => c.trim())
+                .filter(Boolean);
+        const entityCode = String(req.body?.entityCode ?? req.body?.entity_code ?? '').trim();
+        const asOfPeriod = String(req.body?.asOfPeriod ?? req.body?.as_of_period ?? req.body?.period ?? '').trim();
+        const { createGenerationJob, updateV2GenerationJobProgress, completeGenerationJob, failGenerationJob, } = await import('../services/FISReportGenerationJobService.js');
+        const { fisReportV2Service } = await import('../services/FISReportV2Service.js');
+        const jobId = createGenerationJob('v2');
+        res.json({ success: true, data: { jobId, status: 'pending', pipeline: 'v2' } });
+        void (async () => {
+            try {
+                const data = await fisReportV2Service.generateReportsByRunKeyV2(reportTypeCodes, entityCode, asOfPeriod, req.user?.email ?? null, (progress) => updateV2GenerationJobProgress(jobId, progress));
                 completeGenerationJob(jobId, data);
             }
             catch (error) {
@@ -466,13 +505,16 @@ router.get('/reports/output', async (req, res) => {
                 ? String(req.query.fileStatus).trim()
                 : undefined;
         const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
+        const outputTable = String(req.query.output_table ?? req.query.outputTable ?? '').toLowerCase() === 'new'
+            ? 'new'
+            : 'live';
         if (!reportTypeCode || !entityCode || !asOfPeriod) {
             return res.status(400).json({
                 success: false,
                 error: 'report_type, entity, and as_of_period query parameters are required',
             });
         }
-        const data = await getReportOutputPreviewByRunKey(reportTypeCode, entityCode, asOfPeriod, Number.isNaN(limit) ? 100 : limit, fileStatus);
+        const data = await getReportOutputPreviewByRunKey(reportTypeCode, entityCode, asOfPeriod, Number.isNaN(limit) ? 100 : limit, fileStatus, { outputTable });
         return res.json({ success: true, data });
     }
     catch (error) {

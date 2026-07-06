@@ -8,11 +8,16 @@ export type FisGenerationJobProgress = {
     total: number;
     label?: string;
     sumStep?: 'column';
-    finalizeStep?: 'pit' | 'variance' | 'expression' | 'normalize';
+    finalizeStep?: 'pit' | 'variance' | 'expression' | 'normalize' | 'publish';
     reportTypeCode?: string;
     batchIndex?: number;
     batchTotal?: number;
     startedAt?: number;
+};
+export type FisV2GenerationJobProgress = {
+    reports: Record<string, FisGenerationJobProgress | null>;
+    activeReportTypeCode?: string;
+    publishPhase?: string;
 };
 export type FisGenerationJobStatus = 'pending' | 'running' | 'success' | 'failed';
 export type FisGenerationJobReportResult = {
@@ -23,6 +28,8 @@ export type FisGenerationJob = {
     jobId: string;
     status: FisGenerationJobStatus;
     progress: FisGenerationJobProgress | null;
+    v2Progress?: FisV2GenerationJobProgress | null;
+    pipeline?: 'v1' | 'v2';
     result?: {
         reportTypeCode?: string;
         entityCode: string;
@@ -36,8 +43,9 @@ export type FisGenerationJob = {
     startedAt: number;
     completedAt?: number;
 };
-export declare function createGenerationJob(): string;
+export declare function createGenerationJob(pipeline?: 'v1' | 'v2'): string;
 export declare function updateGenerationJobProgress(jobId: string, progress: FisGenerationJobProgress): void;
+export declare function updateV2GenerationJobProgress(jobId: string, progress: FisV2GenerationJobProgress): void;
 export declare function completeGenerationJob(jobId: string, result: NonNullable<FisGenerationJob['result']>): void;
 export declare function failGenerationJob(jobId: string, error: string): void;
 export declare function getGenerationJob(jobId: string): FisGenerationJob | null;
