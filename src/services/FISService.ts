@@ -145,6 +145,7 @@ export interface FisReportRow {
   lineItemCode: string;
   lineItemLabel: string;
   displayOrder: number;
+  calculationOrder: number;
   indentLevel: number;
   isHeader: boolean;
   isTotal: boolean;
@@ -482,7 +483,7 @@ export class FISService {
   // ---------------------------------------------------------------------------
 
   private rowSelectSql = `SELECT rr.row_id, rr.report_type_id, rt.report_type_code,
-              rr.line_item_code, rr.line_item_label, rr.display_order, rr.indent_level,
+              rr.line_item_code, rr.line_item_label, rr.display_order, rr.calculation_order, rr.indent_level,
               rr.is_header, rr.is_total, rr.is_spacer, rr.is_title, rr.is_bold, rr.show_on_summary, rr.row_color, rr.font_color,
               rr.aggregation_type, rr.expression, rr.sign_convention, rr.format_type,
               rr.pct_numerator_code, rr.pct_denominator_code,
@@ -503,8 +504,8 @@ export class FISService {
   async getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]> {
     const result = await executeQuery<Parameters<FISService['mapRow']>[0]>(
       `${this.rowSelectSql}
-       WHERE rr.report_type_id = @reportTypeId AND rr.is_active = 1
-       ORDER BY rr.display_order`,
+       WHERE rr.report_type_id = @reportTypeId
+       ORDER BY ISNULL(rr.calculation_order, rr.display_order), rr.display_order`,
       { reportTypeId }
     );
     throwOnError(result.error);
@@ -520,13 +521,13 @@ export class FISService {
 
     const result = await executeQuery<{ row_id: number }>(
       `INSERT INTO admin.fis_report_rows (
-         report_type_id, line_item_code, line_item_label, display_order, indent_level,
+         report_type_id, line_item_code, line_item_label, display_order, calculation_order, indent_level,
          is_header, is_total, is_spacer, is_title, aggregation_type, expression,
          sign_convention, format_type, pct_numerator_code, pct_denominator_code, is_bold, show_on_summary, row_color, font_color, notes
        )
        OUTPUT INSERTED.row_id
        VALUES (
-         @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @indentLevel,
+         @reportTypeId, @lineItemCode, @lineItemLabel, @displayOrder, @calculationOrder, @indentLevel,
          @isHeader, @isTotal, @isSpacer, @isTitle, @aggregationType, @expression,
          @signConvention, @formatType, @pctNumeratorCode, @pctDenominatorCode, @isBold, @showOnSummary, @rowColor, @fontColor, @notes
        )`,
@@ -535,6 +536,10 @@ export class FISService {
         lineItemCode,
         lineItemLabel,
         displayOrder: toInt(data.displayOrder ?? data.display_order ?? 0, 'displayOrder'),
+        calculationOrder: toInt(
+          data.calculationOrder ?? data.calculation_order ?? 1,
+          'calculationOrder'
+        ),
         indentLevel: toInt(data.indentLevel ?? data.indent_level ?? 0, 'indentLevel'),
         isHeader: toBit(data.isHeader ?? data.is_header),
         isTotal: toBit(data.isTotal ?? data.is_total),
@@ -574,6 +579,7 @@ export class FISService {
       { key: 'lineItemCode', snake: 'line_item_code' },
       { key: 'lineItemLabel', snake: 'line_item_label' },
       { key: 'displayOrder', snake: 'display_order', transform: (v) => toInt(v, 'displayOrder') },
+      { key: 'calculationOrder', snake: 'calculation_order', transform: (v) => toInt(v, 'calculationOrder') },
       { key: 'indentLevel', snake: 'indent_level', transform: (v) => toInt(v, 'indentLevel') },
       { key: 'isHeader', snake: 'is_header', transform: (v) => toBit(v) },
       { key: 'isTotal', snake: 'is_total', transform: (v) => toBit(v) },
@@ -624,12 +630,152 @@ export class FISService {
     return row;
   }
 
-  async softDeleteRow(rowId: number): Promise<void> {
-    const result = await executeQuery(
-      `UPDATE admin.fis_report_rows SET is_active = 0, updated_at = GETDATE() WHERE row_id = @rowId`,
+  async deleteRow(rowId: number): Promise<void> {
+    const existing = await executeQuery<{
+      row_id: number;
+      report_type_id: number;
+      line_item_code: string;
+    }>(
+      `SELECT row_id, report_type_id, line_item_code
+       FROM admin.fis_report_rows
+       WHERE row_id = @rowId`,
       { rowId }
     );
-    throwOnError(result.error);
+    throwOnError(existing.error);
+    if (!existing.data?.length) {
+      throw new FISServiceError('Row not found', 404);
+    }
+    const current = existing.data[0];
+    const reportTypeId = current.report_type_id;
+    const lineItemCode = String(current.line_item_code).trim();
+
+    const rules = await executeQuery<{ rule_id: number }>(
+      `SELECT rule_id
+       FROM admin.fis_row_filter_rules
+       WHERE row_id = @rowId AND is_active = 1`,
+      { rowId }
+    );
+    throwOnError(rules.error);
+    if (rules.data?.length) {
+      throw new FISServiceError(
+        `Cannot delete row ${lineItemCode}: remove its ${rules.data.length} filter rule(s) first`,
+        400
+      );
+    }
+
+    const refs = await executeQuery<{ line_item_code: string }>(
+      `SELECT line_item_code
+       FROM admin.fis_report_rows
+       WHERE report_type_id = @reportTypeId
+         AND row_id <> @rowId
+         AND (
+           pct_numerator_code = @lineItemCode
+           OR pct_denominator_code = @lineItemCode
+           OR (
+             expression IS NOT NULL
+             AND (
+               CHARINDEX(N'[' + @lineItemCode + N']', expression) > 0
+               OR CHARINDEX(N':' + @lineItemCode + N']', expression) > 0
+             )
+           )
+         )`,
+      {
+        reportTypeId,
+        rowId,
+        lineItemCode,
+      }
+    );
+    throwOnError(refs.error);
+    if (refs.data?.length) {
+      const dependents = refs.data.map((r) => r.line_item_code).join(', ');
+      throw new FISServiceError(
+        `Cannot delete row ${lineItemCode}: referenced by row(s): ${dependents}`,
+        400
+      );
+    }
+
+    const deleteCriteria = await executeQuery(
+      `DELETE rc
+       FROM admin.fis_rule_criteria rc
+       INNER JOIN admin.fis_row_filter_rules rfr ON rc.rule_id = rfr.rule_id
+       WHERE rfr.row_id = @rowId`,
+      { rowId }
+    );
+    throwOnError(deleteCriteria.error);
+
+    const deleteRules = await executeQuery(
+      `DELETE FROM admin.fis_row_filter_rules WHERE row_id = @rowId`,
+      { rowId }
+    );
+    throwOnError(deleteRules.error);
+
+    const deleteRow = await executeQuery(
+      `DELETE FROM admin.fis_report_rows WHERE row_id = @rowId`,
+      { rowId }
+    );
+    throwOnError(deleteRow.error);
+
+    await this.compactDisplayOrders(reportTypeId);
+  }
+
+  /** @deprecated Use deleteRow — kept for route compatibility */
+  async softDeleteRow(rowId: number): Promise<void> {
+    return this.deleteRow(rowId);
+  }
+
+  async compactDisplayOrders(reportTypeId: number): Promise<number> {
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    await transaction.begin();
+
+    try {
+      const request = new sql.Request(transaction);
+      request.input('reportTypeId', sql.Int, reportTypeId);
+      const result = await request.query<{ needs_update: number }>(`
+        IF OBJECT_ID('tempdb..#fis_compact_orders') IS NOT NULL DROP TABLE #fis_compact_orders;
+
+        SELECT
+          row_id,
+          ROW_NUMBER() OVER (ORDER BY display_order, row_id) AS target_order
+        INTO #fis_compact_orders
+        FROM admin.fis_report_rows
+        WHERE report_type_id = @reportTypeId;
+
+        DECLARE @needs_update INT;
+        SELECT @needs_update = COUNT(*)
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+        WHERE r.report_type_id = @reportTypeId
+          AND r.display_order <> c.target_order;
+
+        IF @needs_update > 0
+        BEGIN
+          UPDATE r
+          SET display_order = -r.row_id, updated_at = GETDATE()
+          FROM admin.fis_report_rows r
+          INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+          WHERE r.report_type_id = @reportTypeId
+            AND r.display_order <> c.target_order;
+
+          UPDATE r
+          SET display_order = c.target_order, updated_at = GETDATE()
+          FROM admin.fis_report_rows r
+          INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+          WHERE r.report_type_id = @reportTypeId
+            AND r.display_order < 0;
+        END
+
+        DROP TABLE #fis_compact_orders;
+
+        SELECT @needs_update AS needs_update;`);
+
+      await transaction.commit();
+      return Number(result.recordset[0]?.needs_update ?? 0);
+    } catch (err: unknown) {
+      await transaction.rollback();
+      const message = err instanceof Error ? err.message : 'Failed to compact display orders';
+      throw new FISServiceError(message);
+    }
   }
 
   async reorderRows(updates: Array<{ rowId: number; displayOrder: number }>): Promise<void> {
@@ -640,32 +786,184 @@ export class FISService {
     await transaction.begin();
 
     try {
-      // Phase 1: temporary negative orders avoid UQ (report_type_id, display_order) conflicts
-      for (const u of updates) {
-        const request = new sql.Request(transaction);
-        request.input('rowId', sql.Int, u.rowId);
-        await request.query(
-          `UPDATE admin.fis_report_rows
-           SET display_order = -row_id, updated_at = GETDATE()
-           WHERE row_id = @rowId AND is_active = 1`
-        );
+      const request = new sql.Request(transaction);
+      const valueRows = updates
+        .map((_, index) => `(@rowId${index}, @displayOrder${index})`)
+        .join(', ');
+      for (const [index, update] of updates.entries()) {
+        request.input(`rowId${index}`, sql.Int, update.rowId);
+        request.input(`displayOrder${index}`, sql.Int, update.displayOrder);
       }
 
-      // Phase 2: apply final display_order values
-      for (const u of updates) {
-        const request = new sql.Request(transaction);
-        request.input('rowId', sql.Int, u.rowId);
-        request.input('displayOrder', sql.Int, u.displayOrder);
-        await request.query(
-          `UPDATE admin.fis_report_rows
-           SET display_order = @displayOrder, updated_at = GETDATE()
-           WHERE row_id = @rowId AND is_active = 1`
+      await request.query(`
+        IF OBJECT_ID('tempdb..#fis_reorder_rows') IS NOT NULL DROP TABLE #fis_reorder_rows;
+        CREATE TABLE #fis_reorder_rows (
+          row_id INT NOT NULL PRIMARY KEY,
+          display_order INT NOT NULL
         );
-      }
+
+        INSERT INTO #fis_reorder_rows (row_id, display_order)
+        VALUES ${valueRows};
+
+        UPDATE r
+        SET display_order = -r.row_id, updated_at = GETDATE()
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_reorder_rows t ON r.row_id = t.row_id;
+
+        UPDATE r
+        SET display_order = t.display_order, updated_at = GETDATE()
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_reorder_rows t ON r.row_id = t.row_id;
+
+        DROP TABLE #fis_reorder_rows;`);
+
       await transaction.commit();
     } catch (err: unknown) {
       await transaction.rollback();
       const message = err instanceof Error ? err.message : 'Failed to reorder rows';
+      throw new FISServiceError(message);
+    }
+  }
+
+  async autoCalculateRowCalculationOrder(
+    reportTypeId: number
+  ): Promise<{ updated: number; unresolvedReferences: string[] }> {
+    const reportTypeResult = await executeQuery<{ report_type_code: string }>(
+      `SELECT report_type_code
+       FROM admin.fis_report_types
+       WHERE report_type_id = @reportTypeId`,
+      { reportTypeId }
+    );
+    throwOnError(reportTypeResult.error);
+    const reportTypeCode = String(reportTypeResult.data?.[0]?.report_type_code ?? '').trim().toUpperCase();
+    if (!reportTypeCode) {
+      throw new FISServiceError('Report type not found', 404);
+    }
+
+    const rowsResult = await executeQuery<{
+      row_id: number;
+      line_item_code: string;
+      aggregation_type: string;
+      format_type: string | null;
+      expression: string | null;
+      pct_numerator_code: string | null;
+      pct_denominator_code: string | null;
+      display_order: number;
+      calculation_order: number | null;
+      is_active: boolean | number;
+    }>(
+      `SELECT row_id, line_item_code, aggregation_type, format_type, expression,
+              pct_numerator_code, pct_denominator_code,
+              display_order, calculation_order, is_active
+       FROM admin.fis_report_rows
+       WHERE report_type_id = @reportTypeId
+         AND is_active = 1`,
+      { reportTypeId }
+    );
+    throwOnError(rowsResult.error);
+    const rows = rowsResult.data || [];
+    if (!rows.length) {
+      return { updated: 0, unresolvedReferences: [] };
+    }
+
+    const byCode = new Map<string, number>();
+    for (const r of rows) byCode.set(String(r.line_item_code).trim().toUpperCase(), r.row_id);
+
+    const deps = new Map<number, Set<number>>();
+    const level = new Map<number, number>();
+    const unresolved = new Set<string>();
+    const tokenRegex = /\[([^\]]+)\]/g;
+
+    const addSameReportDependency = (
+      sourceLineItemCode: string,
+      refCode: string,
+      dependencySet: Set<number>
+    ) => {
+      const cleanRef = refCode.replace(/@(PY|PM)$/i, '').trim().toUpperCase();
+      if (!cleanRef) return;
+      const depRowId = byCode.get(cleanRef);
+      if (depRowId != null) dependencySet.add(depRowId);
+      else unresolved.add(`${sourceLineItemCode} -> ${cleanRef}`);
+    };
+
+    for (const r of rows) {
+      const rowId = r.row_id;
+      const aggregationType = String(r.aggregation_type || '').toUpperCase();
+      if (aggregationType !== 'EXPRESSION') {
+        level.set(rowId, 1);
+        deps.set(rowId, new Set());
+        continue;
+      }
+
+      const dependencySet = new Set<number>();
+      const sourceLineItemCode = String(r.line_item_code);
+      const expr = String(r.expression ?? '');
+      tokenRegex.lastIndex = 0;
+      let m: RegExpExecArray | null = tokenRegex.exec(expr);
+      while (m) {
+        const token = String(m[1] ?? '').trim();
+        let refType = reportTypeCode;
+        let refCode = token;
+        const colonAt = token.indexOf(':');
+        if (colonAt > 0) {
+          refType = token.slice(0, colonAt).trim().toUpperCase();
+          refCode = token.slice(colonAt + 1).trim();
+        }
+        if (refType === reportTypeCode) {
+          addSameReportDependency(sourceLineItemCode, refCode, dependencySet);
+        }
+        m = tokenRegex.exec(expr);
+      }
+
+      if (String(r.format_type || '').toUpperCase() === 'PERCENTAGE') {
+        const numeratorCode = String(r.pct_numerator_code ?? '').trim();
+        const denominatorCode = String(r.pct_denominator_code ?? '').trim();
+        if (numeratorCode) addSameReportDependency(sourceLineItemCode, numeratorCode, dependencySet);
+        if (denominatorCode) addSameReportDependency(sourceLineItemCode, denominatorCode, dependencySet);
+      }
+
+      deps.set(rowId, dependencySet);
+      level.set(rowId, 1);
+    }
+
+    for (let i = 0; i < rows.length; i++) {
+      let changed = false;
+      for (const r of rows) {
+        const rowId = r.row_id;
+        const d = deps.get(rowId) || new Set<number>();
+        let next = 1;
+        for (const dep of d) next = Math.max(next, (level.get(dep) || 1) + 1);
+        if ((level.get(rowId) || 1) !== next) {
+          level.set(rowId, next);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    await transaction.begin();
+    try {
+      let updated = 0;
+      for (const r of rows) {
+        const next = level.get(r.row_id) || 1;
+        if ((r.calculation_order ?? r.display_order) === next) continue;
+        const request = new sql.Request(transaction);
+        request.input('rowId', sql.Int, r.row_id);
+        request.input('calculationOrder', sql.Int, next);
+        await request.query(
+          `UPDATE admin.fis_report_rows
+           SET calculation_order = @calculationOrder, updated_at = GETDATE()
+           WHERE row_id = @rowId`
+        );
+        updated++;
+      }
+      await transaction.commit();
+      return { updated, unresolvedReferences: [...unresolved].sort() };
+    } catch (err: unknown) {
+      await transaction.rollback();
+      const message = err instanceof Error ? err.message : 'Failed to auto-calculate calculation order';
       throw new FISServiceError(message);
     }
   }
@@ -1925,6 +2223,7 @@ export class FISService {
       column_code: string;
       column_label: string;
       display_order: number;
+      calculation_order: number | null;
     }>(
       `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
        FROM admin.fis_report_column_defs d
@@ -1965,14 +2264,14 @@ export class FISService {
       line_item_label: string;
       display_order: number;
     }>(
-      `SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order
+      `SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order, rr.calculation_order
        FROM admin.fis_report_rows rr
        INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
        WHERE rt.report_type_code = @reportType
          AND rt.is_active = 1
          AND rr.is_active = 1
          AND rr.aggregation_type = 'SUM'
-       ORDER BY rr.display_order`,
+       ORDER BY ISNULL(rr.calculation_order, rr.display_order), rr.display_order`,
       { reportType }
     );
     throwOnError(result.error);
@@ -1994,6 +2293,7 @@ export class FISService {
       column_code: string;
       column_label: string;
       display_order: number;
+      calculation_order: number | null;
     }>(
       `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
        FROM admin.fis_report_column_defs d
@@ -2025,14 +2325,14 @@ export class FISService {
       line_item_label: string;
       display_order: number;
     }>(
-      `SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order
+      `SELECT rr.row_id, rr.line_item_code, rr.line_item_label, rr.display_order, rr.calculation_order
        FROM admin.fis_report_rows rr
        INNER JOIN admin.fis_report_types rt ON rr.report_type_id = rt.report_type_id
        WHERE rt.report_type_code = @reportType
          AND rt.is_active = 1
          AND rr.is_active = 1
          AND rr.aggregation_type = 'EXPRESSION'
-       ORDER BY rr.display_order`,
+       ORDER BY ISNULL(rr.calculation_order, rr.display_order), rr.display_order`,
       { reportType }
     );
     throwOnError(result.error);
@@ -2490,6 +2790,7 @@ export class FISService {
     line_item_code: string;
     line_item_label: string;
     display_order: number;
+    calculation_order: number | null;
     indent_level: number;
     is_header: boolean | number;
     is_total: boolean | number;
@@ -2517,6 +2818,7 @@ export class FISService {
       lineItemCode: r.line_item_code,
       lineItemLabel: r.line_item_label,
       displayOrder: r.display_order,
+      calculationOrder: r.calculation_order ?? r.display_order,
       indentLevel: r.indent_level,
       isHeader: r.is_header === true || r.is_header === 1,
       isTotal: r.is_total === true || r.is_total === 1,

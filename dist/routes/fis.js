@@ -83,6 +83,17 @@ router.post('/report-types/:id/rows', async (req, res) => {
         return handleError(res, error);
     }
 });
+// POST /api/fis/report-types/:id/rows/auto-calculate-order
+router.post('/report-types/:id/rows/auto-calculate-order', async (req, res) => {
+    try {
+        const reportTypeId = parseId(req.params.id, 'report type id');
+        const data = await fisService.autoCalculateRowCalculationOrder(reportTypeId);
+        return res.json({ success: true, data });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
 // GET /api/fis/report-types/:id/column-defs/preview?as_of_period=
 router.get('/report-types/:id/column-defs/preview', async (req, res) => {
     try {
@@ -197,8 +208,19 @@ router.put('/rows/:rowId', async (req, res) => {
 router.delete('/rows/:rowId', async (req, res) => {
     try {
         const rowId = parseId(req.params.rowId, 'row id');
-        await fisService.softDeleteRow(rowId);
+        await fisService.deleteRow(rowId);
         return res.json({ success: true, data: { rowId } });
+    }
+    catch (error) {
+        return handleError(res, error);
+    }
+});
+// POST /api/fis/report-types/:id/rows/compact-display-order
+router.post('/report-types/:id/rows/compact-display-order', async (req, res) => {
+    try {
+        const reportTypeId = parseId(req.params.id, 'report type id');
+        const updated = await fisService.compactDisplayOrders(reportTypeId);
+        return res.json({ success: true, data: { updated } });
     }
     catch (error) {
         return handleError(res, error);

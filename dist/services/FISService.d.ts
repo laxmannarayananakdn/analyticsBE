@@ -31,6 +31,7 @@ export interface FisReportRow {
     lineItemCode: string;
     lineItemLabel: string;
     displayOrder: number;
+    calculationOrder: number;
     indentLevel: number;
     isHeader: boolean;
     isTotal: boolean;
@@ -151,11 +152,18 @@ export declare class FISService {
     getRowsByReportType(reportTypeId: number): Promise<FisReportRow[]>;
     createRow(reportTypeId: number, data: Record<string, unknown>): Promise<number>;
     updateRow(rowId: number, data: Record<string, unknown>): Promise<FisReportRow>;
+    deleteRow(rowId: number): Promise<void>;
+    /** @deprecated Use deleteRow — kept for route compatibility */
     softDeleteRow(rowId: number): Promise<void>;
+    compactDisplayOrders(reportTypeId: number): Promise<number>;
     reorderRows(updates: Array<{
         rowId: number;
         displayOrder: number;
     }>): Promise<void>;
+    autoCalculateRowCalculationOrder(reportTypeId: number): Promise<{
+        updated: number;
+        unresolvedReferences: string[];
+    }>;
     private static readonly CALCULATED_COLUMN_KINDS;
     private columnDefSelectSql;
     private mapColumnDef;
