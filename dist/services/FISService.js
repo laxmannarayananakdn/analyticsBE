@@ -403,17 +403,57 @@ export class FISService {
         return this.deleteRow(rowId);
     }
     async compactDisplayOrders(reportTypeId) {
-        const rows = await executeQuery(`SELECT row_id
-       FROM admin.fis_report_rows
-       WHERE report_type_id = @reportTypeId
-       ORDER BY display_order, row_id`, { reportTypeId });
-        throwOnError(rows.error);
-        const updates = (rows.data || []).map((r, idx) => ({
-            rowId: r.row_id,
-            displayOrder: idx + 1,
-        }));
-        await this.reorderRows(updates);
-        return updates.length;
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        try {
+            const request = new sql.Request(transaction);
+            request.input('reportTypeId', sql.Int, reportTypeId);
+            const result = await request.query(`
+        IF OBJECT_ID('tempdb..#fis_compact_orders') IS NOT NULL DROP TABLE #fis_compact_orders;
+
+        SELECT
+          row_id,
+          ROW_NUMBER() OVER (ORDER BY display_order, row_id) AS target_order
+        INTO #fis_compact_orders
+        FROM admin.fis_report_rows
+        WHERE report_type_id = @reportTypeId;
+
+        DECLARE @needs_update INT;
+        SELECT @needs_update = COUNT(*)
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+        WHERE r.report_type_id = @reportTypeId
+          AND r.display_order <> c.target_order;
+
+        IF @needs_update > 0
+        BEGIN
+          UPDATE r
+          SET display_order = -r.row_id, updated_at = GETDATE()
+          FROM admin.fis_report_rows r
+          INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+          WHERE r.report_type_id = @reportTypeId
+            AND r.display_order <> c.target_order;
+
+          UPDATE r
+          SET display_order = c.target_order, updated_at = GETDATE()
+          FROM admin.fis_report_rows r
+          INNER JOIN #fis_compact_orders c ON r.row_id = c.row_id
+          WHERE r.report_type_id = @reportTypeId
+            AND r.display_order < 0;
+        END
+
+        DROP TABLE #fis_compact_orders;
+
+        SELECT @needs_update AS needs_update;`);
+            await transaction.commit();
+            return Number(result.recordset[0]?.needs_update ?? 0);
+        }
+        catch (err) {
+            await transaction.rollback();
+            const message = err instanceof Error ? err.message : 'Failed to compact display orders';
+            throw new FISServiceError(message);
+        }
     }
     async reorderRows(updates) {
         if (!updates.length)
@@ -422,23 +462,35 @@ export class FISService {
         const transaction = new sql.Transaction(connection);
         await transaction.begin();
         try {
-            // Phase 1: temporary negative orders avoid UQ (report_type_id, display_order) conflicts
-            for (const u of updates) {
-                const request = new sql.Request(transaction);
-                request.input('rowId', sql.Int, u.rowId);
-                await request.query(`UPDATE admin.fis_report_rows
-           SET display_order = -row_id, updated_at = GETDATE()
-           WHERE row_id = @rowId`);
+            const request = new sql.Request(transaction);
+            const valueRows = updates
+                .map((_, index) => `(@rowId${index}, @displayOrder${index})`)
+                .join(', ');
+            for (const [index, update] of updates.entries()) {
+                request.input(`rowId${index}`, sql.Int, update.rowId);
+                request.input(`displayOrder${index}`, sql.Int, update.displayOrder);
             }
-            // Phase 2: apply final display_order values
-            for (const u of updates) {
-                const request = new sql.Request(transaction);
-                request.input('rowId', sql.Int, u.rowId);
-                request.input('displayOrder', sql.Int, u.displayOrder);
-                await request.query(`UPDATE admin.fis_report_rows
-           SET display_order = @displayOrder, updated_at = GETDATE()
-           WHERE row_id = @rowId`);
-            }
+            await request.query(`
+        IF OBJECT_ID('tempdb..#fis_reorder_rows') IS NOT NULL DROP TABLE #fis_reorder_rows;
+        CREATE TABLE #fis_reorder_rows (
+          row_id INT NOT NULL PRIMARY KEY,
+          display_order INT NOT NULL
+        );
+
+        INSERT INTO #fis_reorder_rows (row_id, display_order)
+        VALUES ${valueRows};
+
+        UPDATE r
+        SET display_order = -r.row_id, updated_at = GETDATE()
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_reorder_rows t ON r.row_id = t.row_id;
+
+        UPDATE r
+        SET display_order = t.display_order, updated_at = GETDATE()
+        FROM admin.fis_report_rows r
+        INNER JOIN #fis_reorder_rows t ON r.row_id = t.row_id;
+
+        DROP TABLE #fis_reorder_rows;`);
             await transaction.commit();
         }
         catch (err) {

@@ -9,6 +9,7 @@ import { validateFileSize, validateFileExtension, validateMimeType, validateRowC
 import { ErrorCode } from '../types/errors.js';
 import { processFinanceFile } from '../services/FinanceEfUploadService.js';
 import { isFinanceFileTypeCode, validateTrialBalanceFileIdentity } from '../utils/financeFileNameResolver.js';
+import { generateEfTemplate, isSupportedTemplateType } from '../services/EfTemplateService.js';
 // Import multer - using default import with esModuleInterop
 // @ts-ignore - multer is CommonJS but esModuleInterop handles it
 import multer from 'multer';
@@ -50,6 +51,46 @@ router.get('/file-types', async (req, res) => {
         res.status(500).json({
             error: 'Failed to fetch file types',
             message: error.message
+        });
+    }
+});
+/**
+ * GET /api/ef/templates/:typeCode
+ * Download a sample template file for the given EF file type.
+ */
+router.get('/templates/:typeCode', async (req, res) => {
+    try {
+        const typeCode = req.params.typeCode?.trim();
+        if (!typeCode) {
+            return res.status(400).json({
+                error: 'Invalid file type',
+                message: 'File type code is required',
+            });
+        }
+        if (!isSupportedTemplateType(typeCode)) {
+            return res.status(404).json({
+                error: 'Template not found',
+                message: `No template available for file type "${typeCode}"`,
+            });
+        }
+        const fileTypes = await efService.getActiveFileTypes();
+        const fileType = fileTypes.find((ft) => ft.type_code.toUpperCase() === typeCode.toUpperCase());
+        if (!fileType) {
+            return res.status(404).json({
+                error: 'File type not found',
+                message: `File type "${typeCode}" not found or inactive`,
+            });
+        }
+        const template = generateEfTemplate(typeCode);
+        res.setHeader('Content-Type', template.contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${template.fileName}"`);
+        res.send(template.buffer);
+    }
+    catch (error) {
+        console.error('❌ Error generating template:', error);
+        res.status(500).json({
+            error: 'Failed to generate template',
+            message: error.message,
         });
     }
 });
