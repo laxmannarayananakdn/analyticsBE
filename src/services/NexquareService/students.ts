@@ -42,7 +42,7 @@ export async function getStudents(
     let hasMore = true;
 
     while (hasMore) {
-      const endpoint = `${NEXQUARE_ENDPOINTS.STUDENTS}/${targetSchoolId}/students/`;
+      const endpoint = `${NEXQUARE_ENDPOINTS.STUDENTS}/${targetSchoolId}/students`;
       const queryParams = new URLSearchParams();
       queryParams.append('offset', offset.toString());
       queryParams.append('limit', limit.toString());
