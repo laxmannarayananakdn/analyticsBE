@@ -4,15 +4,21 @@
  */
 
 import {
-  getManageBacHeaders,
   MANAGEBAC_ENDPOINTS,
   MANAGEBAC_CONFIG,
   MB_TERM_GRADES_DEFAULT_GRADE_NUMBER,
 } from '../../config/managebac.js';
-import { retryOperation, validateApiResponse } from '../../utils/apiUtils.js';
+import { delay } from '../../utils/apiUtils.js';
+import {
+  logTermGradeSync,
+  warnTermGradeSync,
+  errorTermGradeSync,
+} from '../../utils/termGradeSyncLog.js';
 import { databaseService, type TermGradeRubric, type TermGrade as DBTermGrade } from '../DatabaseService.js';
 import type { TermGradeResponse } from '../../types/managebac.js';
 import type { BaseManageBacService } from './BaseManageBacService.js';
+
+const TERM_GRADES_PER_PAGE = 200;
 
 export async function getTermGrades(
   this: BaseManageBacService,
@@ -23,40 +29,67 @@ export async function getTermGrades(
   options?: { allowedStudentIds?: Set<number> }
 ): Promise<TermGradeResponse> {
   try {
-    const endpoint = MANAGEBAC_ENDPOINTS.TERM_GRADES
+    const endpointBase = MANAGEBAC_ENDPOINTS.TERM_GRADES
       .replace(':class_id', classId.toString())
       .replace(':term_id', termId.toString());
-    const url = baseUrl
-      ? this.buildManageBacUrl(endpoint, baseUrl)
-      : this.buildManageBacUrl(endpoint, MANAGEBAC_CONFIG.DEFAULT_BASE_URL);
-    const headers = getManageBacHeaders(apiKey);
+    const sampleUrl = baseUrl
+      ? this.buildManageBacUrl(`${endpointBase}?page=1&per_page=${TERM_GRADES_PER_PAGE}`, baseUrl)
+      : this.buildManageBacUrl(`${endpointBase}?page=1&per_page=${TERM_GRADES_PER_PAGE}`, MANAGEBAC_CONFIG.DEFAULT_BASE_URL);
 
-    const response = await retryOperation(async () => {
-      const res = await fetch(url, { headers });
+    const allStudents: unknown[] = [];
+    let page = 1;
+    let totalPages = 1;
+    let meta: TermGradeResponse['meta'] | undefined;
 
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    do {
+      if (page > 1) {
+        await delay(400);
+      }
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: String(TERM_GRADES_PER_PAGE),
+      });
+      const endpoint = `${endpointBase}?${params.toString()}`;
+      const rawResponse = (await this.makeRequestRaw(endpoint, apiKey, {}, baseUrl)) as Record<string, unknown>;
+      const raw = (rawResponse?.data ?? rawResponse) as Record<string, unknown>;
+      const pageStudents = Array.isArray(raw?.students)
+        ? raw.students
+        : Array.isArray(rawResponse?.students)
+          ? (rawResponse.students as unknown[])
+          : [];
+
+      allStudents.push(...pageStudents);
+
+      const pageMeta = (rawResponse?.meta ?? raw?.meta) as TermGradeResponse['meta'] | undefined;
+      meta = pageMeta;
+      if (pageMeta?.total_pages != null) {
+        totalPages = pageMeta.total_pages;
+      } else if (pageStudents.length < TERM_GRADES_PER_PAGE) {
+        totalPages = page;
+      } else {
+        totalPages = page + 1;
       }
 
-      return await res.json() as unknown;
-    }, 3);
+      logTermGradeSync(
+        `   📄 term-grades page ${page}/${totalPages}: ${pageStudents.length} students ` +
+          `(running total: ${allStudents.length}` +
+          (pageMeta?.total_count != null ? `, api total_count=${pageMeta.total_count}` : '') +
+          ')'
+      );
+      page++;
+    } while (page <= totalPages);
 
-    const responseObj = response as Record<string, unknown>;
-    console.log('🔍 Raw API response keys:', Object.keys(responseObj));
-    console.log('🔍 Raw response has students?', !!responseObj.students);
-    console.log('🔍 Raw response has data?', !!responseObj.data);
+    let studentsArray = allStudents;
 
-    const validated = validateApiResponse<TermGradeResponse>(response);
-
-    const validatedData = validated.data as unknown as Record<string, unknown>;
-    console.log('🔍 Validated response structure:');
-    console.log('  - validated.data type:', typeof validated.data);
-    console.log('  - validated.data keys:', validated.data ? Object.keys(validatedData) : 'null');
-    console.log('  - Has students?', !!validatedData?.students);
-
-    const studentsData = validatedData?.students ?? responseObj?.students ?? [];
-    let studentsArray = Array.isArray(studentsData) ? studentsData : [];
+    const studentsBeforeScopeFilter = studentsArray.length;
+    logTermGradeSync(`\n📥 ManageBac term-grades response: class=${classId} term=${termId}`);
+    logTermGradeSync(`   URL (paginated): ${sampleUrl}`);
+    logTermGradeSync(`   Students fetched across all pages: ${studentsBeforeScopeFilter}`);
+    if (meta) {
+      logTermGradeSync(
+        `   API meta: pages=${meta.total_pages ?? '?'} total_count=${meta.total_count ?? '?'} per_page=${meta.per_page ?? '?'}`
+      );
+    }
 
     if (options?.allowedStudentIds && options.allowedStudentIds.size > 0) {
       const originalStudents = studentsArray;
@@ -69,28 +102,39 @@ export async function getTermGrades(
       if (studentsArray.length === 0 && before > 0) {
         // Guardrail: if cohort mapping is stale/misaligned, do not drop all API data.
         // Class selection is already grade-scoped upstream.
-        console.warn(
+        warnTermGradeSync(
           `⚠️ Student scope matched 0/${before}; falling back to unfiltered class-term payload to avoid data loss`
         );
         studentsArray = originalStudents;
       } else if (before > studentsArray.length) {
-        console.log(
-          `  ℹ️ Term grades: kept ${studentsArray.length}/${before} students (DP grade ${MB_TERM_GRADES_DEFAULT_GRADE_NUMBER} scope)`
+        logTermGradeSync(
+          `   ℹ️ DP scope filter (school grade-${MB_TERM_GRADES_DEFAULT_GRADE_NUMBER} cohort=${options.allowedStudentIds.size}): kept ${studentsArray.length}/${before}`
         );
       }
     }
+    logTermGradeSync(`   Students logged below: ${studentsArray.length}`);
 
-    if (studentsArray.length > 0) {
-      const firstStudent = studentsArray[0] as Record<string, unknown>;
-      const termGrade = firstStudent?.term_grade as Record<string, unknown> | undefined;
-      console.log('  - First student ID:', firstStudent?.id);
-      console.log('  - First student has term_grade?', !!termGrade);
-      const rubrics = termGrade?.rubrics as unknown[] | undefined;
-      console.log('  - Rubrics count:', rubrics?.length || 0);
-      if (rubrics && rubrics.length > 0) {
-        console.log('  - Sample rubric:', JSON.stringify(rubrics[0], null, 2));
+    for (const student of studentsArray) {
+      const s = student as Record<string, unknown>;
+      const studentId = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
+      const tg = s?.term_grade as Record<string, unknown> | undefined;
+      const avg = tg?.average as Record<string, unknown> | undefined;
+      const rawRubrics = Array.isArray(tg?.rubrics) ? (tg.rubrics as unknown[]) : [];
+      const rubricLines = rawRubrics.map((rubric: unknown) => {
+        const r = rubric as Record<string, unknown>;
+        return `    - rubric id=${r?.id ?? 'null'} title="${r?.title ?? ''}" grade=${r?.grade ?? 'null'}`;
+      });
+      logTermGradeSync(
+        `   student=${studentId} name="${s?.name ?? '?'}" ` +
+          `grade=${tg?.grade ?? 'null'} avg=${avg?.percent ?? 'null'} rubrics=${rawRubrics.length}`
+      );
+      if (rubricLines.length > 0) {
+        rubricLines.forEach((line) => logTermGradeSync(line));
+      } else {
+        logTermGradeSync('    - (no rubrics array in API response)');
       }
     }
+    logTermGradeSync('');
 
     if (studentsArray.length > 0) {
       const termGrades: DBTermGrade[] = studentsArray.map((student: unknown) => {
@@ -108,15 +152,15 @@ export async function getTermGrades(
       });
 
       if (termGrades.length > 0) {
-        console.log('💾 Saving term grades to database...');
+        logTermGradeSync('💾 Saving term grades to database...');
         const { data: savedTermGrades, error } = await databaseService.upsertTermGrades(termGrades);
         if (error) {
-          console.error('❌ Failed to save term grades to database:', error);
+          errorTermGradeSync(`❌ Failed to save term grades to database: ${error}`);
         } else {
-          console.log('✅ Term grades saved to database');
+          logTermGradeSync('✅ Term grades saved to database');
 
           if (savedTermGrades && savedTermGrades.length > 0) {
-            console.log(`📊 Processing rubrics for ${savedTermGrades.length} term grades...`);
+            logTermGradeSync(`📊 Processing rubrics for ${savedTermGrades.length} term grades...`);
 
             const rubrics: TermGradeRubric[] = [];
             const studentToTermGradeId = new Map<number, number>();
@@ -132,8 +176,15 @@ export async function getTermGrades(
               const s = student as Record<string, unknown> & { id: unknown; name?: string; term_grade?: { rubrics?: unknown[] } };
               const studentId = typeof s?.id === 'string' ? parseInt(String(s.id), 10) : Number(s?.id);
               const termGradeId = studentToTermGradeId.get(studentId);
-              if (termGradeId && (s?.term_grade as Record<string, unknown>)?.rubrics) {
-                const studentRubrics = ((s.term_grade as Record<string, unknown>).rubrics as unknown[]) || [];
+              const studentRubrics = Array.isArray((s?.term_grade as Record<string, unknown>)?.rubrics)
+                ? (((s.term_grade as Record<string, unknown>).rubrics as unknown[]) || [])
+                : [];
+              if (!termGradeId && studentRubrics.length > 0) {
+                warnTermGradeSync(
+                  `   ⚠️ Skipping ${studentRubrics.length} rubric(s) for student=${studentId}: no term_grade_id after upsert`
+                );
+              }
+              if (termGradeId && studentRubrics.length > 0) {
                 studentRubrics.forEach((rubric: unknown) => {
                   const r = rubric as Record<string, unknown>;
                   if (r?.id && r?.title) {
@@ -143,6 +194,11 @@ export async function getTermGrades(
                       title: String(r.title),
                       grade: (r.grade as string | null) ?? null,
                     });
+                  } else {
+                    warnTermGradeSync(
+                      `   ⚠️ Skipping rubric for student=${studentId}: missing id/title ` +
+                        `(id=${r?.id ?? 'null'} title="${r?.title ?? ''}")`
+                    );
                   }
                 });
               }
@@ -150,13 +206,13 @@ export async function getTermGrades(
 
             if (rubrics.length > 0) {
               const nonNullRubrics = rubrics.filter((r) => r.grade != null && String(r.grade).trim() !== '').length;
-              console.log(`   ↳ Rubrics with non-null grade: ${nonNullRubrics}/${rubrics.length}`);
-              console.log(`💾 Saving ${rubrics.length} term grade rubrics to database...`);
+              logTermGradeSync(`   ↳ Rubrics with non-null grade: ${nonNullRubrics}/${rubrics.length}`);
+              logTermGradeSync(`💾 Saving ${rubrics.length} term grade rubrics to database...`);
               const { error: rubricsError } = await databaseService.upsertTermGradeRubrics(rubrics);
               if (rubricsError) {
-                console.error('❌ Failed to save term grade rubrics to database:', rubricsError);
+                errorTermGradeSync(`❌ Failed to save term grade rubrics to database: ${rubricsError}`);
               } else {
-                console.log('✅ Term grade rubrics saved to database');
+                logTermGradeSync('✅ Term grade rubrics saved to database');
               }
             }
           }
@@ -164,7 +220,17 @@ export async function getTermGrades(
       }
     }
 
-    return validated.data || { students: studentsData, meta: responseObj?.meta };
+    return {
+      students: studentsArray as TermGradeResponse['students'],
+      meta: meta
+        ? {
+            ...meta,
+            total_count: meta.total_count ?? studentsArray.length,
+            total_pages: totalPages,
+            per_page: TERM_GRADES_PER_PAGE,
+          }
+        : undefined,
+    };
   } catch (error) {
     console.error('Failed to fetch term grades:', error);
     throw error;
@@ -241,7 +307,7 @@ export async function syncAllTermGrades(
       ...(programCodes?.length ? { program_codes: programCodes } : {}),
     });
     allowedStudentIds = new Set(ids);
-    console.log(
+    logTermGradeSync(
       `📋 Term-grade scope: grade_number=${gradeNumber}, school_id=${schoolId} → ${ids.length} student(s)`
     );
   }
@@ -255,7 +321,7 @@ export async function syncAllTermGrades(
     for (const t of meta) {
       configTermMeta.set(t.id, { id: t.id, name: t.name });
     }
-    console.log(
+    logTermGradeSync(
       `📋 Term filter: ${allowedTermIds.size} term_id(s) from options.allowed_term_ids`
     );
   } else if (schoolId != null && gradeNumber != null && options?.academic_year) {
@@ -270,14 +336,14 @@ export async function syncAllTermGrades(
       for (const t of meta) {
         configTermMeta.set(t.id, { id: t.id, name: t.name });
       }
-      console.log(
+      logTermGradeSync(
         `📋 Term filter from admin.mb_term_grade_rubric_config: school=${schoolId}, ` +
           `academic_year="${configTerms.academic_year}", grade_number=${gradeNumber} → ` +
           `${configTerms.term_ids.length} term_id(s), ${configTerms.rubric_count} rubric row(s) ` +
           `[${configTerms.term_ids.join(', ')}]`
       );
     } else {
-      console.warn(
+      warnTermGradeSync(
         `⚠️ No admin.mb_term_grade_rubric_config for school=${schoolId}, ` +
           `academic_year="${options.academic_year}", grade_number=${gradeNumber}. ` +
           `Falling back to all terms in each class start_term_id..end_term_id range.`
@@ -285,9 +351,12 @@ export async function syncAllTermGrades(
     }
   }
 
-  console.log('📋 syncAllTermGrades: fetching classes with memberships...', filters && Object.keys(filters).length ? `(filters: ${JSON.stringify(filters)})` : '');
+  logTermGradeSync(
+    `📋 syncAllTermGrades: fetching classes with memberships...` +
+      (filters && Object.keys(filters).length ? ` (filters: ${JSON.stringify(filters)})` : '')
+  );
   const classIds = await databaseService.getDistinctClassesWithMemberships(Object.keys(filters).length ? filters : undefined);
-  console.log(`📋 syncAllTermGrades: found ${classIds.length} classes with memberships`);
+  logTermGradeSync(`📋 syncAllTermGrades: found ${classIds.length} classes with memberships`);
 
   if (classIds.length === 0) {
     console.log('ℹ️ No classes with memberships found. Run "Get Memberships" first.');
@@ -373,7 +442,7 @@ export async function syncAllTermGrades(
   const totalCombinations = combinations.length;
   const classesWithCombos = new Set(combinations.map(c => c.classId)).size;
   const skipped = classIds.length - classesWithCombos;
-  console.log(`📋 Found ${classIds.length} classes with memberships, ${totalCombinations} class-term combinations to fetch (${skipped} classes skipped)`);
+  logTermGradeSync(`📋 Found ${classIds.length} classes with memberships, ${totalCombinations} class-term combinations to fetch (${skipped} classes skipped)`);
 
   const details: Array<{ classId: number; className: string; termId: number; termName: string; count: number; error?: string }> = [];
   let totalFetched = 0;
@@ -384,21 +453,26 @@ export async function syncAllTermGrades(
     const completed = i + 1;
 
     try {
+      logTermGradeSync(
+        `\n🔄 [sync term-grades ${completed}/${totalCombinations}] class=${classId} (${className}) term=${termId} (${termName})`
+      );
       const response = await (this as any).getTermGrades(apiKey, classId, termId, baseUrl, {
         allowedStudentIds,
       });
       const count = response?.students?.length ?? 0;
       totalFetched += count;
       details.push({ classId, className, termId, termName, count });
-      console.log(`  [${completed}/${totalCombinations}] Class ${classId} (${className}), Term ${termId} (${termName}): ${count > 0 ? `${count} term grades` : 'no data'}`);
+      logTermGradeSync(`  [${completed}/${totalCombinations}] Class ${classId} (${className}), Term ${termId} (${termName}): ${count > 0 ? `${count} term grades` : 'no data'}`);
     } catch (error: any) {
       errors++;
       details.push({ classId, className, termId, termName, count: 0, error: error.message });
-      console.warn(`  [${completed}/${totalCombinations}] Class ${classId}, Term ${termId}: ${error.message}`);
+      warnTermGradeSync(`  [${completed}/${totalCombinations}] Class ${classId}, Term ${termId}: ${error.message}`);
     }
   }
 
-  console.log(`\n✅ Sync complete: ${classesWithCombos} classes, ${totalCombinations}/${totalCombinations} combinations processed, ${totalFetched} term grades fetched, ${errors} errors`);
+  logTermGradeSync(
+    `\n✅ Sync complete: ${classesWithCombos} classes, ${totalCombinations}/${totalCombinations} combinations processed, ${totalFetched} term grades fetched, ${errors} errors`
+  );
   return {
     classesProcessed: classesWithCombos,
     classesSkipped: skipped,

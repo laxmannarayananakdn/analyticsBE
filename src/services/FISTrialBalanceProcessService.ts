@@ -41,6 +41,7 @@ export interface FisReportOutputRow {
   displayOrder: number;
   amount: number | null;
   formatType: string | null;
+  status?: string | null;
 }
 
 interface LatestTbUploadRow {
@@ -552,9 +553,10 @@ export async function getReportOutputPreviewByRunKey(
 
   const safeLimit = Math.min(Math.max(limit, 1), 500);
   const statusWhere = statusFilter ? ` AND o.file_status = @fileStatus` : '';
+  const useNewTable = options?.outputTable === 'new';
   const rowsResult = await executeQuery<{
     output_id: number;
-    instance_id: number | null;
+    instance_id?: number | null;
     column_id: number;
     column_code: string | null;
     column_label: string;
@@ -563,21 +565,37 @@ export async function getReportOutputPreviewByRunKey(
     display_order: number;
     amount: number | null;
     format_type: string | null;
+    status?: string | null;
   }>(
-    `SELECT TOP (@limit)
-       o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
-       o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
-     FROM ${tableName} o
-     LEFT JOIN admin.fis_report_column_defs cd
-       ON cd.column_code = o.column_code
-      AND cd.report_type_id = (
-        SELECT report_type_id FROM admin.fis_report_types
-        WHERE report_type_code = @reportType
-      )
-     WHERE o.report_type_code = @reportType
-       AND o.entity_code = @entity
-       AND o.as_of_period = @period${statusWhere}
-     ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`,
+    useNewTable
+      ? `SELECT TOP (@limit)
+           o.output_id, o.column_id, o.column_code, o.column_label,
+           o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type, o.status
+         FROM ${tableName} o
+         LEFT JOIN admin.fis_report_column_defs cd
+           ON cd.column_code = o.column_code
+          AND cd.report_type_id = (
+            SELECT report_type_id FROM admin.fis_report_types
+            WHERE report_type_code = @reportType
+          )
+         WHERE o.report_type_code = @reportType
+           AND o.entity_code = @entity
+           AND o.as_of_period = @period${statusWhere}
+         ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`
+      : `SELECT TOP (@limit)
+           o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
+           o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
+         FROM ${tableName} o
+         LEFT JOIN admin.fis_report_column_defs cd
+           ON cd.column_code = o.column_code
+          AND cd.report_type_id = (
+            SELECT report_type_id FROM admin.fis_report_types
+            WHERE report_type_code = @reportType
+          )
+         WHERE o.report_type_code = @reportType
+           AND o.entity_code = @entity
+           AND o.as_of_period = @period${statusWhere}
+         ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`,
     { reportType, entity, period, limit: safeLimit, ...(statusFilter ? { fileStatus: statusFilter } : {}) }
   );
   if (rowsResult.error) throw new Error(rowsResult.error);
@@ -586,7 +604,7 @@ export async function getReportOutputPreviewByRunKey(
     totalRows: Number(countResult.data?.[0]?.total) || 0,
     rows: (rowsResult.data || []).map((r) => ({
       outputId: r.output_id,
-      instanceId: r.instance_id,
+      instanceId: useNewTable ? null : (r.instance_id ?? null),
       columnId: r.column_id,
       columnCode: r.column_code,
       columnLabel: r.column_label,
@@ -595,6 +613,7 @@ export async function getReportOutputPreviewByRunKey(
       displayOrder: r.display_order,
       amount: r.amount,
       formatType: r.format_type,
+      status: r.status ?? null,
     })),
   };
 }

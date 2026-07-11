@@ -11,6 +11,10 @@ import { ManageBacService, manageBacService } from './ManageBacService/index.js'
 import { nexquareService } from './NexquareService/index.js';
 import { triggerRefresh, buildStudentAssessmentsByAcademicYear } from './RefreshService.js';
 import { databaseService } from './DatabaseService.js';
+import {
+  beginTermGradeSyncLog,
+  logTermGradeSync,
+} from '../utils/termGradeSyncLog.js';
 
 export interface RunSyncParams {
   /** Node ID(s) to sync. Required unless all is true. */
@@ -305,6 +309,7 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
           abortSignal: params.abortSignal,
           mbService,
           onEndpointChange: setCurrentEndpoint,
+          syncRunId: runId,
         });
 
         // When loadRpSchema and term-grades ran: sync MB -> RP.student_assessments, then trigger RP refresh
@@ -697,6 +702,7 @@ async function syncManageBacSchool(
     abortSignal?: AbortSignal;
     mbService?: ManageBacService;
     onEndpointChange?: (endpoint: string) => Promise<void>;
+    syncRunId?: number;
   }
 ): Promise<void> {
   const eps = options?.endpoints ?? MB_ENDPOINTS_ALL;
@@ -756,13 +762,22 @@ async function syncManageBacSchool(
   }
   throwIfAborted(signal);
   if (eps.includes('term-grades')) {
-    await run('term-grades', () =>
-      svc.syncAllTermGrades(apiKey, baseUrl, {
+    await run('term-grades', async () => {
+      beginTermGradeSyncLog({
+        schoolId: config.school_id,
+        academicYear: options?.academicYear,
+        syncRunId: options?.syncRunId,
+      });
+      logTermGradeSync(
+        `📊 [sync-runs] Starting ManageBac term-grades for school_id=${config.school_id ?? 'unknown'} ` +
+          `academic_year=${options?.academicYear ?? '(none)'} — per-student API rubric detail follows for each class×term`
+      );
+      await svc.syncAllTermGrades(apiKey, baseUrl, {
         dp_grade_13_only: true,
         academic_year: options?.academicYear,
         ...(config.school_id != null ? { school_id: config.school_id } : {}),
-      })
-    );
+      });
+    });
   }
 }
 
