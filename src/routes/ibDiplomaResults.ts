@@ -162,9 +162,9 @@ router.get('/', async (req: Request, res: Response) => {
 
 /**
  * PUT /api/ib-diploma-results
- * Body: { updates: [{ result_id, result?, ib_category? }] }
- * - Updates Result.component_value on the Result row
- * - Updates IB_category on all RP.student_assessments rows for that student+year
+ * Body: { updates: [{ result_id, total_points_id?, result?, ib_category? }] }
+ * - Updates Result.component_value / IB_category on the Result row (by id)
+ * - Optionally mirrors IB_category onto the diploma Total_Points row (by id)
  */
 router.put('/', async (req: Request, res: Response) => {
   try {
@@ -229,52 +229,47 @@ router.put('/', async (req: Request, res: Response) => {
           }
         }
 
-        // Load identity for the Result row
-        const lookupReq = new sql.Request(transaction);
-        lookupReq.input('result_id', sql.BigInt, resultId);
-        const lookup = await lookupReq.query(`
-          SELECT school_id, register_number, academic_year, component_name
-          FROM RP.student_assessments
-          WHERE id = @result_id
-        `);
-        const existing = lookup.recordset?.[0];
-        if (!existing) {
-          errorCount++;
-          errors.push(`result_id ${resultId}: not found`);
-          continue;
-        }
-        if (String(existing.component_name || '').trim() !== 'Result') {
-          errorCount++;
-          errors.push(`result_id ${resultId}: not a Result row`);
-          continue;
-        }
+        const setParts: string[] = ['updated_at = GETDATE()'];
+        const upd = new sql.Request(transaction);
+        upd.input('result_id', sql.BigInt, resultId);
 
         if (hasResult) {
-          const updResult = new sql.Request(transaction);
-          updResult.input('result_id', sql.BigInt, resultId);
-          updResult.input('result', sql.NVarChar(500), resultValue);
-          await updResult.query(`
-            UPDATE RP.student_assessments
-            SET component_value = @result,
-                updated_at = GETDATE()
-            WHERE id = @result_id
-          `);
+          setParts.push('component_value = @result');
+          upd.input('result', sql.NVarChar(500), resultValue);
+        }
+        if (hasCategory) {
+          setParts.push('IB_category = @ib_category');
+          upd.input('ib_category', sql.NVarChar(50), categoryValue);
         }
 
-        if (hasCategory) {
-          const updCat = new sql.Request(transaction);
-          updCat.input('school_id', sql.NVarChar(100), existing.school_id);
-          updCat.input('register_number', sql.NVarChar(100), existing.register_number);
-          updCat.input('academic_year', sql.NVarChar(100), existing.academic_year);
-          updCat.input('ib_category', sql.NVarChar(50), categoryValue);
-          await updCat.query(`
-            UPDATE RP.student_assessments
-            SET IB_category = @ib_category,
-                updated_at = GETDATE()
-            WHERE school_id = @school_id
-              AND register_number = @register_number
-              AND academic_year = @academic_year
-          `);
+        const resultUpdate = await upd.query(`
+          UPDATE RP.student_assessments
+          SET ${setParts.join(', ')}
+          WHERE id = @result_id
+            AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Result'
+        `);
+
+        if (!resultUpdate.rowsAffected?.[0]) {
+          errorCount++;
+          errors.push(`result_id ${resultId}: not found or not a Result row`);
+          continue;
+        }
+
+        // Mirror category onto diploma Total_Points row when we have its id
+        if (hasCategory && row.total_points_id != null && row.total_points_id !== '') {
+          const tpId = Number(row.total_points_id);
+          if (Number.isFinite(tpId) && tpId > 0) {
+            const updTp = new sql.Request(transaction);
+            updTp.input('total_points_id', sql.BigInt, tpId);
+            updTp.input('ib_category', sql.NVarChar(50), categoryValue);
+            await updTp.query(`
+              UPDATE RP.student_assessments
+              SET IB_category = @ib_category,
+                  updated_at = GETDATE()
+              WHERE id = @total_points_id
+                AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Total_Points'
+            `);
+          }
         }
 
         successCount++;
