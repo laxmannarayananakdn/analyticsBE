@@ -764,7 +764,7 @@ async function syncManageBacSchool(
   if (eps.includes('term-grades')) {
     await run('term-grades', async () => {
       beginTermGradeSyncLog({
-        schoolId: config.school_id,
+        schoolId: config.school_id ?? undefined,
         academicYear: options?.academicYear,
         syncRunId: options?.syncRunId,
       });
