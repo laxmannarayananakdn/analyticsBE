@@ -181,6 +181,8 @@ export interface FinanceDictionaryRecord {
   suspended?: string;
   entity?: string;
   group_dimension?: string;
+  /** Stable BigInt key from FIN.DimCode (populated on insert) */
+  dim_id?: number;
   /** From file column RunBy */
   last_updated_by_raw?: string;
   /** From file column RunDTTM */
@@ -202,9 +204,38 @@ export interface FinanceTrialBalanceRecord {
   debit?: number;
   credit?: number;
   status?: string;
+  /** Dim BigInt FKs resolved at insert (FIN.DimCode / DimStatus) */
+  main_account_id?: number;
+  funding_source_id?: number;
+  region_id?: number;
+  operating_unit_id?: number;
+  department_id?: number;
+  project_id?: number;
+  activity_id?: number;
+  resource_id?: number;
+  party_id?: number;
+  fixed_assets_id?: number;
+  reference_id?: number;
+  /** 1=ACTUAL, 2=BUDGET, 0=blank */
+  status_id?: number;
   /** From file column RunBy */
   last_updated_by_raw?: string;
   /** From file column RunDTTM */
   last_updated_at_raw?: Date;
 }
+
+/** Maps TB / output dim columns to FIN.DimCode.dictionary_type */
+export const FIN_DIM_TYPE_BY_FIELD: Record<string, string> = {
+  main_account: 'ACCOUNT',
+  funding_source: 'SOURCE_OF_FUND',
+  region: 'REGION',
+  operating_unit: 'OPERATING_UNIT',
+  department: 'DEPARTMENT',
+  project: 'PROJECT',
+  activity: 'ACTIVITY',
+  resource: 'RESOURCE',
+  party: 'PARTY',
+  fixed_assets: 'FIXED_ASSETS',
+  reference: 'REFERENCE',
+};
 

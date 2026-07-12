@@ -263,6 +263,7 @@ export interface FisReportInstanceDetail extends Omit<FisReportInstanceSummary, 
 }
 
 export interface DictionaryCodeItem {
+  dim_id?: number;
   code: string;
   description: string | null;
 }
@@ -2755,9 +2756,11 @@ export class FISService {
     search?: string
   ): Promise<DictionaryCodeItem[]> {
     let query = `
-      SELECT TOP 100 code, description
-      FROM FIN.DictionaryData
+      SELECT TOP 100 dim_id, code, description
+      FROM FIN.DimCode
       WHERE dictionary_type = @dictionaryType
+        AND dim_id <> 0
+        AND is_sentinel = 0
         AND (
           suspended IS NULL
           OR LTRIM(RTRIM(suspended)) = ''
@@ -2767,7 +2770,7 @@ export class FISService {
     const params: Record<string, unknown> = { dictionaryType };
 
     if (entity) {
-      query += ` AND entity = @entity`;
+      query += ` AND (entity IS NULL OR LTRIM(RTRIM(entity)) = '' OR entity = @entity)`;
       params.entity = entity;
     }
 
@@ -2778,9 +2781,13 @@ export class FISService {
 
     query += ` ORDER BY code`;
 
-    const result = await executeQuery<{ code: string; description: string | null }>(query, params);
+    const result = await executeQuery<{ dim_id: number; code: string; description: string | null }>(query, params);
     throwOnError(result.error);
-    return (result.data || []).map((r) => ({ code: r.code, description: r.description }));
+    return (result.data || []).map((r) => ({
+      dim_id: Number(r.dim_id),
+      code: r.code,
+      description: r.description,
+    }));
   }
 
   private mapRow(r: {
