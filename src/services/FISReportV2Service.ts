@@ -394,7 +394,7 @@ export class FISReportV2Service {
       budgetUploadId: number | null;
       actualFileName: string | null;
       budgetFileName: string | null;
-      actualTbStatus: FisFileStatus;
+      actualTbStatus: FisFileStatus | null;
       budgetTbStatus: FisFileStatus | null;
     } | null = null;
 

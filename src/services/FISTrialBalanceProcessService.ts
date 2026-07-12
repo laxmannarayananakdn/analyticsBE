@@ -425,13 +425,7 @@ export async function buildColumnsFromEntityTrialBalance(
      WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
        AND tb.period IS NOT NULL
        AND LEN(tb.period) = 6
-       AND EXISTS (
-         SELECT 1
-         FROM FIN.TrialBalance act
-         WHERE UPPER(LTRIM(RTRIM(act.entity_code))) = @entity
-           AND act.period = tb.period
-           AND UPPER(act.tb_type) = 'ACTUAL'
-       )
+       AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')
        ${periodClause}
      ORDER BY tb.period`,
     params
@@ -450,8 +444,8 @@ export async function buildColumnsFromEntityTrialBalance(
 }
 
 /**
- * Actual is required for the period. Budget is optional: if no budget exists, the report
- * still runs and budget columns are left as-is (the report proc handles the missing budget).
+ * Actual or Budget (or both) must exist for the period. Either side alone is enough:
+ * missing-side columns are left as-is (the report procs tolerate empty Actual/Budget sets).
  */
 export async function assertTrialBalanceDataForPeriod(
   entityCode: string,
@@ -459,17 +453,17 @@ export async function assertTrialBalanceDataForPeriod(
 ): Promise<void> {
   const entity = entityCode.trim().toUpperCase();
   const periodNorm = period.trim();
-  const result = await executeQuery<{ actual_cnt: number }>(
-    `SELECT COUNT(*) AS actual_cnt
+  const result = await executeQuery<{ tb_cnt: number }>(
+    `SELECT COUNT(*) AS tb_cnt
      FROM FIN.TrialBalance tb
      WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
        AND tb.period = @period
-       AND UPPER(tb.tb_type) = 'ACTUAL'`,
+       AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')`,
     { entity, period: periodNorm }
   );
   if (result.error) throw new Error(result.error);
-  if (!result.data?.[0]?.actual_cnt) {
-    throw new Error(`No Actual trial balance data for ${entity} period ${periodNorm}`);
+  if (!result.data?.[0]?.tb_cnt) {
+    throw new Error(`No Actual or Budget trial balance data for ${entity} period ${periodNorm}`);
   }
 }
 

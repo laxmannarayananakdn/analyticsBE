@@ -2617,7 +2617,7 @@ export class FISService {
       budgetUploadId: number | null;
       actualFileName: string | null;
       budgetFileName: string | null;
-      actualTbStatus: FisFileStatus;
+      actualTbStatus: FisFileStatus | null;
       budgetTbStatus: FisFileStatus | null;
     } | null = null;
 
