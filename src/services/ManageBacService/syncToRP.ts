@@ -1,6 +1,8 @@
 /**
  * Sync ManageBac term_grades + term_grade_rubrics to RP.student_assessments
  * via RP.usp_load_mb_term_grades (idempotent INSERT with NOT EXISTS dedup).
+ * Only (term_id, rubric_title) pairs from admin.mb_term_grade_rubric_config are loaded.
+ * Does not modify MB schema tables.
  */
 
 import { getConnection, sql } from '../../config/database.js';
