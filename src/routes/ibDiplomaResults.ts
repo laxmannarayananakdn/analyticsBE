@@ -164,7 +164,9 @@ router.get('/', async (req: Request, res: Response) => {
  * PUT /api/ib-diploma-results
  * Body: { updates: [{ result_id, total_points_id?, result?, ib_category? }] }
  * - Updates Result.component_value / IB_category on the Result row (by id)
- * - Optionally mirrors IB_category onto the diploma Total_Points row (by id)
+ * - When IB_category is set, propagates it to ALL other RP.student_assessments
+ *   rows for the same school_id + register_number + academic_year
+ *   (keyed lookup — not a table-wide scan)
  */
 router.put('/', async (req: Request, res: Response) => {
   try {
@@ -229,6 +231,27 @@ router.put('/', async (req: Request, res: Response) => {
           }
         }
 
+        // Resolve student/year keys from the Result row (needed for category fan-out)
+        const keyReq = new sql.Request(transaction);
+        keyReq.input('result_id', sql.BigInt, resultId);
+        const keyResult = await keyReq.query<{
+          school_id: string;
+          register_number: string;
+          academic_year: string;
+        }>(`
+          SELECT school_id, register_number, academic_year
+          FROM RP.student_assessments
+          WHERE id = @result_id
+            AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Result'
+        `);
+
+        const keys = keyResult.recordset?.[0];
+        if (!keys) {
+          errorCount++;
+          errors.push(`result_id ${resultId}: not found or not a Result row`);
+          continue;
+        }
+
         const setParts: string[] = ['updated_at = GETDATE()'];
         const upd = new sql.Request(transaction);
         upd.input('result_id', sql.BigInt, resultId);
@@ -242,34 +265,34 @@ router.put('/', async (req: Request, res: Response) => {
           upd.input('ib_category', sql.NVarChar(50), categoryValue);
         }
 
-        const resultUpdate = await upd.query(`
+        await upd.query(`
           UPDATE RP.student_assessments
           SET ${setParts.join(', ')}
           WHERE id = @result_id
-            AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Result'
         `);
 
-        if (!resultUpdate.rowsAffected?.[0]) {
-          errorCount++;
-          errors.push(`result_id ${resultId}: not found or not a Result row`);
-          continue;
-        }
-
-        // Mirror category onto diploma Total_Points row when we have its id
-        if (hasCategory && row.total_points_id != null && row.total_points_id !== '') {
-          const tpId = Number(row.total_points_id);
-          if (Number.isFinite(tpId) && tpId > 0) {
-            const updTp = new sql.Request(transaction);
-            updTp.input('total_points_id', sql.BigInt, tpId);
-            updTp.input('ib_category', sql.NVarChar(50), categoryValue);
-            await updTp.query(`
-              UPDATE RP.student_assessments
-              SET IB_category = @ib_category,
-                  updated_at = GETDATE()
-              WHERE id = @total_points_id
-                AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Total_Points'
-            `);
-          }
+        // Propagate IB_category to every other component for this student + year
+        if (hasCategory) {
+          const fan = new sql.Request(transaction);
+          fan.input('school_id', sql.NVarChar(100), keys.school_id);
+          fan.input('register_number', sql.NVarChar(100), keys.register_number);
+          fan.input('academic_year', sql.NVarChar(100), keys.academic_year);
+          fan.input('ib_category', sql.NVarChar(50), categoryValue);
+          fan.input('result_id', sql.BigInt, resultId);
+          await fan.query(`
+            UPDATE RP.student_assessments
+            SET IB_category = @ib_category,
+                updated_at = GETDATE()
+            WHERE school_id = @school_id
+              AND register_number = @register_number
+              AND academic_year = @academic_year
+              AND id <> @result_id
+              AND (
+                   (IB_category IS NULL AND @ib_category IS NOT NULL)
+                OR (IB_category IS NOT NULL AND @ib_category IS NULL)
+                OR (IB_category <> @ib_category)
+              )
+          `);
         }
 
         successCount++;
