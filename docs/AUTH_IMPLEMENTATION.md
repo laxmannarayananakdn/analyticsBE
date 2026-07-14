@@ -32,7 +32,7 @@ Execute the SQL script to create all required functions:
 
 ```bash
 # Run in Azure SQL Database
-sqlcmd -S your-server.database.windows.net -d your-database -U your-user -P your-password -i "SQL scripts/admin_functions.sql"
+sqlcmd -S your-server.database.windows.net -d your-database -U your-user -P your-password -i "SQL scripts/ADMIN/admin_functions.sql"
 ```
 
 This creates:
@@ -73,7 +73,7 @@ JWT_EXPIRES_IN=8h
 Execute the RLS policies script (modify based on your actual table structure):
 
 ```bash
-sqlcmd -S your-server.database.windows.net -d your-database -U your-user -P your-password -i "SQL scripts/admin_rls_policies.sql"
+sqlcmd -S your-server.database.windows.net -d your-database -U your-user -P your-password -i "SQL scripts/ADMIN/admin_rls_policies.sql"
 ```
 
 **Note**: The RLS policies script contains templates. You need to:

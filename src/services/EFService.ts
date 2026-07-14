@@ -1263,8 +1263,13 @@ export class EFService {
       await transaction.commit();
       return totalInserted;
     } catch (error: any) {
-      await transaction.rollback();
-      throw new Error(`Failed to insert FIN dictionary records: ${error.message || error}`);
+      const originalMessage = error?.message || String(error);
+      try {
+        await transaction.rollback();
+      } catch {
+        // XACT_ABORT already aborted the transaction; rollback then throws EABORT.
+      }
+      throw new Error(`Failed to insert FIN dictionary records: ${originalMessage}`);
     }
   }
 
@@ -1310,7 +1315,8 @@ export class EFService {
 
     try {
       await transaction.begin();
-      const batchSize = 100;
+      // ~27 params/row + 7 shared; SQL Server max is 2100 → keep batches ≤ ~70.
+      const batchSize = 50;
       let totalInserted = 0;
 
       for (let i = 0; i < records.length; i += batchSize) {
@@ -1410,8 +1416,13 @@ export class EFService {
 
       return totalInserted;
     } catch (error: any) {
-      await transaction.rollback();
-      throw new Error(`Failed to insert FIN trial balance records: ${error.message || error}`);
+      const originalMessage = error?.message || String(error);
+      try {
+        await transaction.rollback();
+      } catch {
+        // XACT_ABORT already aborted the transaction; rollback then throws EABORT.
+      }
+      throw new Error(`Failed to insert FIN trial balance records: ${originalMessage}`);
     }
   }
 

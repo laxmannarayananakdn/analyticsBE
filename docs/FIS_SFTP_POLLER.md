@@ -44,7 +44,7 @@ the latest budget on or before that month (typically January). **YTD Budget** su
 that have their own budget upload (January baseline plus any monthly budget-change files); months
 without a budget file add nothing to YTD. Actual files are required every month.
 
-**Schema:** Before first TB load, run `SQL scripts/align_fin_trial_balance_schema.sql` on the database (adds `last_updated_by_raw`, `entity_code`, `period`, etc.).
+**Schema:** Before first TB load, run `SQL scripts/FIN/align_fin_trial_balance_schema.sql` on the database (adds `last_updated_by_raw`, `entity_code`, `period`, etc.).
 
 ## Environment variables
 

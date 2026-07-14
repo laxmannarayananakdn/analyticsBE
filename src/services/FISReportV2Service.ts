@@ -23,6 +23,7 @@ import type {
   FisGenerationJobProgress,
   FisV2GenerationJobProgress,
 } from './FISReportGenerationJobService.js';
+import { withFisProcessLog } from '../utils/fisProcessLog.js';
 
 export function isFisPipelineV2Enabled(): boolean {
   return String(process.env.FIS_PIPELINE_V2 ?? '').toLowerCase() === 'true';
@@ -84,6 +85,8 @@ type RunKeyContext = {
   fileStatus?: FisFileStatus;
   isTbLocked: boolean;
   runId: number | null;
+  actualUploadId: number | null;
+  budgetUploadId: number | null;
   tbSumColumns: Array<{ columnKey: number; columnLabel: string }>;
   varianceColumns: Array<{ columnKey: number; columnLabel: string }>;
 };
@@ -232,65 +235,83 @@ export class FISReportV2Service {
     const ctx = await this.prepareContext(reportTypeCode, entityCode, asOfPeriod, triggeredBy, true);
     let stageSlotId: number | null = null;
 
-    try {
-      onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Leasing stage slot' });
-      stageSlotId = await this.leaseStageSlot(runKey, triggeredBy);
-      ctx.procParams.run_key = runKey;
-      ctx.procParams.stage_slot_id = stageSlotId;
-
-      if (ctx.reportType === 'CF') {
-        onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Building CF cross-report cache' });
-        const cacheStartedAt = Date.now();
-        await this.buildCfCrossReportCache(runKey, ctx);
-        console.log(
-          `[FIS V2 timing] CF BUILD_CACHE took ${((Date.now() - cacheStartedAt) / 1000).toFixed(1)}s`
-        );
-      }
-
-      onProgress?.({ phase: 'init', current: 1, total: 1, label: 'Clearing stage' });
-      await this.executeGenerateMode(ctx.procParams, 'INIT');
-
-      await this.runSumColumnChunks(ctx, onProgress);
-      await this.runFinalizeChunks(ctx, onProgress);
-
-      onProgress?.({ phase: 'finalize', finalizeStep: 'publish', current: 1, total: 1, label: 'Publishing to live table' });
-      const publishStartedAt = Date.now();
-      await this.publishReport(runKey, stageSlotId, ctx);
-      console.log(
-        `[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`
-      );
-
-      const outputRowCount = await this.countNewLiveOutput(ctx);
-      await completeReportRun(ctx.runId, true, outputRowCount);
-
-      if (ctx.reportType === 'CF') {
-        await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
-      }
-
-      stageSlotId = null;
-
-      return {
-        reportTypeCode: ctx.reportType,
-        entityCode: ctx.entity,
+    return withFisProcessLog(
+      {
+        runId: ctx.runId,
+        entity: ctx.entity,
         asOfPeriod: ctx.period,
-        outputRowCount,
-        ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await completeReportRun(ctx.runId, false, 0, message);
-      if (stageSlotId != null) {
-        await executeProcedure('rp.usp_ReleaseFISReportOutputStageSlot_new', {
-          run_key: runKey,
-          stage_slot_id: stageSlotId,
-        });
+        reportTypeCode: ctx.reportType,
+        actualUploadId: ctx.actualUploadId,
+        budgetUploadId: ctx.budgetUploadId,
+      },
+      async () => {
+        try {
+          onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Leasing stage slot' });
+          stageSlotId = await this.leaseStageSlot(runKey, triggeredBy);
+          ctx.procParams.run_key = runKey;
+          ctx.procParams.stage_slot_id = stageSlotId;
+
+          if (ctx.reportType === 'CF') {
+            onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Building CF cross-report cache' });
+            const cacheStartedAt = Date.now();
+            await this.buildCfCrossReportCache(runKey, ctx);
+            console.log(
+              `[FIS V2 timing] CF BUILD_CACHE took ${((Date.now() - cacheStartedAt) / 1000).toFixed(1)}s`
+            );
+          }
+
+          onProgress?.({ phase: 'init', current: 1, total: 1, label: 'Clearing stage' });
+          await this.executeGenerateMode(ctx.procParams, 'INIT');
+
+          await this.runSumColumnChunks(ctx, onProgress);
+          await this.runFinalizeChunks(ctx, onProgress);
+
+          onProgress?.({
+            phase: 'finalize',
+            finalizeStep: 'publish',
+            current: 1,
+            total: 1,
+            label: 'Publishing to live table',
+          });
+          const publishStartedAt = Date.now();
+          await this.publishReport(runKey, stageSlotId, ctx);
+          console.log(
+            `[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`
+          );
+
+          const outputRowCount = await this.countNewLiveOutput(ctx);
+          await completeReportRun(ctx.runId, true, outputRowCount);
+
+          if (ctx.reportType === 'CF') {
+            await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
+          }
+
+          stageSlotId = null;
+
+          return {
+            reportTypeCode: ctx.reportType,
+            entityCode: ctx.entity,
+            asOfPeriod: ctx.period,
+            outputRowCount,
+            ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await completeReportRun(ctx.runId, false, 0, message);
+          if (stageSlotId != null) {
+            await executeProcedure('rp.usp_ReleaseFISReportOutputStageSlot_new', {
+              run_key: runKey,
+              stage_slot_id: stageSlotId,
+            });
+          }
+          if (ctx.reportType === 'CF') {
+            await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
+          }
+          if (err instanceof FISServiceError) throw err;
+          throw new FISServiceError(message);
+        }
       }
-      if (ctx.reportType === 'CF') {
-        await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
-      }
-      if (err instanceof FISServiceError) throw err;
-      throw new FISServiceError(message);
-    }
+    );
   }
 
   private async publishReport(runKey: string, stageSlotId: number, ctx: RunKeyContext): Promise<void> {
@@ -387,6 +408,8 @@ export class FISReportV2Service {
     let fileStatus: FisFileStatus | undefined;
     let isTbLocked = false;
     let runId: number | null = null;
+    let actualUploadId: number | null = null;
+    let budgetUploadId: number | null = null;
 
     let runLoggingContext: {
       fileStatus: FisFileStatus;
@@ -416,6 +439,11 @@ export class FISReportV2Service {
       fileStatus = runLoggingContext.fileStatus;
     }
 
+    if (runLoggingContext) {
+      actualUploadId = runLoggingContext.actualUploadId;
+      budgetUploadId = runLoggingContext.budgetUploadId;
+    }
+
     if (startRun && runLoggingContext) {
       runId = await startReportRun({
         reportTypeCode: reportType,
@@ -441,6 +469,8 @@ export class FISReportV2Service {
     if (!fileStatus) {
       const resolved = await resolveRunLoggingContext(entity, period);
       fileStatus = resolved.fileStatus;
+      if (actualUploadId == null) actualUploadId = resolved.actualUploadId;
+      if (budgetUploadId == null) budgetUploadId = resolved.budgetUploadId;
     }
     if (fileStatus) procParams.file_status = fileStatus;
 
@@ -456,6 +486,8 @@ export class FISReportV2Service {
       fileStatus,
       isTbLocked,
       runId,
+      actualUploadId,
+      budgetUploadId,
       tbSumColumns,
       varianceColumns,
     };
