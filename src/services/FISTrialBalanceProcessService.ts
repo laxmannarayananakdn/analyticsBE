@@ -4,6 +4,7 @@
 
 import { executeQuery } from '../config/database.js';
 import { isFisPhase4Enabled } from './FISRunTrackingService.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
 
 export interface TbEntityPeriod {
   entityCode: string;
@@ -209,6 +210,9 @@ export async function resolveBudgetSourcePeriod(
 ): Promise<string | null> {
   const entity = entityCode.trim().toUpperCase();
   const periodNorm = period.trim();
+  if (isFisPreviousYearPeriod(periodNorm)) {
+    return null;
+  }
   const fiscalYear = periodNorm.slice(0, 4);
   const result = await executeQuery<{ source_period: string | null }>(
     `SELECT MAX(tb.period) AS source_period
@@ -217,6 +221,7 @@ export async function resolveBudgetSourcePeriod(
        AND UPPER(tb.tb_type) = 'BUDGET'
        AND tb.period IS NOT NULL
        AND LEN(tb.period) = 6
+       AND RIGHT(tb.period, 2) BETWEEN '01' AND '12'
        AND LEFT(tb.period, 4) = @fiscalYear
        AND tb.period <= @period`,
     { entity, period: periodNorm, fiscalYear }
@@ -319,10 +324,18 @@ function parsePeriod(period: string): { fiscalYear: number; fiscalMonth: number;
   }
   const fiscalYear = parseInt(periodNorm.slice(0, 4), 10);
   const fiscalMonth = parseInt(periodNorm.slice(4, 6), 10);
-  if (!Number.isFinite(fiscalYear) || !Number.isFinite(fiscalMonth) || fiscalMonth < 1 || fiscalMonth > 12) {
+  if (
+    !Number.isFinite(fiscalYear) ||
+    !Number.isFinite(fiscalMonth) ||
+    fiscalMonth < 0 ||
+    fiscalMonth > 12
+  ) {
     throw new Error(`Invalid period (expected YYYYMM): ${period}`);
   }
-  const monthName = `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
+  const monthName =
+    fiscalMonth === 0
+      ? `Previous Year ${fiscalYear}`
+      : `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
   return { fiscalYear, fiscalMonth, monthName };
 }
 
@@ -375,6 +388,10 @@ export function compareFisReportColumns(a: FisColumnSortInput, b: FisColumnSortI
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export function buildMonthColumnSet(period: string, startOrder = 1): FisMonthColumnDef[] {
   const { fiscalYear, fiscalMonth, monthName } = parsePeriod(period);
+  // Previous Year (…00) is Actual-only and belongs to the BS PREVIOUS_YEAR column — not PL month sets.
+  if (fiscalMonth === 0) {
+    return [];
+  }
   let order = startOrder;
 
   const col = (
@@ -446,6 +463,7 @@ export async function buildColumnsFromEntityTrialBalance(
 /**
  * Actual or Budget (or both) must exist for the period. Either side alone is enough:
  * missing-side columns are left as-is (the report procs tolerate empty Actual/Budget sets).
+ * Period …00 (Previous Year) requires Actual only — no Budget.
  */
 export async function assertTrialBalanceDataForPeriod(
   entityCode: string,
@@ -453,17 +471,28 @@ export async function assertTrialBalanceDataForPeriod(
 ): Promise<void> {
   const entity = entityCode.trim().toUpperCase();
   const periodNorm = period.trim();
+  const previousYear = isFisPreviousYearPeriod(periodNorm);
   const result = await executeQuery<{ tb_cnt: number }>(
-    `SELECT COUNT(*) AS tb_cnt
-     FROM FIN.TrialBalance tb
-     WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
-       AND tb.period = @period
-       AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')`,
+    previousYear
+      ? `SELECT COUNT(*) AS tb_cnt
+         FROM FIN.TrialBalance tb
+         WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+           AND tb.period = @period
+           AND UPPER(tb.tb_type) = 'ACTUAL'`
+      : `SELECT COUNT(*) AS tb_cnt
+         FROM FIN.TrialBalance tb
+         WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+           AND tb.period = @period
+           AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')`,
     { entity, period: periodNorm }
   );
   if (result.error) throw new Error(result.error);
   if (!result.data?.[0]?.tb_cnt) {
-    throw new Error(`No Actual or Budget trial balance data for ${entity} period ${periodNorm}`);
+    throw new Error(
+      previousYear
+        ? `No Actual trial balance data for Previous Year period ${entity} ${periodNorm}`
+        : `No Actual or Budget trial balance data for ${entity} period ${periodNorm}`
+    );
   }
 }
 

@@ -5,6 +5,7 @@
 import { executeQuery } from '../config/database.js';
 import { FinanceTrialBalanceRecord } from '../types/ef.js';
 import { getLatestTrialBalanceUploads } from './FISTrialBalanceProcessService.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
 
 export type FisFileStatus = 'Preliminary' | 'Final';
 
@@ -191,8 +192,41 @@ export async function resolveFileStatusForPeriod(
 ): Promise<ResolvedTbFileStatus> {
   const entity = entityCode.trim().toUpperCase();
   const periodNorm = period.trim();
+  const previousYear = isFisPreviousYearPeriod(periodNorm);
 
   const uploads = await getLatestTrialBalanceUploads(entity, periodNorm);
+  if (previousYear) {
+    if (!uploads.actual) {
+      throw new Error(
+        `No Actual trial balance for Previous Year period ${entity} ${periodNorm}. ` +
+          'Budget is not used for period month 00.'
+      );
+    }
+    const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+    if (!actualStatus) {
+      throw new Error(
+        `Cannot resolve Actual TB file status for ${entity} ${periodNorm}. ` +
+          'Upload the Actual file with homogeneous Preliminary or Final status on every row.'
+      );
+    }
+    const lockResult = await executeQuery<{ entity_code: string }>(
+      `SELECT entity_code FROM admin.fis_entity_period_lock
+       WHERE entity_code = @entity AND period = @period`,
+      { entity, period: periodNorm }
+    );
+    if (lockResult.error) throw new Error(lockResult.error);
+    return {
+      fileStatus: actualStatus,
+      actualUploadId: uploads.actual.uploadId,
+      budgetUploadId: null,
+      actualFileName: uploads.actual.fileName,
+      budgetFileName: null,
+      actualTbStatus: actualStatus,
+      budgetTbStatus: null,
+      isTbLocked: Boolean(lockResult.data?.length),
+    };
+  }
+
   if (!uploads.actual && !uploads.budget) {
     throw new Error(`No Actual or Budget trial balance for ${entity} period ${periodNorm}`);
   }

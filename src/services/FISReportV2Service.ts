@@ -9,7 +9,7 @@ import { executeQuery, executeProcedure, getConnection } from '../config/databas
 import {
   FISService,
   FISServiceError,
-  sortReportTypesForGeneration,
+  assertReportTypesAllowedForPeriod,
 } from './FISService.js';
 import {
   completeReportRun,
@@ -24,6 +24,12 @@ import type {
   FisV2GenerationJobProgress,
 } from './FISReportGenerationJobService.js';
 import { withFisProcessLog } from '../utils/fisProcessLog.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
+import {
+  restoreBsPreviousYearAfterMonthlyRun,
+  syncBsPreviousYearColumn,
+} from './FISPreviousYearSyncService.js';
+import { assertTrialBalanceDataForPeriod } from './FISTrialBalanceProcessService.js';
 
 export function isFisPipelineV2Enabled(): boolean {
   return String(process.env.FIS_PIPELINE_V2 ?? '').toLowerCase() === 'true';
@@ -127,10 +133,7 @@ export class FISReportV2Service {
     fileStatus?: FisFileStatus;
     isTbLocked?: boolean;
   }> {
-    const ordered = sortReportTypesForGeneration(reportTypeCodes);
-    if (!ordered.length) {
-      throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
-    }
+    const ordered = assertReportTypesAllowedForPeriod(reportTypeCodes, asOfPeriod);
 
     const phase1 = ordered.filter((c) => c !== 'CF');
     const phase2 = ordered.filter((c) => c === 'CF');
@@ -279,6 +282,24 @@ export class FISReportV2Service {
             `[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`
           );
 
+          if (ctx.reportType === 'BS') {
+            if (isFisPreviousYearPeriod(ctx.period)) {
+              await syncBsPreviousYearColumn({
+                entityCode: ctx.entity,
+                period: ctx.period,
+                fileStatus: ctx.fileStatus,
+                outputTable: 'new',
+              });
+            } else {
+              await restoreBsPreviousYearAfterMonthlyRun({
+                entityCode: ctx.entity,
+                asOfPeriod: ctx.period,
+                fileStatus: ctx.fileStatus,
+                outputTable: 'new',
+              });
+            }
+          }
+
           const outputRowCount = await this.countNewLiveOutput(ctx);
           await completeReportRun(ctx.runId, true, outputRowCount);
 
@@ -402,6 +423,21 @@ export class FISReportV2Service {
     const allowed = new Set(['NF', 'PL', 'BS', 'CF']);
     if (!allowed.has(reportType)) {
       throw new FISServiceError(`Unsupported report type: ${reportType}`, 400);
+    }
+    if (isFisPreviousYearPeriod(period) && reportType !== 'BS') {
+      throw new FISServiceError(
+        `Period ${period} (Previous Year) can only generate BS, not ${reportType}.`,
+        400
+      );
+    }
+
+    try {
+      await assertTrialBalanceDataForPeriod(entity, period);
+    } catch (err) {
+      throw new FISServiceError(
+        err instanceof Error ? err.message : 'No trial balance data for scope',
+        400
+      );
     }
 
     const phase4 = isFisPhase4Enabled();
