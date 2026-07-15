@@ -425,6 +425,27 @@ export async function completeReportRun(
     }
   );
   if (result.error) throw new Error(result.error);
+
+  // Materialize entity-keyed Superset filter tables from live V2 output.
+  // Soft-fail so a missing/outdated proc never blocks report completion.
+  if (success) {
+    const refresh = await executeQuery(
+      `DECLARE @entity_code NVARCHAR(10);
+       SELECT @entity_code = entity_code
+       FROM admin.fis_report_runs
+       WHERE run_id = @runId;
+
+       IF @entity_code IS NOT NULL
+           EXEC rp.usp_RefreshFISSupersetFilters @entity_code = @entity_code;`,
+      { runId }
+    );
+    if (refresh.error) {
+      console.error(
+        `⚠️ FIS filter refresh failed after run_id=${runId}:`,
+        refresh.error
+      );
+    }
+  }
 }
 
 export interface FisRunCalendarRow {
