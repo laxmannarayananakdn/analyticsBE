@@ -351,6 +351,12 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
                 `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
                 `for school=${item.schoolId} academic_year_rp=${usedAcademicYearRp || configuredRpAy || '(all)'}`
             );
+            console.log(
+              `   [MB->RP] reported_subject updated=${loadResult.reported_subject_rows_updated ?? 0}; ` +
+                `IB totals: candidates=${loadResult.ib_total_candidates ?? 0}, ` +
+                `Total_Points affected=${loadResult.total_points_rows_affected ?? 0}, ` +
+                `Result inserted=${loadResult.result_rows_inserted ?? 0}`
+            );
             triggerRefresh({
               school_id: item.schoolId,
               academic_year: ayForRefresh,

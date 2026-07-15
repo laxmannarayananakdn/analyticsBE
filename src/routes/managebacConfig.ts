@@ -31,6 +31,36 @@ const maskConfig = (config: any): any => {
 // Term Grade Rubric Config (admin.mb_term_grade_rubric_config)
 // =============================================
 
+/** Normalize AY label for dash/space-insensitive match against MB.academic_years.name */
+const AY_NORM_SQL = (expr: string) =>
+  `LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(${expr})), NCHAR(160), N''), N' ', N''), N'-', N''), NCHAR(8211), N''), NCHAR(8212), N''))`;
+
+/**
+ * Resolve free-text / hyphenated academic_year to exact MB.academic_years.name for a school.
+ * Returns null when no match.
+ */
+async function resolveMbAcademicYearName(
+  schoolId: number,
+  academicYear: string
+): Promise<string | null> {
+  const hint = String(academicYear || '').trim();
+  if (!hint) return null;
+
+  const result = await executeQuery<{ name: string }>(
+    `SELECT TOP 1 ay.name
+     FROM MB.academic_years ay
+     WHERE ay.school_id = @school_id
+       AND (
+         ay.name = @academic_year
+         OR ${AY_NORM_SQL('ay.name')} = ${AY_NORM_SQL('@academic_year')}
+       )
+     ORDER BY CASE WHEN ay.name = @academic_year THEN 0 ELSE 1 END, ay.id DESC`,
+    { school_id: schoolId, academic_year: hint }
+  );
+  if (result.error) throw new Error(result.error);
+  return result.data?.[0]?.name || null;
+}
+
 /**
  * GET /api/managebac-config/term-grade-rubric-config/schools
  * Get MB schools (from managebac_school_configs where school_id is set)
@@ -48,6 +78,46 @@ router.get('/term-grade-rubric-config/schools', async (req: Request, res: Respon
     res.json({ success: true, data: result.data || [] });
   } catch (error: any) {
     console.error('Error fetching MB schools:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/managebac-config/term-grade-rubric-config/academic-years?school_id=
+ * Distinct academic year labels from MB.academic_years (exact ManageBac names).
+ */
+router.get('/term-grade-rubric-config/academic-years', async (req: Request, res: Response) => {
+  try {
+    const schoolIdRaw = req.query.school_id;
+    if (schoolIdRaw == null || schoolIdRaw === '') {
+      return res.status(400).json({ error: 'school_id is required' });
+    }
+    const school_id = parseInt(String(schoolIdRaw), 10);
+    if (Number.isNaN(school_id)) {
+      return res.status(400).json({ error: 'Invalid school_id' });
+    }
+
+    const result = await executeQuery<{ academic_year: string; academic_year_id: number }>(
+      `SELECT ay.name AS academic_year, ay.id AS academic_year_id
+       FROM MB.academic_years ay
+       WHERE ay.school_id = @school_id
+         AND ay.name IS NOT NULL
+         AND LTRIM(RTRIM(ay.name)) <> ''
+       ORDER BY ay.id DESC`,
+      { school_id }
+    );
+    if (result.error) return res.status(500).json({ error: result.error });
+
+    // Dedupe by exact name (keep highest id via ORDER BY above + Map)
+    const seen = new Map<string, { academic_year: string; academic_year_id: number }>();
+    for (const row of result.data || []) {
+      if (!seen.has(row.academic_year)) {
+        seen.set(row.academic_year, row);
+      }
+    }
+    res.json({ success: true, data: [...seen.values()] });
+  } catch (error: any) {
+    console.error('Error fetching MB academic years:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -89,7 +159,9 @@ router.get('/term-grade-rubric-config', async (req: Request, res: Response) => {
 
 /**
  * POST /api/managebac-config/term-grade-rubric-config
- * Bulk upsert config rows
+ * Bulk upsert config rows.
+ * academic_year is resolved to the exact MB.academic_years.name (dash-insensitive)
+ * so hyphen/en-dash typos cannot break MB→RP sync.
  */
 router.post('/term-grade-rubric-config', async (req: Request, res: Response) => {
   try {
@@ -102,6 +174,8 @@ router.post('/term-grade-rubric-config', async (req: Request, res: Response) => 
     await transaction.begin();
     let successCount = 0;
     const errors: string[] = [];
+    const resolvedAyCache = new Map<string, string | null>();
+
     for (const c of configs) {
       const { id, school_id, academic_year, academic_year_rp, grade_number, rubric_title, term_id, display_order } = c;
       if (!school_id || academic_year == null || grade_number == null || !rubric_title || !term_id) {
@@ -109,12 +183,26 @@ router.post('/term-grade-rubric-config', async (req: Request, res: Response) => 
         continue;
       }
       try {
+        const schoolIdNum = parseInt(String(school_id), 10);
+        const ayKey = `${schoolIdNum}::${String(academic_year).trim()}`;
+        let resolvedAy = resolvedAyCache.get(ayKey);
+        if (resolvedAy === undefined) {
+          resolvedAy = await resolveMbAcademicYearName(schoolIdNum, String(academic_year));
+          resolvedAyCache.set(ayKey, resolvedAy);
+        }
+        if (!resolvedAy) {
+          errors.push(
+            `academic_year "${academic_year}" not found in MB.academic_years for school_id=${school_id}. Pick a year from the ManageBac list.`
+          );
+          continue;
+        }
+
         const request = transaction.request();
-        request.input('school_id', sql.BigInt, school_id);
-        request.input('academic_year', sql.NVarChar(200), String(academic_year));
+        request.input('school_id', sql.BigInt, schoolIdNum);
+        request.input('academic_year', sql.NVarChar(200), resolvedAy);
         request.input('academic_year_rp', sql.NVarChar(20), academic_year_rp != null && String(academic_year_rp).trim() !== '' ? String(academic_year_rp).trim() : null);
         request.input('grade_number', sql.Int, parseInt(String(grade_number), 10));
-        request.input('rubric_title', sql.NVarChar(500), rubric_title);
+        request.input('rubric_title', sql.NVarChar(500), String(rubric_title).trim());
         request.input('term_id', sql.BigInt, term_id);
         request.input('display_order', sql.Int, display_order ?? 0);
         if (id) {
