@@ -709,6 +709,7 @@ router.post('/sync-to-rp', async (req: Request, res: Response) => {
     );
     res.json({
       success: true,
+      rowsDeleted: result.rp_rows_deleted ?? 0,
       rowsInserted: result.rows_affected,
       rubricRowsInserted: result.rubric_rows_inserted,
       classGradeRowsInserted: result.class_grade_rows_inserted,
@@ -717,7 +718,7 @@ router.post('/sync-to-rp', async (req: Request, res: Response) => {
       totalPointsRowsAffected: result.total_points_rows_affected ?? 0,
       resultRowsInserted: result.result_rows_inserted ?? 0,
       message:
-        `Inserted ${result.rows_affected} row(s) into RP.student_assessments; ` +
+        `Deleted ${result.rp_rows_deleted ?? 0}, inserted ${result.rows_affected} row(s) into RP.student_assessments; ` +
         `reported_subject updated=${result.reported_subject_rows_updated ?? 0}; ` +
         `Total_Points affected=${result.total_points_rows_affected ?? 0}, ` +
         `Result inserted=${result.result_rows_inserted ?? 0}. ` +

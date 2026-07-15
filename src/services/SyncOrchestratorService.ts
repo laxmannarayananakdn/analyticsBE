@@ -347,7 +347,8 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
               }
             );
             console.log(
-              `   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
+              `   [MB->RP] Deleted ${loadResult.rp_rows_deleted ?? 0} existing row(s); ` +
+                `inserted ${loadResult.rows_affected} row(s) ` +
                 `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
                 `for school=${item.schoolId} academic_year_rp=${usedAcademicYearRp || configuredRpAy || '(all)'}`
             );
