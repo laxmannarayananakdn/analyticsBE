@@ -15,7 +15,8 @@
     "sync:node": "tsx scripts/sync-all-schools.ts --node-ids",
     "sync:all": "tsx scripts/sync-all-schools.ts --all",
     "fis-sftp:poll": "tsx scripts/fis-sftp-poll.ts",
-    "fis:repair-tb-sync": "tsx scripts/fis-repair-tb-sync.ts"
+    "fis:repair-tb-sync": "tsx scripts/fis-repair-tb-sync.ts",
+    "warm-cache": "tsx scripts/warmSupersetCache.ts"
   },
   "dependencies": {
     "@superset-ui/embedded-sdk": "^0.3.0",

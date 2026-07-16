@@ -212,6 +212,12 @@ export class FISReportV2Service {
       await this.finalizeBulkPublishIndexes();
     }
 
+    // Refresh Superset chart cache for this entity so dashboards hit warm data.
+    // Soft-fail inside warmSupersetCacheAfterFisV2 — never blocks V2 success.
+    emit(undefined, undefined, { publishPhase: 'superset_cache_warm' });
+    const { warmSupersetCacheAfterFisV2 } = await import('./SupersetCacheWarmService.js');
+    await warmSupersetCacheAfterFisV2(entityCode);
+
     return {
       entityCode: entityCode.trim().toUpperCase(),
       asOfPeriod: asOfPeriod.trim(),
