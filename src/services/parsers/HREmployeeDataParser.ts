@@ -50,17 +50,10 @@ function toDbColumn(header: string): string | null {
     separation: 'separation',
     staff_category: 'Staff_Category',
     contract_type: 'Contract_type',
-    key: 'Key'
+    key: 'Key',
+    node_id: 'Node_ID'
   };
   return map[n] || null;
-}
-
-/** Derive Country from Country_City: first segment before "/" or use as-is */
-function deriveCountry(countryCity: string | null): string | null {
-  if (!countryCity || String(countryCity).trim() === '') return null;
-  const s = String(countryCity).trim();
-  const idx = s.indexOf('/');
-  return idx >= 0 ? s.substring(0, idx).trim() : s;
 }
 
 export class HREmployeeDataParser {
@@ -165,16 +158,13 @@ export class HREmployeeDataParser {
           return isNaN(n) ? null : n;
         };
 
-        // "Country / City" maps to Country_City; derive Country from it (e.g. "Kenya" from "Kenya/Nairobi")
-        const countryCity = str('Country_City') ?? str('Country');
-        const country = deriveCountry(countryCity) ?? str('Country');
-
+        // Map file columns as-is; no country derivation / row shaping
         const record: HREmployeeData = {
           Year: num('Year') ?? undefined,
           Quarter: str('Quarter') ?? undefined,
           Month: str('Month') ?? undefined,
-          Country: country ?? undefined,
-          Country_City: countryCity ?? undefined,
+          Country: str('Country') ?? undefined,
+          Country_City: str('Country_City') ?? undefined,
           Entity: str('Entity') ?? undefined,
           Emp_ID: str('Emp_ID') ?? undefined,
           Position_Category: str('Position_Category') ?? undefined,
@@ -200,10 +190,11 @@ export class HREmployeeDataParser {
           separation: str('separation') ?? undefined,
           Staff_Category: str('Staff_Category') ?? undefined,
           Contract_type: str('Contract_type') ?? undefined,
-          Key: str('Key') ?? undefined
+          Key: str('Key') ?? undefined,
+          Node_ID: str('Node_ID') ?? undefined
         };
 
-        if (record.Emp_ID || record.Entity || record.Country) {
+        if (record.Emp_ID || record.Entity || record.Node_ID || record.Country_City) {
           results.push(record);
         } else {
           skippedRows++;

@@ -331,7 +331,7 @@ export class EFService {
       await transaction.begin();
 
       // Batch size limited to 100 to stay within SQL Server's 2100 parameter limit
-      // (100 records * ~17 parameters = ~1700 parameters)
+      // (100 records * ~16 data parameters + shared params ≈ 1600+)
       const batchSize = 100;
       let totalInserted = 0;
 
@@ -356,7 +356,11 @@ export class EFService {
             @feeClassification${baseIndex},
             @faSubType${baseIndex},
             @feeCode${baseIndex},
-            @communityStatus${baseIndex}
+            @communityStatus${baseIndex},
+            @yearOfJoining${baseIndex},
+            @joiningCurriculum${baseIndex},
+            @talentIdProg${baseIndex},
+            @rebalancing${baseIndex}
           )`;
         }).join(',');
 
@@ -377,7 +381,11 @@ export class EFService {
             [Fee_Classification],
             [FA_Sub_Type],
             [Fee_Code],
-            [Community_Status]
+            [Community_Status],
+            [Year_of_Joining_Academy],
+            [Joining_Curriculum],
+            [Talent_ID_Prog],
+            [Rebalancing]
           ) VALUES ${values};
         `;
 
@@ -401,6 +409,10 @@ export class EFService {
           request.input(`faSubType${baseIndex}`, sql.NVarChar(100), record.FA_Sub_Type ?? null);
           request.input(`feeCode${baseIndex}`, sql.NVarChar(100), record.Fee_Code ?? null);
           request.input(`communityStatus${baseIndex}`, sql.NVarChar(100), record.Community_Status ?? null);
+          request.input(`yearOfJoining${baseIndex}`, sql.NVarChar(100), record.Year_of_Joining_Academy ?? null);
+          request.input(`joiningCurriculum${baseIndex}`, sql.NVarChar(255), record.Joining_Curriculum ?? null);
+          request.input(`talentIdProg${baseIndex}`, sql.NVarChar(100), record.Talent_ID_Prog ?? null);
+          request.input(`rebalancing${baseIndex}`, sql.NVarChar(100), record.Rebalancing ?? null);
         });
 
         await request.query(batchQuery);
@@ -718,7 +730,8 @@ export class EFService {
   }
 
   /**
-   * Insert HR Employee Data records using bulk insert
+   * Insert HR Employee Data via TDS bulk load (request.bulk).
+   * Appends rows for this upload_id; does not wipe prior uploads.
    */
   async insertHREmployeeData(
     uploadId: number,
@@ -731,151 +744,101 @@ export class EFService {
     }
 
     const connection = await getConnection();
-    const transaction = new sql.Transaction(connection);
+    const uploadedAt = new Date();
+    // Chunk to bound memory while still using native bulk protocol
+    const bulkChunkSize = 10000;
+    let totalInserted = 0;
 
     try {
-      await transaction.begin();
+      for (let offset = 0; offset < records.length; offset += bulkChunkSize) {
+        const chunk = records.slice(offset, offset + bulkChunkSize);
+        const table = new sql.Table('EF.HR_EmployeeData');
+        table.create = false;
+        table.columns.add('upload_id', sql.BigInt, { nullable: false });
+        table.columns.add('file_name', sql.NVarChar(500), { nullable: false });
+        table.columns.add('uploaded_by', sql.NVarChar(255), { nullable: false });
+        table.columns.add('uploaded_at', sql.DateTimeOffset(7), { nullable: false });
+        table.columns.add('Year', sql.Int, { nullable: true });
+        table.columns.add('Quarter', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Month', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Country', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Country_City', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Entity', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Emp_ID', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Position_Category', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Attrition', sql.NVarChar(50), { nullable: true });
+        table.columns.add('FTE', sql.Decimal(10, 2), { nullable: true });
+        table.columns.add('Date_of_Birth', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Date_of_Hire', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Sect', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Staff_Nationality', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Gender', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Teaching_Level', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Teaching_Subject_Category', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Qualification', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Date_of_Separation', sql.NVarChar(100), { nullable: true });
+        table.columns.add('reason_for_leaving', sql.NVarChar(500), { nullable: true });
+        table.columns.add('Aging', sql.Int, { nullable: true });
+        table.columns.add('Age_Grouping', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Longevity', sql.Int, { nullable: true });
+        table.columns.add('Longevity_Grouping', sql.NVarChar(50), { nullable: true });
+        table.columns.add('Reason_type', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Reporting_Year', sql.NVarChar(50), { nullable: true });
+        table.columns.add('recruitment', sql.NVarChar(200), { nullable: true });
+        table.columns.add('separation', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Staff_Category', sql.NVarChar(100), { nullable: true });
+        table.columns.add('Contract_type', sql.NVarChar(200), { nullable: true });
+        table.columns.add('Key', sql.NVarChar(500), { nullable: true });
+        table.columns.add('Node_ID', sql.VarChar(50), { nullable: true });
 
-      // Use bulk insert with batching for better performance
-      // Batch size limited to 50 to stay within SQL Server's 2100 parameter limit
-      // (50 records * 29 parameters = 1450 parameters)
-      const batchSize = 50;
-      let totalInserted = 0;
+        for (const record of chunk) {
+          table.rows.add(
+            uploadId,
+            fileName,
+            uploadedBy,
+            uploadedAt,
+            record.Year ?? null,
+            record.Quarter ?? null,
+            record.Month ?? null,
+            record.Country ?? null,
+            record.Country_City ?? null,
+            record.Entity ?? null,
+            record.Emp_ID ?? null,
+            record.Position_Category ?? null,
+            record.Attrition ?? null,
+            record.FTE ?? null,
+            record.Date_of_Birth ?? null,
+            record.Date_of_Hire ?? null,
+            record.Sect ?? null,
+            record.Staff_Nationality ?? null,
+            record.Gender ?? null,
+            record.Teaching_Level ?? null,
+            record.Teaching_Subject_Category ?? null,
+            record.Qualification ?? null,
+            record.Date_of_Separation ?? null,
+            record.reason_for_leaving ?? null,
+            record.Aging ?? null,
+            record.Age_Grouping ?? null,
+            record.Longevity ?? null,
+            record.Longevity_Grouping ?? null,
+            record.Reason_type ?? null,
+            record.Reporting_Year ?? null,
+            record.recruitment ?? null,
+            record.separation ?? null,
+            record.Staff_Category ?? null,
+            record.Contract_type ?? null,
+            record.Key ?? null,
+            record.Node_ID ?? null
+          );
+        }
 
-      for (let i = 0; i < records.length; i += batchSize) {
-        const batch = records.slice(i, i + batchSize);
-
-        // Build values for batch insert
-        const values = batch.map((record, index) => {
-          const baseIndex = i + index;
-          return `(
-            @uploadId,
-            @fileName,
-            @uploadedBy,
-            SYSDATETIMEOFFSET(),
-            @year${baseIndex},
-            @quarter${baseIndex},
-            @month${baseIndex},
-            @country${baseIndex},
-            @countryCity${baseIndex},
-            @entity${baseIndex},
-            @empId${baseIndex},
-            @positionCategory${baseIndex},
-            @attrition${baseIndex},
-            @fte${baseIndex},
-            @dateOfBirth${baseIndex},
-            @dateOfHire${baseIndex},
-            @sect${baseIndex},
-            @staffNationality${baseIndex},
-            @gender${baseIndex},
-            @teachingLevel${baseIndex},
-            @teachingSubjectCategory${baseIndex},
-            @qualification${baseIndex},
-            @dateOfSeparation${baseIndex},
-            @reasonForLeaving${baseIndex},
-            @aging${baseIndex},
-            @ageGrouping${baseIndex},
-            @longevity${baseIndex},
-            @longevityGrouping${baseIndex},
-            @reasonType${baseIndex},
-            @reportingYear${baseIndex},
-            @recruitment${baseIndex},
-            @separation${baseIndex},
-            @staffCategory${baseIndex},
-            @contractType${baseIndex},
-            @key${baseIndex}
-          )`;
-        }).join(',');
-
-        const batchQuery = `
-          INSERT INTO EF.HR_EmployeeData (
-            upload_id,
-            file_name,
-            uploaded_by,
-            uploaded_at,
-            [Year],
-            [Quarter],
-            [Month],
-            [Country],
-            [Country_City],
-            [Entity],
-            [Emp_ID],
-            [Position_Category],
-            [Attrition],
-            [FTE],
-            [Date_of_Birth],
-            [Date_of_Hire],
-            [Sect],
-            [Staff_Nationality],
-            [Gender],
-            [Teaching_Level],
-            [Teaching_Subject_Category],
-            [Qualification],
-            [Date_of_Separation],
-            [reason_for_leaving],
-            [Aging],
-            [Age_Grouping],
-            [Longevity],
-            [Longevity_Grouping],
-            [Reason_type],
-            [Reporting_Year],
-            [recruitment],
-            [separation],
-            [Staff_Category],
-            [Contract_type],
-            [Key]
-          ) VALUES ${values};
-        `;
-
-        const request = transaction.request();
-        request.input('uploadId', sql.BigInt, uploadId);
-        request.input('fileName', sql.NVarChar, fileName);
-        request.input('uploadedBy', sql.NVarChar, uploadedBy);
-
-        // Add parameters for each record in the batch
-        batch.forEach((record, index) => {
-          const baseIndex = i + index;
-          request.input(`year${baseIndex}`, sql.Int, record.Year ?? null);
-          request.input(`quarter${baseIndex}`, sql.NVarChar(50), record.Quarter ?? null);
-          request.input(`month${baseIndex}`, sql.NVarChar(50), record.Month ?? null);
-          request.input(`country${baseIndex}`, sql.NVarChar(100), record.Country ?? null);
-          request.input(`countryCity${baseIndex}`, sql.NVarChar(200), record.Country_City ?? null);
-          request.input(`entity${baseIndex}`, sql.NVarChar(100), record.Entity ?? null);
-          request.input(`empId${baseIndex}`, sql.NVarChar(100), record.Emp_ID ?? null);
-          request.input(`positionCategory${baseIndex}`, sql.NVarChar(200), record.Position_Category ?? null);
-          request.input(`attrition${baseIndex}`, sql.NVarChar(50), record.Attrition ?? null);
-          request.input(`fte${baseIndex}`, sql.Decimal(10, 2), record.FTE ?? null);
-          request.input(`dateOfBirth${baseIndex}`, sql.NVarChar(50), record.Date_of_Birth ?? null);
-          request.input(`dateOfHire${baseIndex}`, sql.NVarChar(100), record.Date_of_Hire ?? null);
-          request.input(`sect${baseIndex}`, sql.NVarChar(100), record.Sect ?? null);
-          request.input(`staffNationality${baseIndex}`, sql.NVarChar(100), record.Staff_Nationality ?? null);
-          request.input(`gender${baseIndex}`, sql.NVarChar(50), record.Gender ?? null);
-          request.input(`teachingLevel${baseIndex}`, sql.NVarChar(200), record.Teaching_Level ?? null);
-          request.input(`teachingSubjectCategory${baseIndex}`, sql.NVarChar(200), record.Teaching_Subject_Category ?? null);
-          request.input(`qualification${baseIndex}`, sql.NVarChar(200), record.Qualification ?? null);
-          request.input(`dateOfSeparation${baseIndex}`, sql.NVarChar(100), record.Date_of_Separation ?? null);
-          request.input(`reasonForLeaving${baseIndex}`, sql.NVarChar(500), record.reason_for_leaving ?? null);
-          request.input(`aging${baseIndex}`, sql.Int, record.Aging ?? null);
-          request.input(`ageGrouping${baseIndex}`, sql.NVarChar(50), record.Age_Grouping ?? null);
-          request.input(`longevity${baseIndex}`, sql.Int, record.Longevity ?? null);
-          request.input(`longevityGrouping${baseIndex}`, sql.NVarChar(50), record.Longevity_Grouping ?? null);
-          request.input(`reasonType${baseIndex}`, sql.NVarChar(200), record.Reason_type ?? null);
-          request.input(`reportingYear${baseIndex}`, sql.NVarChar(50), record.Reporting_Year ?? null);
-          request.input(`recruitment${baseIndex}`, sql.NVarChar(200), record.recruitment ?? null);
-          request.input(`separation${baseIndex}`, sql.NVarChar(200), record.separation ?? null);
-          request.input(`staffCategory${baseIndex}`, sql.NVarChar(100), record.Staff_Category ?? null);
-          request.input(`contractType${baseIndex}`, sql.NVarChar(200), record.Contract_type ?? null);
-          request.input(`key${baseIndex}`, sql.NVarChar(500), record.Key ?? null);
-        });
-
-        await request.query(batchQuery);
-        totalInserted += batch.length;
+        const request = connection.request();
+        const result = await request.bulk(table, { tableLock: true });
+        totalInserted += result.rowsAffected ?? chunk.length;
       }
 
-      await transaction.commit();
       return totalInserted;
     } catch (error: any) {
-      await transaction.rollback();
       throw new Error(`Failed to insert HR Employee Data: ${error.message || error}`);
     }
   }
@@ -1476,12 +1439,12 @@ export class EFService {
             country,[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]
           )
           SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-            [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
+            [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]
           FROM EF.HR_EmployeeData WHERE upload_id = @uploadId
         `);
         rowCount = insertResult.rowsAffected?.[0] ?? 0;
@@ -1526,12 +1489,14 @@ export class EFService {
         const insertResult = await req.query(`
           INSERT INTO RP.msnav_financial_aid (
             school_id,[S_No],[UCI],[Academic_Year],[Class],[Class_Code],[Student_No],[Student_Name],
-            [Percentage],[Fee_Classification],[FA_Sub_Type],[Fee_Code],[Community_Status]
+            [Percentage],[Fee_Classification],[FA_Sub_Type],[Fee_Code],[Community_Status],
+            [Year_of_Joining_Academy],[Joining_Curriculum],[Talent_ID_Prog],[Rebalancing]
           )
           SELECT
             CAST(u.school_id AS NVARCHAR(50)),
             m.[S_No],m.[UCI],m.[Academic_Year],m.[Class],m.[Class_Code],m.[Student_No],m.[Student_Name],
-            m.[Percentage],m.[Fee_Classification],m.[FA_Sub_Type],m.[Fee_Code],m.[Community_Status]
+            m.[Percentage],m.[Fee_Classification],m.[FA_Sub_Type],m.[Fee_Code],m.[Community_Status],
+            m.[Year_of_Joining_Academy],m.[Joining_Curriculum],m.[Talent_ID_Prog],m.[Rebalancing]
           FROM EF.MSNAV_FinancialAid m
           INNER JOIN EF.Uploads u ON u.id = m.upload_id
           WHERE m.upload_id = @uploadId
@@ -1791,7 +1756,8 @@ export class EFService {
     } else if (fileType.type_code === 'MSNAV_FINANCIAL_AID') {
       const whereClause = buildWhereClause([
         'S_No', 'UCI', 'Academic_Year', 'Class', 'Class_Code', 'Student_No', 'Student_Name',
-        'Percentage', 'Fee_Classification', 'FA_Sub_Type', 'Fee_Code', 'Community_Status'
+        'Percentage', 'Fee_Classification', 'FA_Sub_Type', 'Fee_Code', 'Community_Status',
+        'Year_of_Joining_Academy', 'Joining_Curriculum', 'Talent_ID_Prog', 'Rebalancing'
       ]);
       dataQuery = `
         SELECT 
@@ -1811,7 +1777,11 @@ export class EFService {
           [Fee_Classification],
           [FA_Sub_Type],
           [Fee_Code],
-          [Community_Status]
+          [Community_Status],
+          [Year_of_Joining_Academy],
+          [Joining_Curriculum],
+          [Talent_ID_Prog],
+          [Rebalancing]
         FROM EF.MSNAV_FinancialAid
         ${whereClause}
         ORDER BY id
@@ -1934,14 +1904,14 @@ export class EFService {
         'Staff_Nationality', 'Gender', 'Teaching_Level', 'Teaching_Subject_Category',
         'Qualification', 'Date_of_Separation', 'reason_for_leaving', 'Aging', 'Age_Grouping',
         'Longevity', 'Longevity_Grouping', 'Reason_type', 'Reporting_Year', 'recruitment',
-        'separation', 'Staff_Category', 'Contract_type', 'Key'
+        'separation', 'Staff_Category', 'Contract_type', 'Key', 'Node_ID'
       ]);
       dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
           [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
           [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
           [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
-          [recruitment],[separation],[Staff_Category],[Contract_type],[Key]
+          [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]
         FROM EF.HR_EmployeeData
         ${whereClause}
         ORDER BY id

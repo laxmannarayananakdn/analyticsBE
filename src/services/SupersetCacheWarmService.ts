@@ -4,18 +4,31 @@
  */
 
 import pg from 'pg';
-import { getFisEntityByCode } from './FisEntityService.js';
+import { getAllFisEntities, getFisEntityByCode } from './FisEntityService.js';
 
 const SUPERSET_URL = (
   process.env.SUPERSET_URL || 'https://superset-edtech-app.azurewebsites.net'
 ).replace(/\/$/, '');
 const SUPERSET_USERNAME = process.env.SUPERSET_USERNAME || 'admin';
 const SUPERSET_PASSWORD = process.env.SUPERSET_PASSWORD || '';
-const DEFAULT_DASHBOARD_ID = parseInt(
+const DEFAULT_ENTITY_DASHBOARD_ID = parseInt(
   process.env.SUPERSET_FIS_DASHBOARD_ID || '33',
   10
 );
+const DEFAULT_HO_DASHBOARD_ID = parseInt(
+  process.env.SUPERSET_FIS_HO_DASHBOARD_ID || '44',
+  10
+);
 const DEFAULT_DELAY_MS = parseInt(process.env.SUPERSET_WARM_DELAY_MS || '500', 10);
+const SUPERSET_AZURE_SQL_DATABASE_ID = parseInt(
+  process.env.SUPERSET_AZURE_SQL_DATABASE_ID || '1',
+  10
+);
+
+/** Dashboard warmed for the entity processed in the current FIS V2 run. */
+const FIS_ENTITY_DASHBOARD_ID = DEFAULT_ENTITY_DASHBOARD_ID;
+/** HO-only dashboard warmed for every active entity after each FIS V2 run. */
+const FIS_HO_ALL_ENTITIES_DASHBOARD_ID = DEFAULT_HO_DASHBOARD_ID;
 
 export type SupersetCacheWarmResult = {
   dashboardId: number;
@@ -181,6 +194,55 @@ async function resolveEntityDescription(entityCode: string): Promise<string> {
   return entityCode;
 }
 
+const ENTITY_SQL = `SELECT e.entity_code
+FROM admin.fis_entity e
+INNER JOIN admin.fis_country_entity fce ON fce.entity_code = e.entity_code
+WHERE e.status = 'active'
+ORDER BY e.entity_code`;
+
+async function fetchAllActiveEntityCodes(session?: AuthSession): Promise<string[]> {
+  try {
+    const entities = await getAllFisEntities(true);
+    if (entities.length) {
+      return entities.map((e) => e.entityCode);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(
+      `[Superset cache] Azure SQL entity list failed (${message.slice(0, 100)}); trying SQL Lab`
+    );
+  }
+
+  if (!session) {
+    session = await login();
+  }
+
+  const res = await fetch(`${SUPERSET_URL}/api/v1/sqllab/execute/`, {
+    method: 'POST',
+    headers: authHeaders(session),
+    body: JSON.stringify({
+      database_id: SUPERSET_AZURE_SQL_DATABASE_ID,
+      schema: 'admin',
+      sql: ENTITY_SQL,
+      runAsync: false,
+    }),
+  });
+
+  const body = (await res.json()) as {
+    data?: Array<{ entity_code: string }>;
+    error?: string;
+    message?: string;
+  };
+
+  if (!res.ok || body.error || !body.data?.length) {
+    throw new Error(
+      `Failed to load active entities (${res.status}): ${body.error || body.message || 'no rows'}`
+    );
+  }
+
+  return body.data.map((r) => r.entity_code);
+}
+
 async function warmChart(
   session: AuthSession,
   dashboardId: number,
@@ -226,9 +288,10 @@ export async function warmSupersetCacheForEntities(params: {
   entityCodes: string[];
   dashboardId?: number;
   delayMs?: number;
+  session?: AuthSession;
 }): Promise<SupersetCacheWarmResult> {
   const started = Date.now();
-  const dashboardId = params.dashboardId ?? DEFAULT_DASHBOARD_ID;
+  const dashboardId = params.dashboardId ?? FIS_ENTITY_DASHBOARD_ID;
   const delayMs =
     typeof params.delayMs === 'number' && params.delayMs >= 0
       ? params.delayMs
@@ -270,7 +333,7 @@ export async function warmSupersetCacheForEntities(params: {
     };
   }
 
-  const session = await login();
+  const session = params.session ?? (await login());
   const charts = await fetchDashboardCharts(dashboardId);
   let ok = 0;
   let failed = 0;
@@ -314,15 +377,58 @@ export async function warmSupersetCacheForEntities(params: {
 }
 
 /**
- * Fire-and-forget / soft-fail wrapper for FIS V2 completion.
+ * After FIS V2 publish:
+ *  - Dashboard 33 (entity): warm charts for the entity that just ran
+ *  - Dashboard 44 (HO USD): warm charts for every active entity
+ * Soft-fail — never throws to the caller.
  */
 export async function warmSupersetCacheAfterFisV2(entityCode: string): Promise<void> {
+  if (!isSupersetCacheWarmEnabled()) {
+    console.log('[Superset cache] Skipped after FIS V2: FIS_WARM_SUPERSET_CACHE=false');
+    return;
+  }
+
+  const normalized = entityCode.trim().toUpperCase();
+  if (!normalized) {
+    console.log('[Superset cache] Skipped after FIS V2: no entity code');
+    return;
+  }
+
   try {
-    const result = await warmSupersetCacheForEntities({
-      entityCodes: [entityCode],
+    const session = await login();
+
+    const entityDash = await warmSupersetCacheForEntities({
+      entityCodes: [normalized],
+      dashboardId: FIS_ENTITY_DASHBOARD_ID,
+      session,
     });
-    if (result.skipped) {
-      console.log(`[Superset cache] Skipped after FIS V2: ${result.skipReason}`);
+    if (entityDash.skipped) {
+      console.log(`[Superset cache] Entity dashboard skipped: ${entityDash.skipReason}`);
+    }
+
+    let allEntityCodes: string[];
+    try {
+      allEntityCodes = await fetchAllActiveEntityCodes(session);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[Superset cache] HO dashboard warm skipped — could not load entities: ${message}`
+      );
+      return;
+    }
+
+    console.log(
+      `[Superset cache] HO dashboard ${FIS_HO_ALL_ENTITIES_DASHBOARD_ID}: ` +
+        `warming ${allEntityCodes.length} entit(y/ies)...`
+    );
+
+    const hoDash = await warmSupersetCacheForEntities({
+      entityCodes: allEntityCodes,
+      dashboardId: FIS_HO_ALL_ENTITIES_DASHBOARD_ID,
+      session,
+    });
+    if (hoDash.skipped) {
+      console.log(`[Superset cache] HO dashboard skipped: ${hoDash.skipReason}`);
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
