@@ -85,15 +85,20 @@ export function parseTrialBalanceFileName(fileName) {
     const tbKind = tbSuffix === 'budget' ? 'BUDGET' : 'ACTUAL';
     const fiscalYear = parseInt(periodYyyymm.slice(0, 4), 10);
     const fiscalMonth = parseInt(periodYyyymm.slice(4, 6), 10);
+    // Month 00 = Previous Year closing (Actual only). Months 01–12 = normal periods.
     if (!Number.isFinite(fiscalYear) ||
         !Number.isFinite(fiscalMonth) ||
-        fiscalMonth < 1 ||
+        fiscalMonth < 0 ||
         fiscalMonth > 12) {
         return null;
     }
-    const monthName = MONTH_NAMES[fiscalMonth - 1];
-    /** One FIS column per calendar month (Actual + Budget files share the same column). */
-    const columnLabel = `${monthName} ${fiscalYear}`;
+    // Previous Year TB is Actual-only — no Budget file for period …00.
+    if (fiscalMonth === 0 && tbKind === 'BUDGET') {
+        return null;
+    }
+    const columnLabel = fiscalMonth === 0
+        ? `Previous Year ${fiscalYear}`
+        : `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
     return {
         sourceFileName: base,
         periodYyyymm,
@@ -116,7 +121,8 @@ export function validateTrialBalanceFileIdentity(fileName, fileTypeCode) {
     const parsed = parseTrialBalanceFileName(base);
     if (!parsed) {
         throw new Error(`Trial balance filename "${base}" is invalid. ` +
-            'Expected format: TB_YYYYMM_ENTITY_Actual|Budget.xlsx');
+            'Expected format: TB_YYYYMM_ENTITY_Actual|Budget.xlsx ' +
+            '(month 00 = Previous Year closing, Actual only).');
     }
     const upper = fileTypeCode.trim().toUpperCase();
     const expectedCode = parsed.tbKind === 'BUDGET' ? 'FIN_TB_BUDGET' : 'FIN_TB_ACTUAL';
@@ -141,11 +147,13 @@ export function parseTrialBalancePeriod(entityCode, periodYyyymm) {
     const fiscalMonth = parseInt(period.slice(4, 6), 10);
     if (!Number.isFinite(fiscalYear) ||
         !Number.isFinite(fiscalMonth) ||
-        fiscalMonth < 1 ||
+        fiscalMonth < 0 ||
         fiscalMonth > 12) {
         return null;
     }
-    const monthName = MONTH_NAMES[fiscalMonth - 1];
+    const columnLabel = fiscalMonth === 0
+        ? `Previous Year ${fiscalYear}`
+        : `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
     return {
         sourceFileName: `TB_${period}_${entity}_Actual.xlsx`,
         periodYyyymm: period,
@@ -153,7 +161,7 @@ export function parseTrialBalancePeriod(entityCode, periodYyyymm) {
         tbKind: 'ACTUAL',
         fiscalYear,
         fiscalMonth,
-        columnLabel: `${monthName} ${fiscalYear}`,
+        columnLabel,
     };
 }
 //# sourceMappingURL=financeFileNameResolver.js.map

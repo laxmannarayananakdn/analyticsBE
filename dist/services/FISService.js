@@ -4,8 +4,24 @@
 import { executeQuery, executeProcedure, getConnection, sql } from '../config/database.js';
 import { assertTrialBalanceDataForPeriod, buildMonthColumnSet, compareFisReportColumns, } from './FISTrialBalanceProcessService.js';
 import { completeReportRun, isFisPhase4Enabled, resolveFileStatusForPeriod, resolveRunLoggingContext, startReportRun, } from './FISRunTrackingService.js';
+import { withFisProcessLog } from '../utils/fisProcessLog.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
+import { restoreBsPreviousYearAfterMonthlyRun, syncBsPreviousYearColumn, } from './FISPreviousYearSyncService.js';
 /** Fixed processing order when multiple report types are selected. */
 export const FIS_REPORT_GENERATION_ORDER = ['NF', 'BS', 'PL', 'CF'];
+export function assertReportTypesAllowedForPeriod(reportTypeCodes, asOfPeriod) {
+    const ordered = sortReportTypesForGeneration(reportTypeCodes);
+    if (!ordered.length) {
+        throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
+    }
+    if (isFisPreviousYearPeriod(asOfPeriod)) {
+        const disallowed = ordered.filter((rt) => rt !== 'BS');
+        if (disallowed.length) {
+            throw new FISServiceError(`Period ${asOfPeriod.trim()} (Previous Year) can only generate BS. Remove: ${disallowed.join(', ')}.`, 400);
+        }
+    }
+    return ordered;
+}
 export function sortReportTypesForGeneration(reportTypeCodes) {
     const wanted = new Set(reportTypeCodes.map((c) => c.trim().toUpperCase()).filter(Boolean));
     return FIS_REPORT_GENERATION_ORDER.filter((code) => wanted.has(code));
@@ -1418,35 +1434,59 @@ export class FISService {
     /** Run-key generation — server-side batched SP calls (fast path). */
     async generateReportByRunKey(reportTypeCode, entityCode, asOfPeriod, triggeredBy, onProgress) {
         const ctx = await this.prepareRunKeyGeneration(reportTypeCode, entityCode, asOfPeriod, triggeredBy, true);
-        try {
-            onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
-            await this.executeGenerateMode(ctx.procParams, 'INIT');
-            await this.runSumColumnChunks(ctx, onProgress);
-            await this.runFinalizeChunks(ctx, onProgress);
-            const outputRowCount = await this.countRunKeyOutput(ctx);
-            await completeReportRun(ctx.runId, true, outputRowCount);
-            return {
-                reportTypeCode: ctx.reportType,
-                entityCode: ctx.entity,
-                asOfPeriod: ctx.period,
-                outputRowCount,
-                ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
-            };
-        }
-        catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            await completeReportRun(ctx.runId, false, 0, message);
-            if (err instanceof FISServiceError)
-                throw err;
-            throw new FISServiceError(message);
-        }
+        return withFisProcessLog({
+            runId: ctx.runId,
+            entity: ctx.entity,
+            asOfPeriod: ctx.period,
+            reportTypeCode: ctx.reportType,
+            actualUploadId: ctx.actualUploadId,
+            budgetUploadId: ctx.budgetUploadId,
+        }, async () => {
+            try {
+                onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Clearing prior output' });
+                await this.executeGenerateMode(ctx.procParams, 'INIT');
+                await this.runSumColumnChunks(ctx, onProgress);
+                await this.runFinalizeChunks(ctx, onProgress);
+                if (ctx.reportType === 'BS') {
+                    if (isFisPreviousYearPeriod(ctx.period)) {
+                        await syncBsPreviousYearColumn({
+                            entityCode: ctx.entity,
+                            period: ctx.period,
+                            fileStatus: ctx.fileStatus,
+                            outputTable: 'live',
+                        });
+                    }
+                    else {
+                        await restoreBsPreviousYearAfterMonthlyRun({
+                            entityCode: ctx.entity,
+                            asOfPeriod: ctx.period,
+                            fileStatus: ctx.fileStatus,
+                            outputTable: 'live',
+                        });
+                    }
+                }
+                const outputRowCount = await this.countRunKeyOutput(ctx);
+                await completeReportRun(ctx.runId, true, outputRowCount);
+                return {
+                    reportTypeCode: ctx.reportType,
+                    entityCode: ctx.entity,
+                    asOfPeriod: ctx.period,
+                    outputRowCount,
+                    ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+                };
+            }
+            catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                await completeReportRun(ctx.runId, false, 0, message);
+                if (err instanceof FISServiceError)
+                    throw err;
+                throw new FISServiceError(message);
+            }
+        });
     }
     /** Generate multiple run-key reports in NF → BS → PL → CF order. */
     async generateReportsByRunKey(reportTypeCodes, entityCode, asOfPeriod, triggeredBy, onProgress) {
-        const ordered = sortReportTypesForGeneration(reportTypeCodes);
-        if (!ordered.length) {
-            throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
-        }
+        const ordered = assertReportTypesAllowedForPeriod(reportTypeCodes, asOfPeriod);
         const reports = [];
         let fileStatus;
         let isTbLocked = false;
@@ -1486,19 +1526,32 @@ export class FISService {
             throw new FISServiceError('asOfPeriod must be YYYYMM', 400);
         }
         const reportMonth = parseInt(period.slice(4, 6), 10);
-        const result = await executeQuery(`SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
-       FROM admin.fis_report_column_defs d
-       INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
-       WHERE rt.report_type_code = @reportType
-         AND rt.is_active = 1
-         AND d.is_active = 1
-         AND d.column_kind IN ('TB_SUM', 'APPROVED_BUDGET', 'POINT_IN_TIME')
-         AND NOT (
-           d.column_kind = 'POINT_IN_TIME'
-           AND d.period_scope = 'MONTH'
-           AND d.reference_month > @reportMonth
-         )
-       ORDER BY d.display_order`, { reportType, reportMonth });
+        const previousYear = isFisPreviousYearPeriod(period);
+        const result = await executeQuery(previousYear
+            ? `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
+           FROM admin.fis_report_column_defs d
+           INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
+           WHERE rt.report_type_code = @reportType
+             AND rt.is_active = 1
+             AND d.is_active = 1
+             AND d.column_kind IN ('TB_SUM', 'APPROVED_BUDGET', 'POINT_IN_TIME')
+             AND (d.column_code = N'PREVIOUS_YEAR' OR d.period_scope = N'PY')
+           ORDER BY d.display_order`
+            : `SELECT d.column_def_id AS column_key, d.column_code, d.column_label, d.display_order
+           FROM admin.fis_report_column_defs d
+           INNER JOIN admin.fis_report_types rt ON d.report_type_id = rt.report_type_id
+           WHERE rt.report_type_code = @reportType
+             AND rt.is_active = 1
+             AND d.is_active = 1
+             AND d.column_kind IN ('TB_SUM', 'APPROVED_BUDGET', 'POINT_IN_TIME')
+             AND ISNULL(d.column_code, N'') <> N'PREVIOUS_YEAR'
+             AND ISNULL(d.period_scope, N'') <> N'PY'
+             AND NOT (
+               d.column_kind = 'POINT_IN_TIME'
+               AND d.period_scope = 'MONTH'
+               AND d.reference_month > @reportMonth
+             )
+           ORDER BY d.display_order`, previousYear ? { reportType } : { reportType, reportMonth });
         throwOnError(result.error);
         return (result.data || []).map((r) => ({
             columnKey: r.column_key,
@@ -1737,6 +1790,9 @@ export class FISService {
         if (!allowed.has(reportType)) {
             throw new FISServiceError(`Unsupported report type: ${reportType}`, 400);
         }
+        if (isFisPreviousYearPeriod(period) && reportType !== 'BS') {
+            throw new FISServiceError(`Period ${period} (Previous Year) can only generate BS, not ${reportType}.`, 400);
+        }
         const typeCheck = await executeQuery(`SELECT report_type_id FROM admin.fis_report_types
        WHERE report_type_code = @reportType AND is_active = 1`, { reportType });
         throwOnError(typeCheck.error);
@@ -1753,6 +1809,8 @@ export class FISService {
         let fileStatus;
         let isTbLocked = false;
         let runId = null;
+        let actualUploadId = null;
+        let budgetUploadId = null;
         let runLoggingContext = null;
         if (phase4) {
             const resolved = await resolveFileStatusForPeriod(entity, period);
@@ -1771,6 +1829,10 @@ export class FISService {
         else if (startRun) {
             runLoggingContext = await resolveRunLoggingContext(entity, period);
             fileStatus = runLoggingContext.fileStatus;
+        }
+        if (runLoggingContext) {
+            actualUploadId = runLoggingContext.actualUploadId;
+            budgetUploadId = runLoggingContext.budgetUploadId;
         }
         if (startRun && runLoggingContext) {
             runId = await startReportRun({
@@ -1795,6 +1857,10 @@ export class FISService {
         if (!fileStatus) {
             const resolved = await resolveRunLoggingContext(entity, period);
             fileStatus = resolved.fileStatus;
+            if (actualUploadId == null)
+                actualUploadId = resolved.actualUploadId;
+            if (budgetUploadId == null)
+                budgetUploadId = resolved.budgetUploadId;
         }
         if (fileStatus) {
             procParams.file_status = fileStatus;
@@ -1812,6 +1878,8 @@ export class FISService {
             fileStatus,
             isTbLocked,
             runId,
+            actualUploadId,
+            budgetUploadId,
             sumRows,
             tbSumColumns,
             varianceColumns,
@@ -1856,9 +1924,11 @@ export class FISService {
     // ---------------------------------------------------------------------------
     async getDictionaryCodes(dictionaryType, entity, search) {
         let query = `
-      SELECT TOP 100 code, description
-      FROM FIN.DictionaryData
+      SELECT TOP 100 dim_id, code, description
+      FROM FIN.DimCode
       WHERE dictionary_type = @dictionaryType
+        AND dim_id <> 0
+        AND is_sentinel = 0
         AND (
           suspended IS NULL
           OR LTRIM(RTRIM(suspended)) = ''
@@ -1867,7 +1937,7 @@ export class FISService {
     `;
         const params = { dictionaryType };
         if (entity) {
-            query += ` AND entity = @entity`;
+            query += ` AND (entity IS NULL OR LTRIM(RTRIM(entity)) = '' OR entity = @entity)`;
             params.entity = entity;
         }
         if (search && search.trim()) {
@@ -1877,7 +1947,11 @@ export class FISService {
         query += ` ORDER BY code`;
         const result = await executeQuery(query, params);
         throwOnError(result.error);
-        return (result.data || []).map((r) => ({ code: r.code, description: r.description }));
+        return (result.data || []).map((r) => ({
+            dim_id: Number(r.dim_id),
+            code: r.code,
+            description: r.description,
+        }));
     }
     mapRow(r) {
         return {

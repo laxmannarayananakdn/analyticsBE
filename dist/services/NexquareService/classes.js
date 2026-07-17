@@ -24,7 +24,7 @@ export async function getClasses(config, schoolId, onLog) {
         const limit = 100;
         let hasMore = true;
         while (hasMore) {
-            const endpoint = `${NEXQUARE_ENDPOINTS.CLASSES}/${targetSchoolId}/classes/`;
+            const endpoint = `${NEXQUARE_ENDPOINTS.CLASSES}/${targetSchoolId}/classes`;
             const queryParams = new URLSearchParams();
             queryParams.append('offset', offset.toString());
             queryParams.append('limit', limit.toString());

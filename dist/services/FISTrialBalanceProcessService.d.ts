@@ -35,6 +35,7 @@ export interface FisReportOutputRow {
     displayOrder: number;
     amount: number | null;
     formatType: string | null;
+    status?: string | null;
 }
 export declare function listTrialBalanceEntityPeriods(): Promise<TbEntityPeriod[]>;
 /** Latest budget period on or before target (same fiscal year); null if none. */
@@ -72,8 +73,9 @@ export declare function compareFisReportColumns(a: FisColumnSortInput, b: FisCol
 export declare function buildMonthColumnSet(period: string, startOrder?: number): FisMonthColumnDef[];
 export declare function buildColumnsFromEntityTrialBalance(entityCode: string, period?: string): Promise<FisMonthColumnDef[]>;
 /**
- * Actual is required for the period. Budget is optional: if no budget exists, the report
- * still runs and budget columns are left as-is (the report proc handles the missing budget).
+ * Actual or Budget (or both) must exist for the period. Either side alone is enough:
+ * missing-side columns are left as-is (the report procs tolerate empty Actual/Budget sets).
+ * Period …00 (Previous Year) requires Actual only — no Budget.
  */
 export declare function assertTrialBalanceDataForPeriod(entityCode: string, period: string): Promise<void>;
 export declare function getReportOutputPreview(instanceId: number, limit?: number): Promise<{

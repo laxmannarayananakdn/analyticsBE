@@ -40,6 +40,7 @@ import syncRoutes from './routes/sync.js';
 import fisRoutes from './routes/fis.js';
 import fisEntitiesRoutes from './routes/fisEntities.js';
 import fisCurrencyExchangeRoutes from './routes/fisCurrencyExchange.js';
+import ibDiplomaResultsRoutes from './routes/ibDiplomaResults.js';
 import { startSyncScheduler, stopSyncScheduler } from './scheduler/SyncScheduler.js';
 import { startFisSftpScheduler, stopFisSftpScheduler } from './scheduler/FisSftpScheduler.js';
 dotenv.config();
@@ -108,6 +109,7 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/fis', fisRoutes);
 app.use('/api/fis-entities', fisEntitiesRoutes);
 app.use('/api/fis-currency-exchange', fisCurrencyExchangeRoutes);
+app.use('/api/ib-diploma-results', ibDiplomaResultsRoutes);
 // Root endpoint
 app.get('/', (req, res) => {
     res.json({

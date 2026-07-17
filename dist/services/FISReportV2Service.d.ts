@@ -32,13 +32,6 @@ export declare class FISReportV2Service {
         fileStatus?: FisFileStatus;
         isTbLocked?: boolean;
     }>;
-    /**
-     * Enrich dimension descriptions (region/funding source/operating unit/department/project)
-     * and coalesce NULL data-row amounts to 0 on the V2 live table for the whole entity-period.
-     * Runs after all reports (including CF) are published. Failures here are logged but do not
-     * fail the batch, since the report data itself is already committed.
-     */
-    private enrichDescriptionsForBatch;
     private publishReport;
     private updateLiveTableStats;
     private prepareBulkPublishIndexes;

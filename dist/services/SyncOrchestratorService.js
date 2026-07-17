@@ -9,6 +9,8 @@ import { ManageBacService, manageBacService } from './ManageBacService/index.js'
 import { nexquareService } from './NexquareService/index.js';
 import { triggerRefresh, buildStudentAssessmentsByAcademicYear } from './RefreshService.js';
 import { databaseService } from './DatabaseService.js';
+import { beginTermGradeSyncLog, logTermGradeSync, } from '../utils/termGradeSyncLog.js';
+import { verifyIbSchoolAvgVsGlobalAfterMbSync, logIbSchoolAvgVerification, } from './IbSchoolAvgVerificationService.js';
 // year-groups must run before students: students.year_group_id FK references MB.year_groups(id)
 // memberships must run before term-grades: term grades use MB.class_memberships to find classes
 const MB_ENDPOINTS_ALL = ['school', 'academic-years', 'grades', 'subjects', 'teachers', 'year-groups', 'students', 'classes', 'memberships', 'term-grades'];
@@ -201,6 +203,7 @@ export async function runSync(params) {
                     abortSignal: params.abortSignal,
                     mbService,
                     onEndpointChange: setCurrentEndpoint,
+                    syncRunId: runId,
                 });
                 // When loadRpSchema and term-grades ran: sync MB -> RP.student_assessments, then trigger RP refresh
                 const mbAyRaw = params.academicYear || new Date().getFullYear().toString();
@@ -231,9 +234,22 @@ export async function runSync(params) {
                             academic_year_rp: configuredRpAy,
                             academic_year_mb: configuredMbAy,
                         });
-                        console.log(`   [MB->RP] Inserted ${loadResult.rows_affected} row(s) ` +
+                        console.log(`   [MB->RP] Deleted ${loadResult.rp_rows_deleted ?? 0} existing row(s); ` +
+                            `inserted ${loadResult.rows_affected} row(s) ` +
                             `(rubrics=${loadResult.rubric_rows_inserted}, class_grade=${loadResult.class_grade_rows_inserted}) ` +
                             `for school=${item.schoolId} academic_year_rp=${usedAcademicYearRp || configuredRpAy || '(all)'}`);
+                        console.log(`   [MB->RP] reported_subject updated=${loadResult.reported_subject_rows_updated ?? 0}; ` +
+                            `IB totals: candidates=${loadResult.ib_total_candidates ?? 0}, ` +
+                            `Total_Points affected=${loadResult.total_points_rows_affected ?? 0}, ` +
+                            `Result inserted=${loadResult.result_rows_inserted ?? 0}`);
+                        const verifyAy = usedAcademicYearRp || configuredRpAy || ayForRefresh;
+                        const verifyResult = await verifyIbSchoolAvgVsGlobalAfterMbSync({
+                            schoolId: item.schoolId,
+                            academicYearRp: verifyAy,
+                            totalPointsRowsAffected: loadResult.total_points_rows_affected,
+                            ibTotalCandidates: loadResult.ib_total_candidates,
+                        });
+                        logIbSchoolAvgVerification(item.schoolId, verifyAy, verifyResult);
                         triggerRefresh({
                             school_id: item.schoolId,
                             academic_year: ayForRefresh,
@@ -574,11 +590,20 @@ async function syncManageBacSchool(config, options) {
     }
     throwIfAborted(signal);
     if (eps.includes('term-grades')) {
-        await run('term-grades', () => svc.syncAllTermGrades(apiKey, baseUrl, {
-            dp_grade_13_only: true,
-            academic_year: options?.academicYear,
-            ...(config.school_id != null ? { school_id: config.school_id } : {}),
-        }));
+        await run('term-grades', async () => {
+            beginTermGradeSyncLog({
+                schoolId: config.school_id ?? undefined,
+                academicYear: options?.academicYear,
+                syncRunId: options?.syncRunId,
+            });
+            logTermGradeSync(`📊 [sync-runs] Starting ManageBac term-grades for school_id=${config.school_id ?? 'unknown'} ` +
+                `academic_year=${options?.academicYear ?? '(none)'} — per-student API rubric detail follows for each class×term`);
+            await svc.syncAllTermGrades(apiKey, baseUrl, {
+                dp_grade_13_only: true,
+                academic_year: options?.academicYear,
+                ...(config.school_id != null ? { school_id: config.school_id } : {}),
+            });
+        });
     }
 }
 /**

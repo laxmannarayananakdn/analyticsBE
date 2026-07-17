@@ -4,6 +4,17 @@
  */
 import { MANAGEBAC_ENDPOINTS } from '../../config/managebac.js';
 import { databaseService } from '../DatabaseService.js';
+/**
+ * MB student detail payloads expose `archived` but often omit `is_active`.
+ * Using `!is_active` when is_active is undefined incorrectly marks everyone archived.
+ */
+export function resolveMbStudentArchived(s) {
+    if (typeof s?.archived === 'boolean')
+        return s.archived;
+    if (typeof s?.is_active === 'boolean')
+        return !s.is_active;
+    return false;
+}
 function mapManageBacStudentToDb(s) {
     const id = typeof s.id === 'string' ? parseInt(s.id, 10) : s.id;
     const pick = (snake, camel) => s[snake] ?? s[camel] ?? null;
@@ -25,7 +36,7 @@ function mapManageBacStudentToDb(s) {
         email: (pick('email', 'email') || `mb-student-${id}@placeholder.local`),
         gender: pick('gender', 'gender'),
         birthday: pick('birthday', 'birthday'),
-        archived: s.archived ?? false,
+        archived: resolveMbStudentArchived(s),
         program: pick('program', 'program'),
         program_code: pick('program_code', 'programCode'),
         class_grade: pick('class_grade', 'classGrade'),
@@ -345,7 +356,7 @@ async function fetchStudentDetailsBatch(apiKey, studentIds, placement) {
                 email: studentData.email || null,
                 gender: studentData.gender || null,
                 birthday: studentData.date_of_birth || studentData.birthday || null,
-                archived: !studentData.is_active,
+                archived: resolveMbStudentArchived(studentData),
                 program: studentData.program || null,
                 program_code: studentData.program_code || null,
                 class_grade: studentData.grade || null,

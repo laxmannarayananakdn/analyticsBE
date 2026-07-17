@@ -24,8 +24,140 @@ const maskConfig = (config) => {
     };
 };
 // =============================================
+// IB Global Mean Config (admin.ib_global_avg_total_points_by_year)
+// =============================================
+const IB_GLOBAL_YEAR_MIN = 2000;
+const IB_GLOBAL_YEAR_MAX = 2100;
+const IB_GLOBAL_POINTS_MIN = 0;
+const IB_GLOBAL_POINTS_MAX = 45;
+function validateIbGlobalMeanRow(row) {
+    const year = Number(row.year);
+    if (!Number.isInteger(year) || year < IB_GLOBAL_YEAR_MIN || year > IB_GLOBAL_YEAR_MAX) {
+        return `year must be an integer between ${IB_GLOBAL_YEAR_MIN} and ${IB_GLOBAL_YEAR_MAX}`;
+    }
+    const avg = Number(row.avg_total_points);
+    if (!Number.isFinite(avg) || avg < IB_GLOBAL_POINTS_MIN || avg > IB_GLOBAL_POINTS_MAX) {
+        return `avg_total_points must be between ${IB_GLOBAL_POINTS_MIN} and ${IB_GLOBAL_POINTS_MAX}`;
+    }
+    return null;
+}
+/**
+ * GET /api/managebac-config/ib-global-means
+ */
+router.get('/ib-global-means', async (_req, res) => {
+    try {
+        const result = await executeQuery(`SELECT [Year] AS year, avg_total_points
+       FROM admin.ib_global_avg_total_points_by_year
+       ORDER BY [Year] DESC`);
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, data: result.data || [] });
+    }
+    catch (error) {
+        console.error('Error fetching IB global means:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * POST /api/managebac-config/ib-global-means
+ * Body: { rows: [{ year, avg_total_points }] }
+ */
+router.post('/ib-global-means', async (req, res) => {
+    try {
+        const { rows } = req.body;
+        if (!Array.isArray(rows) || rows.length === 0) {
+            return res.status(400).json({ error: 'rows array is required' });
+        }
+        const connection = await getConnection();
+        const transaction = new sql.Transaction(connection);
+        await transaction.begin();
+        let successCount = 0;
+        const errors = [];
+        for (const row of rows) {
+            const validationError = validateIbGlobalMeanRow(row);
+            if (validationError) {
+                errors.push(`${JSON.stringify(row)}: ${validationError}`);
+                continue;
+            }
+            const year = Number(row.year);
+            const avg = Number(row.avg_total_points);
+            try {
+                const request = transaction.request();
+                request.input('year', sql.Int, year);
+                request.input('avg_total_points', sql.Decimal(8, 4), avg);
+                await request.query(`
+          MERGE admin.ib_global_avg_total_points_by_year AS target
+          USING (SELECT @year AS [Year], @avg_total_points AS avg_total_points) AS source
+          ON target.[Year] = source.[Year]
+          WHEN MATCHED THEN
+            UPDATE SET avg_total_points = source.avg_total_points
+          WHEN NOT MATCHED THEN
+            INSERT ([Year], avg_total_points)
+            VALUES (source.[Year], source.avg_total_points);
+        `);
+                successCount++;
+            }
+            catch (err) {
+                errors.push(`year ${year}: ${err.message}`);
+            }
+        }
+        await transaction.commit();
+        res.json({
+            success: true,
+            successCount,
+            errorCount: errors.length,
+            errors: errors.length ? errors : undefined,
+        });
+    }
+    catch (error) {
+        console.error('Error saving IB global means:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * DELETE /api/managebac-config/ib-global-means/:year
+ */
+router.delete('/ib-global-means/:year', async (req, res) => {
+    try {
+        const year = parseInt(req.params.year, 10);
+        if (Number.isNaN(year) || year < IB_GLOBAL_YEAR_MIN || year > IB_GLOBAL_YEAR_MAX) {
+            return res.status(400).json({ error: 'Invalid year' });
+        }
+        const result = await executeQuery(`DELETE FROM admin.ib_global_avg_total_points_by_year WHERE [Year] = @year`, { year });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        res.json({ success: true, message: 'Deleted' });
+    }
+    catch (error) {
+        console.error('Error deleting IB global mean:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+// =============================================
 // Term Grade Rubric Config (admin.mb_term_grade_rubric_config)
 // =============================================
+/** Normalize AY label for dash/space-insensitive match against MB.academic_years.name */
+const AY_NORM_SQL = (expr) => `LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(${expr})), NCHAR(160), N''), N' ', N''), N'-', N''), NCHAR(8211), N''), NCHAR(8212), N''))`;
+/**
+ * Resolve free-text / hyphenated academic_year to exact MB.academic_years.name for a school.
+ * Returns null when no match.
+ */
+async function resolveMbAcademicYearName(schoolId, academicYear) {
+    const hint = String(academicYear || '').trim();
+    if (!hint)
+        return null;
+    const result = await executeQuery(`SELECT TOP 1 ay.name
+     FROM MB.academic_years ay
+     WHERE ay.school_id = @school_id
+       AND (
+         ay.name = @academic_year
+         OR ${AY_NORM_SQL('ay.name')} = ${AY_NORM_SQL('@academic_year')}
+       )
+     ORDER BY CASE WHEN ay.name = @academic_year THEN 0 ELSE 1 END, ay.id DESC`, { school_id: schoolId, academic_year: hint });
+    if (result.error)
+        throw new Error(result.error);
+    return result.data?.[0]?.name || null;
+}
 /**
  * GET /api/managebac-config/term-grade-rubric-config/schools
  * Get MB schools (from managebac_school_configs where school_id is set)
@@ -45,6 +177,42 @@ router.get('/term-grade-rubric-config/schools', async (req, res) => {
     }
     catch (error) {
         console.error('Error fetching MB schools:', error);
+        res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+});
+/**
+ * GET /api/managebac-config/term-grade-rubric-config/academic-years?school_id=
+ * Distinct academic year labels from MB.academic_years (exact ManageBac names).
+ */
+router.get('/term-grade-rubric-config/academic-years', async (req, res) => {
+    try {
+        const schoolIdRaw = req.query.school_id;
+        if (schoolIdRaw == null || schoolIdRaw === '') {
+            return res.status(400).json({ error: 'school_id is required' });
+        }
+        const school_id = parseInt(String(schoolIdRaw), 10);
+        if (Number.isNaN(school_id)) {
+            return res.status(400).json({ error: 'Invalid school_id' });
+        }
+        const result = await executeQuery(`SELECT ay.name AS academic_year, ay.id AS academic_year_id
+       FROM MB.academic_years ay
+       WHERE ay.school_id = @school_id
+         AND ay.name IS NOT NULL
+         AND LTRIM(RTRIM(ay.name)) <> ''
+       ORDER BY ay.id DESC`, { school_id });
+        if (result.error)
+            return res.status(500).json({ error: result.error });
+        // Dedupe by exact name (keep highest id via ORDER BY above + Map)
+        const seen = new Map();
+        for (const row of result.data || []) {
+            if (!seen.has(row.academic_year)) {
+                seen.set(row.academic_year, row);
+            }
+        }
+        res.json({ success: true, data: [...seen.values()] });
+    }
+    catch (error) {
+        console.error('Error fetching MB academic years:', error);
         res.status(500).json({ error: error.message || 'Internal server error' });
     }
 });
@@ -86,7 +254,9 @@ router.get('/term-grade-rubric-config', async (req, res) => {
 });
 /**
  * POST /api/managebac-config/term-grade-rubric-config
- * Bulk upsert config rows
+ * Bulk upsert config rows.
+ * academic_year is resolved to the exact MB.academic_years.name (dash-insensitive)
+ * so hyphen/en-dash typos cannot break MB→RP sync.
  */
 router.post('/term-grade-rubric-config', async (req, res) => {
     try {
@@ -99,6 +269,7 @@ router.post('/term-grade-rubric-config', async (req, res) => {
         await transaction.begin();
         let successCount = 0;
         const errors = [];
+        const resolvedAyCache = new Map();
         for (const c of configs) {
             const { id, school_id, academic_year, academic_year_rp, grade_number, rubric_title, term_id, display_order } = c;
             if (!school_id || academic_year == null || grade_number == null || !rubric_title || !term_id) {
@@ -106,12 +277,23 @@ router.post('/term-grade-rubric-config', async (req, res) => {
                 continue;
             }
             try {
+                const schoolIdNum = parseInt(String(school_id), 10);
+                const ayKey = `${schoolIdNum}::${String(academic_year).trim()}`;
+                let resolvedAy = resolvedAyCache.get(ayKey);
+                if (resolvedAy === undefined) {
+                    resolvedAy = await resolveMbAcademicYearName(schoolIdNum, String(academic_year));
+                    resolvedAyCache.set(ayKey, resolvedAy);
+                }
+                if (!resolvedAy) {
+                    errors.push(`academic_year "${academic_year}" not found in MB.academic_years for school_id=${school_id}. Pick a year from the ManageBac list.`);
+                    continue;
+                }
                 const request = transaction.request();
-                request.input('school_id', sql.BigInt, school_id);
-                request.input('academic_year', sql.NVarChar(200), String(academic_year));
+                request.input('school_id', sql.BigInt, schoolIdNum);
+                request.input('academic_year', sql.NVarChar(200), resolvedAy);
                 request.input('academic_year_rp', sql.NVarChar(20), academic_year_rp != null && String(academic_year_rp).trim() !== '' ? String(academic_year_rp).trim() : null);
                 request.input('grade_number', sql.Int, parseInt(String(grade_number), 10));
-                request.input('rubric_title', sql.NVarChar(500), rubric_title);
+                request.input('rubric_title', sql.NVarChar(500), String(rubric_title).trim());
                 request.input('term_id', sql.BigInt, term_id);
                 request.input('display_order', sql.Int, display_order ?? 0);
                 if (id) {

@@ -6,6 +6,7 @@ import { type FisFileStatus } from './FISRunTrackingService.js';
 import type { FisGenerationJobProgress } from './FISReportGenerationJobService.js';
 /** Fixed processing order when multiple report types are selected. */
 export declare const FIS_REPORT_GENERATION_ORDER: readonly ["NF", "BS", "PL", "CF"];
+export declare function assertReportTypesAllowedForPeriod(reportTypeCodes: string[], asOfPeriod: string): string[];
 export declare function sortReportTypesForGeneration(reportTypeCodes: string[]): string[];
 export declare class FISServiceError extends Error {
     statusCode: number;
@@ -140,6 +141,7 @@ export interface FisReportInstanceDetail extends Omit<FisReportInstanceSummary, 
     columns: FisReportColumn[];
 }
 export interface DictionaryCodeItem {
+    dim_id?: number;
     code: string;
     description: string | null;
 }

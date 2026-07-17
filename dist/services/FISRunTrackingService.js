@@ -3,6 +3,7 @@
  */
 import { executeQuery } from '../config/database.js';
 import { getLatestTrialBalanceUploads } from './FISTrialBalanceProcessService.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
 export function isFisPhase4Enabled() {
     return process.env.FIS_PHASE4_ENABLED === 'true' || process.env.FIS_PHASE4_ENABLED === '1';
 }
@@ -138,17 +139,46 @@ export async function maybeLockEntityPeriod(entityCode, period, lockedBy) {
 export async function resolveFileStatusForPeriod(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
+    const previousYear = isFisPreviousYearPeriod(periodNorm);
     const uploads = await getLatestTrialBalanceUploads(entity, periodNorm);
-    if (!uploads.actual) {
-        throw new Error(`No Actual trial balance for ${entity} period ${periodNorm}`);
+    if (previousYear) {
+        if (!uploads.actual) {
+            throw new Error(`No Actual trial balance for Previous Year period ${entity} ${periodNorm}. ` +
+                'Budget is not used for period month 00.');
+        }
+        const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+        if (!actualStatus) {
+            throw new Error(`Cannot resolve Actual TB file status for ${entity} ${periodNorm}. ` +
+                'Upload the Actual file with homogeneous Preliminary or Final status on every row.');
+        }
+        const lockResult = await executeQuery(`SELECT entity_code FROM admin.fis_entity_period_lock
+       WHERE entity_code = @entity AND period = @period`, { entity, period: periodNorm });
+        if (lockResult.error)
+            throw new Error(lockResult.error);
+        return {
+            fileStatus: actualStatus,
+            actualUploadId: uploads.actual.uploadId,
+            budgetUploadId: null,
+            actualFileName: uploads.actual.fileName,
+            budgetFileName: null,
+            actualTbStatus: actualStatus,
+            budgetTbStatus: null,
+            isTbLocked: Boolean(lockResult.data?.length),
+        };
     }
-    const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
-    if (!actualStatus) {
-        throw new Error(`Cannot resolve Actual TB file status for ${entity} ${periodNorm}. ` +
-            'Upload the Actual file with homogeneous Preliminary or Final status on every row.');
+    if (!uploads.actual && !uploads.budget) {
+        throw new Error(`No Actual or Budget trial balance for ${entity} period ${periodNorm}`);
     }
-    // Budget is optional. If no Budget file exists, generate using the Actual status and
-    // leave budget columns as-is (the report proc handles the missing budget).
+    // Actual and Budget are each optional alone. When only one side is loaded, generate using
+    // that side's status and leave the missing side's columns as-is (report procs tolerate it).
+    let actualStatus = null;
+    if (uploads.actual) {
+        actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+        if (!actualStatus) {
+            throw new Error(`Cannot resolve Actual TB file status for ${entity} ${periodNorm}. ` +
+                'Upload the Actual file with homogeneous Preliminary or Final status on every row.');
+        }
+    }
     let budgetStatus = null;
     if (uploads.budget) {
         const budgetPeriod = uploads.budgetUsesFallback
@@ -159,20 +189,24 @@ export async function resolveFileStatusForPeriod(entityCode, period) {
             throw new Error(`Cannot resolve Budget TB file status for ${entity} ${periodNorm}. ` +
                 'Upload the Budget file with homogeneous Preliminary or Final status on every row.');
         }
-        if (actualStatus !== budgetStatus) {
-            throw new Error(`Actual TB status (${actualStatus}) does not match Budget TB status (${budgetStatus}) ` +
-                `for ${entity} period ${periodNorm}. Upload matching status on both files before generating FIS reports.`);
-        }
+    }
+    if (actualStatus && budgetStatus && actualStatus !== budgetStatus) {
+        throw new Error(`Actual TB status (${actualStatus}) does not match Budget TB status (${budgetStatus}) ` +
+            `for ${entity} period ${periodNorm}. Upload matching status on both files before generating FIS reports.`);
+    }
+    const fileStatus = actualStatus ?? budgetStatus;
+    if (!fileStatus) {
+        throw new Error(`Cannot resolve TB file status for ${entity} period ${periodNorm}`);
     }
     const lockResult = await executeQuery(`SELECT entity_code FROM admin.fis_entity_period_lock
      WHERE entity_code = @entity AND period = @period`, { entity, period: periodNorm });
     if (lockResult.error)
         throw new Error(lockResult.error);
     return {
-        fileStatus: actualStatus,
-        actualUploadId: uploads.actual.uploadId,
+        fileStatus,
+        actualUploadId: uploads.actual?.uploadId ?? null,
         budgetUploadId: uploads.budget?.uploadId ?? null,
-        actualFileName: uploads.actual.fileName,
+        actualFileName: uploads.actual?.fileName ?? null,
         budgetFileName: uploads.budget?.fileName ?? null,
         actualTbStatus: actualStatus,
         budgetTbStatus: budgetStatus,
@@ -206,11 +240,15 @@ export async function resolveRunLoggingContext(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
     const uploads = await getLatestTrialBalanceUploads(entity, periodNorm);
-    const actualStatus = await queryDominantTbStatus(entity, periodNorm, 'ACTUAL');
+    const actualStatus = uploads.actual
+        ? await queryDominantTbStatus(entity, periodNorm, 'ACTUAL')
+        : null;
     const budgetPeriod = uploads.budgetUsesFallback
         ? uploads.budgetSourcePeriod ?? periodNorm
         : periodNorm;
-    const budgetStatus = await queryDominantTbStatus(entity, budgetPeriod, 'BUDGET');
+    const budgetStatus = uploads.budget
+        ? await queryDominantTbStatus(entity, budgetPeriod, 'BUDGET')
+        : null;
     const fileStatus = actualStatus ?? budgetStatus ?? 'Preliminary';
     return {
         fileStatus,
@@ -218,8 +256,8 @@ export async function resolveRunLoggingContext(entityCode, period) {
         budgetUploadId: uploads.budget?.uploadId ?? null,
         actualFileName: uploads.actual?.fileName ?? null,
         budgetFileName: uploads.budget?.fileName ?? null,
-        actualTbStatus: actualStatus ?? fileStatus,
-        budgetTbStatus: budgetStatus ?? fileStatus,
+        actualTbStatus: actualStatus,
+        budgetTbStatus: budgetStatus,
     };
 }
 export async function startReportRun(params) {
@@ -267,6 +305,20 @@ export async function completeReportRun(runId, success, outputRowCount, errorMes
     });
     if (result.error)
         throw new Error(result.error);
+    // Materialize entity-keyed Superset filter tables from live V2 output.
+    // Soft-fail so a missing/outdated proc never blocks report completion.
+    if (success) {
+        const refresh = await executeQuery(`DECLARE @entity_code NVARCHAR(10);
+       SELECT @entity_code = entity_code
+       FROM admin.fis_report_runs
+       WHERE run_id = @runId;
+
+       IF @entity_code IS NOT NULL
+           EXEC rp.usp_RefreshFISSupersetFilters @entity_code = @entity_code;`, { runId });
+        if (refresh.error) {
+            console.error(`⚠️ FIS filter refresh failed after run_id=${runId}:`, refresh.error);
+        }
+    }
 }
 export async function getRunCalendar(entityCode, year) {
     let query = `SELECT

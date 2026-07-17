@@ -4,6 +4,11 @@
  */
 import type { Student } from '../../types/managebac.js';
 import type { BaseManageBacService } from './BaseManageBacService.js';
+/**
+ * MB student detail payloads expose `archived` but often omit `is_active`.
+ * Using `!is_active` when is_active is undefined incorrectly marks everyone archived.
+ */
+export declare function resolveMbStudentArchived(s: any): boolean;
 export declare function getStudents(this: BaseManageBacService, apiKey: string, filters?: {
     grade_id?: string;
     active_only?: boolean;

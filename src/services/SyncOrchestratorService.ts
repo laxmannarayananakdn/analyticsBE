@@ -15,6 +15,10 @@ import {
   beginTermGradeSyncLog,
   logTermGradeSync,
 } from '../utils/termGradeSyncLog.js';
+import {
+  verifyIbSchoolAvgVsGlobalAfterMbSync,
+  logIbSchoolAvgVerification,
+} from './IbSchoolAvgVerificationService.js';
 
 export interface RunSyncParams {
   /** Node ID(s) to sync. Required unless all is true. */
@@ -358,6 +362,14 @@ export async function runSync(params: RunSyncParams): Promise<RunSyncResult> {
                 `Total_Points affected=${loadResult.total_points_rows_affected ?? 0}, ` +
                 `Result inserted=${loadResult.result_rows_inserted ?? 0}`
             );
+            const verifyAy = usedAcademicYearRp || configuredRpAy || ayForRefresh;
+            const verifyResult = await verifyIbSchoolAvgVsGlobalAfterMbSync({
+              schoolId: item.schoolId,
+              academicYearRp: verifyAy,
+              totalPointsRowsAffected: loadResult.total_points_rows_affected,
+              ibTotalCandidates: loadResult.ib_total_candidates,
+            });
+            logIbSchoolAvgVerification(item.schoolId, verifyAy, verifyResult);
             triggerRefresh({
               school_id: item.schoolId,
               academic_year: ayForRefresh,

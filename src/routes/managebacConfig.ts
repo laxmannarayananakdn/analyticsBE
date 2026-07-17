@@ -28,6 +28,128 @@ const maskConfig = (config: any): any => {
 };
 
 // =============================================
+// IB Global Mean Config (admin.ib_global_avg_total_points_by_year)
+// =============================================
+
+const IB_GLOBAL_YEAR_MIN = 2000;
+const IB_GLOBAL_YEAR_MAX = 2100;
+const IB_GLOBAL_POINTS_MIN = 0;
+const IB_GLOBAL_POINTS_MAX = 45;
+
+function validateIbGlobalMeanRow(row: { year?: unknown; avg_total_points?: unknown }): string | null {
+  const year = Number(row.year);
+  if (!Number.isInteger(year) || year < IB_GLOBAL_YEAR_MIN || year > IB_GLOBAL_YEAR_MAX) {
+    return `year must be an integer between ${IB_GLOBAL_YEAR_MIN} and ${IB_GLOBAL_YEAR_MAX}`;
+  }
+  const avg = Number(row.avg_total_points);
+  if (!Number.isFinite(avg) || avg < IB_GLOBAL_POINTS_MIN || avg > IB_GLOBAL_POINTS_MAX) {
+    return `avg_total_points must be between ${IB_GLOBAL_POINTS_MIN} and ${IB_GLOBAL_POINTS_MAX}`;
+  }
+  return null;
+}
+
+/**
+ * GET /api/managebac-config/ib-global-means
+ */
+router.get('/ib-global-means', async (_req: Request, res: Response) => {
+  try {
+    const result = await executeQuery<{ year: number; avg_total_points: number }>(
+      `SELECT [Year] AS year, avg_total_points
+       FROM admin.ib_global_avg_total_points_by_year
+       ORDER BY [Year] DESC`
+    );
+    if (result.error) return res.status(500).json({ error: result.error });
+    res.json({ success: true, data: result.data || [] });
+  } catch (error: any) {
+    console.error('Error fetching IB global means:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/managebac-config/ib-global-means
+ * Body: { rows: [{ year, avg_total_points }] }
+ */
+router.post('/ib-global-means', async (req: Request, res: Response) => {
+  try {
+    const { rows } = req.body;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required' });
+    }
+
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    await transaction.begin();
+
+    let successCount = 0;
+    const errors: string[] = [];
+
+    for (const row of rows) {
+      const validationError = validateIbGlobalMeanRow(row);
+      if (validationError) {
+        errors.push(`${JSON.stringify(row)}: ${validationError}`);
+        continue;
+      }
+
+      const year = Number(row.year);
+      const avg = Number(row.avg_total_points);
+
+      try {
+        const request = transaction.request();
+        request.input('year', sql.Int, year);
+        request.input('avg_total_points', sql.Decimal(8, 4), avg);
+        await request.query(`
+          MERGE admin.ib_global_avg_total_points_by_year AS target
+          USING (SELECT @year AS [Year], @avg_total_points AS avg_total_points) AS source
+          ON target.[Year] = source.[Year]
+          WHEN MATCHED THEN
+            UPDATE SET avg_total_points = source.avg_total_points
+          WHEN NOT MATCHED THEN
+            INSERT ([Year], avg_total_points)
+            VALUES (source.[Year], source.avg_total_points);
+        `);
+        successCount++;
+      } catch (err: any) {
+        errors.push(`year ${year}: ${err.message}`);
+      }
+    }
+
+    await transaction.commit();
+    res.json({
+      success: true,
+      successCount,
+      errorCount: errors.length,
+      errors: errors.length ? errors : undefined,
+    });
+  } catch (error: any) {
+    console.error('Error saving IB global means:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * DELETE /api/managebac-config/ib-global-means/:year
+ */
+router.delete('/ib-global-means/:year', async (req: Request, res: Response) => {
+  try {
+    const year = parseInt(req.params.year, 10);
+    if (Number.isNaN(year) || year < IB_GLOBAL_YEAR_MIN || year > IB_GLOBAL_YEAR_MAX) {
+      return res.status(400).json({ error: 'Invalid year' });
+    }
+
+    const result = await executeQuery(
+      `DELETE FROM admin.ib_global_avg_total_points_by_year WHERE [Year] = @year`,
+      { year }
+    );
+    if (result.error) return res.status(500).json({ error: result.error });
+    res.json({ success: true, message: 'Deleted' });
+  } catch (error: any) {
+    console.error('Error deleting IB global mean:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// =============================================
 // Term Grade Rubric Config (admin.mb_term_grade_rubric_config)
 // =============================================
 

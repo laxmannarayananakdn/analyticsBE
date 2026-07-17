@@ -37,6 +37,7 @@ const insertRegistry = {
 };
 async function deleteExistingFinanceData(fileTypeUpper, fileName, tbIdentity) {
     if (FINANCE_DICTIONARY_FILE_TYPES.includes(fileTypeUpper)) {
+        // Audit table only — FIN.DimCode keys stay stable (MERGE in insertFINDictionary).
         const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');
         await efService.deleteAllFINDictionaryByType(dictionaryType);
         return;

@@ -837,10 +837,117 @@ export class EFService {
         }
     }
     async deleteAllFINDictionaryByType(dictionaryType) {
+        // Audit/history table only — FIN.DimCode keys stay stable across reloads.
         const result = await executeQuery(`DELETE FROM FIN.DictionaryData WHERE dictionary_type = @dictionaryType;`, { dictionaryType });
         if (result.error) {
             throw new Error(`Failed to delete FIN dictionary data (${dictionaryType}): ${result.error}`);
         }
+    }
+    /**
+     * MERGE dictionary codes into FIN.DimCode so dim_id stays stable across Dic reloads.
+     * Blank codes map to sentinel dim_id = 0.
+     */
+    async mergeFINDimCodes(dictionaryType, records) {
+        const codeToId = new Map();
+        codeToId.set('', 0);
+        const normalized = records
+            .map((r) => ({
+            code: (r.code ?? '').trim(),
+            description: r.description ?? null,
+            suspended: r.suspended ?? null,
+            entity: r.entity ?? null,
+            group_dimension: r.group_dimension ?? null,
+        }))
+            .filter((r) => r.code !== '');
+        if (normalized.length === 0) {
+            return codeToId;
+        }
+        const connection = await getConnection();
+        const batchSize = 100;
+        for (let i = 0; i < normalized.length; i += batchSize) {
+            const batch = normalized.slice(i, i + batchSize);
+            const valueRows = batch
+                .map((_, index) => {
+                const baseIndex = i + index;
+                return `(@dictionaryType, @code${baseIndex}, @description${baseIndex}, @suspended${baseIndex}, @entity${baseIndex}, @groupDimension${baseIndex})`;
+            })
+                .join(',\n');
+            const mergeSql = `
+        DECLARE @src TABLE (
+          dictionary_type NVARCHAR(50) NOT NULL,
+          code NVARCHAR(100) NOT NULL,
+          description NVARCHAR(500) NULL,
+          suspended NVARCHAR(50) NULL,
+          entity NVARCHAR(100) NULL,
+          group_dimension NVARCHAR(100) NULL
+        );
+        INSERT INTO @src (dictionary_type, code, description, suspended, entity, group_dimension)
+        VALUES ${valueRows};
+
+        MERGE FIN.DimCode AS t
+        USING @src AS s
+          ON t.dictionary_type = s.dictionary_type AND t.code = s.code
+        WHEN MATCHED THEN
+          UPDATE SET
+            description = s.description,
+            suspended = s.suspended,
+            entity = s.entity,
+            group_dimension = s.group_dimension,
+            last_updated_by = N'System',
+            last_updated_at = SYSDATETIMEOFFSET()
+        WHEN NOT MATCHED THEN
+          INSERT (dictionary_type, code, description, suspended, entity, group_dimension, is_sentinel)
+          VALUES (s.dictionary_type, s.code, s.description, s.suspended, s.entity, s.group_dimension, 0);
+
+        SELECT c.code, c.dim_id
+        FROM FIN.DimCode c
+        INNER JOIN @src s ON s.dictionary_type = c.dictionary_type AND s.code = c.code;
+      `;
+            const request = connection.request();
+            request.input('dictionaryType', sql.NVarChar(50), dictionaryType);
+            batch.forEach((record, index) => {
+                const baseIndex = i + index;
+                request.input(`code${baseIndex}`, sql.NVarChar(100), record.code);
+                request.input(`description${baseIndex}`, sql.NVarChar(500), record.description);
+                request.input(`suspended${baseIndex}`, sql.NVarChar(50), record.suspended);
+                request.input(`entity${baseIndex}`, sql.NVarChar(100), record.entity);
+                request.input(`groupDimension${baseIndex}`, sql.NVarChar(100), record.group_dimension);
+            });
+            const result = await request.query(mergeSql);
+            for (const row of result.recordset || []) {
+                codeToId.set(String(row.code), Number(row.dim_id));
+            }
+        }
+        return codeToId;
+    }
+    /**
+     * Ensure (type, code) rows exist in FIN.DimCode (orphan TB codes) and return code→dim_id map.
+     * Blank → 0.
+     */
+    async ensureFINDimCodes(pairs) {
+        const resultMap = new Map();
+        const byType = new Map();
+        for (const p of pairs) {
+            const code = (p.code ?? '').trim();
+            const key = `${p.dictionaryType}\0${code}`;
+            if (code === '') {
+                resultMap.set(key, 0);
+                continue;
+            }
+            if (!byType.has(p.dictionaryType))
+                byType.set(p.dictionaryType, new Set());
+            byType.get(p.dictionaryType).add(code);
+        }
+        for (const [dictionaryType, codes] of byType) {
+            const map = await this.mergeFINDimCodes(dictionaryType, [...codes].map((code) => ({ code })));
+            for (const [code, dimId] of map) {
+                resultMap.set(`${dictionaryType}\0${code}`, dimId);
+            }
+        }
+        return resultMap;
+    }
+    static statusIdFromTbType(tbType) {
+        return tbType === 'BUDGET' ? 2 : 1;
     }
     /** Full wipe by type — admin/maintenance only; not for per-file SFTP uploads. */
     async deleteAllFINTrialBalanceByType(tbType) {
@@ -895,6 +1002,8 @@ export class EFService {
     async insertFINDictionary(uploadId, fileName, uploadedBy, dictionaryType, records) {
         if (records.length === 0)
             return 0;
+        // Stable keys first — never delete DimCode on Dic reload.
+        const codeToId = await this.mergeFINDimCodes(dictionaryType, records);
         const connection = await getConnection();
         const transaction = new sql.Transaction(connection);
         try {
@@ -908,14 +1017,14 @@ export class EFService {
                     return `(
             @uploadId, @fileName, @uploadedBy, @dictionaryType,
             @code${baseIndex}, @description${baseIndex}, @suspended${baseIndex}, @entity${baseIndex},
-            @groupDimension${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET(),
+            @groupDimension${baseIndex}, @dimId${baseIndex}, @uploadedBy, SYSDATETIMEOFFSET(),
             @lastUpdatedByRaw${baseIndex}, @lastUpdatedAtRaw${baseIndex}
           )`;
                 }).join(',');
                 const query = `
           INSERT INTO FIN.DictionaryData (
             upload_id, file_name, uploaded_by, dictionary_type,
-            code, description, suspended, entity, group_dimension,
+            code, description, suspended, entity, group_dimension, dim_id,
             last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
           ) VALUES ${values};
         `;
@@ -926,11 +1035,14 @@ export class EFService {
                 request.input('dictionaryType', sql.NVarChar(50), dictionaryType);
                 batch.forEach((record, index) => {
                     const baseIndex = i + index;
+                    const code = (record.code ?? '').trim();
+                    const dimId = code === '' ? 0 : (codeToId.get(code) ?? null);
                     request.input(`code${baseIndex}`, sql.NVarChar(100), record.code ?? null);
                     request.input(`description${baseIndex}`, sql.NVarChar(500), record.description ?? null);
                     request.input(`suspended${baseIndex}`, sql.NVarChar(50), record.suspended ?? null);
                     request.input(`entity${baseIndex}`, sql.NVarChar(100), record.entity ?? null);
                     request.input(`groupDimension${baseIndex}`, sql.NVarChar(100), record.group_dimension ?? null);
+                    request.input(`dimId${baseIndex}`, sql.BigInt, dimId);
                     request.input(`lastUpdatedByRaw${baseIndex}`, sql.NVarChar(255), record.last_updated_by_raw ?? null);
                     request.input(`lastUpdatedAtRaw${baseIndex}`, sql.DateTimeOffset, record.last_updated_at_raw ?? null);
                 });
@@ -941,8 +1053,14 @@ export class EFService {
             return totalInserted;
         }
         catch (error) {
-            await transaction.rollback();
-            throw new Error(`Failed to insert FIN dictionary records: ${error.message || error}`);
+            const originalMessage = error?.message || String(error);
+            try {
+                await transaction.rollback();
+            }
+            catch {
+                // XACT_ABORT already aborted the transaction; rollback then throws EABORT.
+            }
+            throw new Error(`Failed to insert FIN dictionary records: ${originalMessage}`);
         }
     }
     async insertFINTrialBalance(uploadId, fileName, uploadedBy, tbType, records) {
@@ -951,11 +1069,24 @@ export class EFService {
         const connection = await getConnection();
         const transaction = new sql.Transaction(connection);
         const parsedFile = parseTrialBalanceFileName(fileName);
-        const entityCode = parsedFile?.entityCode ?? null;
-        const period = parsedFile?.periodYyyymm ?? null;
+        const entityCode = parsedFile?.entityCode?.trim().toUpperCase() ?? null;
+        const period = parsedFile?.periodYyyymm?.trim() ?? null;
+        const statusId = EFService.statusIdFromTbType(tbType);
+        const dimPairs = [];
+        for (const record of records) {
+            dimPairs.push({ dictionaryType: 'ACCOUNT', code: record.main_account ?? '' }, { dictionaryType: 'SOURCE_OF_FUND', code: record.funding_source ?? '' }, { dictionaryType: 'REGION', code: record.region ?? '' }, { dictionaryType: 'OPERATING_UNIT', code: record.operating_unit ?? '' }, { dictionaryType: 'DEPARTMENT', code: record.department ?? '' }, { dictionaryType: 'PROJECT', code: record.project ?? '' }, { dictionaryType: 'ACTIVITY', code: record.activity ?? '' }, { dictionaryType: 'RESOURCE', code: record.resource ?? '' }, { dictionaryType: 'PARTY', code: record.party ?? '' }, { dictionaryType: 'FIXED_ASSETS', code: record.fixed_assets ?? '' }, { dictionaryType: 'REFERENCE', code: record.reference ?? '' });
+        }
+        const dimMap = await this.ensureFINDimCodes(dimPairs);
+        const dimId = (dictionaryType, code) => {
+            const trimmed = (code ?? '').trim();
+            if (trimmed === '')
+                return 0;
+            return dimMap.get(`${dictionaryType}\0${trimmed}`) ?? 0;
+        };
         try {
             await transaction.begin();
-            const batchSize = 100;
+            // ~27 params/row + 7 shared; SQL Server max is 2100 → keep batches ≤ ~70.
+            const batchSize = 50;
             let totalInserted = 0;
             for (let i = 0; i < records.length; i += batchSize) {
                 const batch = records.slice(i, i + batchSize);
@@ -967,6 +1098,9 @@ export class EFService {
             @department${baseIndex}, @project${baseIndex}, @activity${baseIndex}, @resource${baseIndex},
             @party${baseIndex}, @fixedAssets${baseIndex}, @reference${baseIndex}, @debit${baseIndex},
             @credit${baseIndex}, @status${baseIndex}, @entityCode, @period,
+            @mainAccountId${baseIndex}, @fundingSourceId${baseIndex}, @regionId${baseIndex}, @operatingUnitId${baseIndex},
+            @departmentId${baseIndex}, @projectId${baseIndex}, @activityId${baseIndex}, @resourceId${baseIndex},
+            @partyId${baseIndex}, @fixedAssetsId${baseIndex}, @referenceId${baseIndex}, @statusId,
             @uploadedBy, SYSDATETIMEOFFSET(),
             @lastUpdatedByRaw${baseIndex}, @lastUpdatedAtRaw${baseIndex}
           )`;
@@ -977,6 +1111,8 @@ export class EFService {
             main_account, funding_source, region, operating_unit, department, project, activity,
             resource, party, fixed_assets, reference, debit, credit, status,
             entity_code, period,
+            main_account_id, funding_source_id, region_id, operating_unit_id, department_id, project_id,
+            activity_id, resource_id, party_id, fixed_assets_id, reference_id, status_id,
             last_updated_by, last_updated_at, last_updated_by_raw, last_updated_at_raw
           ) VALUES ${values};
         `;
@@ -987,6 +1123,7 @@ export class EFService {
                 request.input('tbType', sql.NVarChar(20), tbType);
                 request.input('entityCode', sql.NVarChar(4), entityCode);
                 request.input('period', sql.NVarChar(6), period);
+                request.input('statusId', sql.TinyInt, statusId);
                 batch.forEach((record, index) => {
                     const baseIndex = i + index;
                     request.input(`mainAccount${baseIndex}`, sql.NVarChar(100), record.main_account ?? null);
@@ -1003,6 +1140,17 @@ export class EFService {
                     request.input(`debit${baseIndex}`, sql.Decimal(19, 4), record.debit ?? null);
                     request.input(`credit${baseIndex}`, sql.Decimal(19, 4), record.credit ?? null);
                     request.input(`status${baseIndex}`, sql.NVarChar(100), record.status ?? null);
+                    request.input(`mainAccountId${baseIndex}`, sql.BigInt, dimId('ACCOUNT', record.main_account));
+                    request.input(`fundingSourceId${baseIndex}`, sql.BigInt, dimId('SOURCE_OF_FUND', record.funding_source));
+                    request.input(`regionId${baseIndex}`, sql.BigInt, dimId('REGION', record.region));
+                    request.input(`operatingUnitId${baseIndex}`, sql.BigInt, dimId('OPERATING_UNIT', record.operating_unit));
+                    request.input(`departmentId${baseIndex}`, sql.BigInt, dimId('DEPARTMENT', record.department));
+                    request.input(`projectId${baseIndex}`, sql.BigInt, dimId('PROJECT', record.project));
+                    request.input(`activityId${baseIndex}`, sql.BigInt, dimId('ACTIVITY', record.activity));
+                    request.input(`resourceId${baseIndex}`, sql.BigInt, dimId('RESOURCE', record.resource));
+                    request.input(`partyId${baseIndex}`, sql.BigInt, dimId('PARTY', record.party));
+                    request.input(`fixedAssetsId${baseIndex}`, sql.BigInt, dimId('FIXED_ASSETS', record.fixed_assets));
+                    request.input(`referenceId${baseIndex}`, sql.BigInt, dimId('REFERENCE', record.reference));
                     request.input(`lastUpdatedByRaw${baseIndex}`, sql.NVarChar(255), record.last_updated_by_raw ?? null);
                     request.input(`lastUpdatedAtRaw${baseIndex}`, sql.DateTimeOffset, record.last_updated_at_raw ?? null);
                 });
@@ -1021,8 +1169,14 @@ export class EFService {
             return totalInserted;
         }
         catch (error) {
-            await transaction.rollback();
-            throw new Error(`Failed to insert FIN trial balance records: ${error.message || error}`);
+            const originalMessage = error?.message || String(error);
+            try {
+                await transaction.rollback();
+            }
+            catch {
+                // XACT_ABORT already aborted the transaction; rollback then throws EABORT.
+            }
+            throw new Error(`Failed to insert FIN trial balance records: ${originalMessage}`);
         }
     }
     /** File types that support Promote to RP (EF → reporting tables). */

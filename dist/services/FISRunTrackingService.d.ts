@@ -23,7 +23,7 @@ export interface ResolvedTbFileStatus {
     budgetUploadId: number | null;
     actualFileName: string | null;
     budgetFileName: string | null;
-    actualTbStatus: FisFileStatus;
+    actualTbStatus: FisFileStatus | null;
     budgetTbStatus: FisFileStatus | null;
     isTbLocked: boolean;
 }
@@ -34,8 +34,8 @@ export declare function resolveRunLoggingContext(entityCode: string, period: str
     budgetUploadId: number | null;
     actualFileName: string | null;
     budgetFileName: string | null;
-    actualTbStatus: FisFileStatus;
-    budgetTbStatus: FisFileStatus;
+    actualTbStatus: FisFileStatus | null;
+    budgetTbStatus: FisFileStatus | null;
 }>;
 export declare function startReportRun(params: {
     reportTypeCode: string;
@@ -47,7 +47,7 @@ export declare function startReportRun(params: {
     budgetUploadId: number | null;
     actualFileName: string | null;
     budgetFileName: string | null;
-    actualTbStatus: FisFileStatus;
+    actualTbStatus: FisFileStatus | null;
     budgetTbStatus: FisFileStatus | null;
 }): Promise<number | null>;
 export declare function completeReportRun(runId: number | null, success: boolean, outputRowCount: number, errorMessage?: string | null): Promise<void>;

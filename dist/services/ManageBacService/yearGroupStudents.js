@@ -38,7 +38,12 @@ export async function getYearGroupStudents(apiKey, yearGroupId, academicYearId, 
                     last_name: student.last_name,
                     email: student.email,
                     student_id: student.student_id,
-                    archived: !student.is_active,
+                    // Prefer `archived`; do not use !is_active when is_active is omitted (marks all archived).
+                    archived: typeof student.archived === 'boolean'
+                        ? student.archived
+                        : typeof student.is_active === 'boolean'
+                            ? !student.is_active
+                            : false,
                 }));
                 const { error } = await databaseService.upsertStudents(studentsForDb);
                 if (error) {

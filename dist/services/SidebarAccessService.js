@@ -20,6 +20,8 @@ export const ADMIN_ITEMS = [
     { id: 'admin:nexquare-config', label: 'Nexquare Configuration', folder: 'education-data-integration' },
     { id: 'admin:managebac-config', label: 'ManageBac Configuration', folder: 'education-data-integration' },
     { id: 'admin:mb-term-grade-config', label: 'ManageBac Term Grade Config', folder: 'education-data-integration' },
+    { id: 'admin:ib-diploma-results', label: 'IB Diploma Results', folder: 'education-data-integration' },
+    { id: 'admin:ib-global-means', label: 'IB Global Means', folder: 'education-data-integration' },
     { id: 'admin:nexquare-sync', label: 'Nexquare Data Sync', folder: 'education-data-integration' },
     { id: 'admin:managebac-sync', label: 'ManageBac Data Sync', folder: 'education-data-integration' },
     { id: 'admin:sync-schedules', label: 'Sync Schedules', folder: 'education-data-integration' },

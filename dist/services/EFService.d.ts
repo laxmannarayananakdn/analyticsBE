@@ -60,6 +60,26 @@ export declare class EFService {
      */
     insertHRBudgetVsActual(uploadId: number, fileName: string, uploadedBy: string, records: HRBudgetVsActual[]): Promise<number>;
     deleteAllFINDictionaryByType(dictionaryType: string): Promise<void>;
+    /**
+     * MERGE dictionary codes into FIN.DimCode so dim_id stays stable across Dic reloads.
+     * Blank codes map to sentinel dim_id = 0.
+     */
+    mergeFINDimCodes(dictionaryType: string, records: Array<{
+        code: string;
+        description?: string | null;
+        suspended?: string | null;
+        entity?: string | null;
+        group_dimension?: string | null;
+    }>): Promise<Map<string, number>>;
+    /**
+     * Ensure (type, code) rows exist in FIN.DimCode (orphan TB codes) and return code→dim_id map.
+     * Blank → 0.
+     */
+    ensureFINDimCodes(pairs: Array<{
+        dictionaryType: string;
+        code: string;
+    }>): Promise<Map<string, number>>;
+    private static statusIdFromTbType;
     /** Full wipe by type — admin/maintenance only; not for per-file SFTP uploads. */
     deleteAllFINTrialBalanceByType(tbType: 'ACTUAL' | 'BUDGET'): Promise<void>;
     /**

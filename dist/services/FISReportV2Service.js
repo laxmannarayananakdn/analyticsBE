@@ -5,8 +5,12 @@
 import { randomUUID } from 'crypto';
 import sql from 'mssql';
 import { executeQuery, executeProcedure, getConnection } from '../config/database.js';
-import { FISService, FISServiceError, sortReportTypesForGeneration, } from './FISService.js';
+import { FISService, FISServiceError, assertReportTypesAllowedForPeriod, } from './FISService.js';
 import { completeReportRun, isFisPhase4Enabled, resolveFileStatusForPeriod, resolveRunLoggingContext, startReportRun, } from './FISRunTrackingService.js';
+import { withFisProcessLog } from '../utils/fisProcessLog.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
+import { restoreBsPreviousYearAfterMonthlyRun, syncBsPreviousYearColumn, } from './FISPreviousYearSyncService.js';
+import { assertTrialBalanceDataForPeriod } from './FISTrialBalanceProcessService.js';
 export function isFisPipelineV2Enabled() {
     return String(process.env.FIS_PIPELINE_V2 ?? '').toLowerCase() === 'true';
 }
@@ -75,10 +79,7 @@ export class FISReportV2Service {
         return Number(slot);
     }
     async generateReportsByRunKeyV2(reportTypeCodes, entityCode, asOfPeriod, triggeredBy, onProgress) {
-        const ordered = sortReportTypesForGeneration(reportTypeCodes);
-        if (!ordered.length) {
-            throw new FISServiceError('Select at least one report type (NF, BS, PL, CF)', 400);
-        }
+        const ordered = assertReportTypesAllowedForPeriod(reportTypeCodes, asOfPeriod);
         const phase1 = ordered.filter((c) => c !== 'CF');
         const phase2 = ordered.filter((c) => c === 'CF');
         const reportProgress = {};
@@ -138,15 +139,17 @@ export class FISReportV2Service {
                 outputRowCount: result.outputRowCount,
             });
         }
-        // All reports (including CF) are published — enrich descriptions once for the
-        // whole entity-period so the dimension descriptions are populated in one pass.
-        emit(undefined, undefined, { publishPhase: 'enrich' });
-        await this.enrichDescriptionsForBatch(reports.map((r) => r.reportTypeCode), entityCode, asOfPeriod, fileStatus);
+        // Dimension descriptions are resolved at publish time (usp_PublishFISReportOutput_new).
         emit(undefined, undefined, { publishPhase: 'complete' });
         if (v2BulkPublishEnabled()) {
             emit(undefined, undefined, { publishPhase: 'bulk_finalize' });
             await this.finalizeBulkPublishIndexes();
         }
+        // Refresh Superset chart cache for this entity so dashboards hit warm data.
+        // Soft-fail inside warmSupersetCacheAfterFisV2 — never blocks V2 success.
+        emit(undefined, undefined, { publishPhase: 'superset_cache_warm' });
+        const { warmSupersetCacheAfterFisV2 } = await import('./SupersetCacheWarmService.js');
+        await warmSupersetCacheAfterFisV2(entityCode);
         return {
             entityCode: entityCode.trim().toUpperCase(),
             asOfPeriod: asOfPeriod.trim(),
@@ -158,87 +161,88 @@ export class FISReportV2Service {
         const runKey = randomUUID();
         const ctx = await this.prepareContext(reportTypeCode, entityCode, asOfPeriod, triggeredBy, true);
         let stageSlotId = null;
-        try {
-            onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Leasing stage slot' });
-            stageSlotId = await this.leaseStageSlot(runKey, triggeredBy);
-            ctx.procParams.run_key = runKey;
-            ctx.procParams.stage_slot_id = stageSlotId;
-            if (ctx.reportType === 'CF') {
-                onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Building CF cross-report cache' });
-                const cacheStartedAt = Date.now();
-                await this.buildCfCrossReportCache(runKey, ctx);
-                console.log(`[FIS V2 timing] CF BUILD_CACHE took ${((Date.now() - cacheStartedAt) / 1000).toFixed(1)}s`);
-            }
-            onProgress?.({ phase: 'init', current: 1, total: 1, label: 'Clearing stage' });
-            await this.executeGenerateMode(ctx.procParams, 'INIT');
-            await this.runSumColumnChunks(ctx, onProgress);
-            await this.runFinalizeChunks(ctx, onProgress);
-            onProgress?.({ phase: 'finalize', finalizeStep: 'publish', current: 1, total: 1, label: 'Publishing to live table' });
-            const publishStartedAt = Date.now();
-            await this.publishReport(runKey, stageSlotId, ctx);
-            console.log(`[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`);
-            const outputRowCount = await this.countNewLiveOutput(ctx);
-            await completeReportRun(ctx.runId, true, outputRowCount);
-            if (ctx.reportType === 'CF') {
-                await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
-            }
-            stageSlotId = null;
-            return {
-                reportTypeCode: ctx.reportType,
-                entityCode: ctx.entity,
-                asOfPeriod: ctx.period,
-                outputRowCount,
-                ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
-            };
-        }
-        catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            await completeReportRun(ctx.runId, false, 0, message);
-            if (stageSlotId != null) {
-                await executeProcedure('rp.usp_ReleaseFISReportOutputStageSlot_new', {
-                    run_key: runKey,
-                    stage_slot_id: stageSlotId,
-                });
-            }
-            if (ctx.reportType === 'CF') {
-                await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
-            }
-            if (err instanceof FISServiceError)
-                throw err;
-            throw new FISServiceError(message);
-        }
-    }
-    /**
-     * Enrich dimension descriptions (region/funding source/operating unit/department/project)
-     * and coalesce NULL data-row amounts to 0 on the V2 live table for the whole entity-period.
-     * Runs after all reports (including CF) are published. Failures here are logged but do not
-     * fail the batch, since the report data itself is already committed.
-     */
-    async enrichDescriptionsForBatch(reportTypeCodes, entityCode, asOfPeriod, fileStatus) {
-        const entity = entityCode.trim().toUpperCase();
-        const period = asOfPeriod.trim();
-        for (const reportTypeCode of reportTypeCodes) {
-            const startedAt = Date.now();
+        return withFisProcessLog({
+            runId: ctx.runId,
+            entity: ctx.entity,
+            asOfPeriod: ctx.period,
+            reportTypeCode: ctx.reportType,
+            actualUploadId: ctx.actualUploadId,
+            budgetUploadId: ctx.budgetUploadId,
+        }, async () => {
             try {
-                const result = await executeProcedure('rp.usp_EnrichFISReportOutputDescriptions', {
-                    report_type_code: reportTypeCode,
-                    entity_code: entity,
-                    as_of_period: period,
-                    target: 'V2',
-                    ...(fileStatus ? { file_status: fileStatus } : {}),
+                onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Leasing stage slot' });
+                stageSlotId = await this.leaseStageSlot(runKey, triggeredBy);
+                ctx.procParams.run_key = runKey;
+                ctx.procParams.stage_slot_id = stageSlotId;
+                if (ctx.reportType === 'CF') {
+                    onProgress?.({ phase: 'init', current: 0, total: 1, label: 'Building CF cross-report cache' });
+                    const cacheStartedAt = Date.now();
+                    await this.buildCfCrossReportCache(runKey, ctx);
+                    console.log(`[FIS V2 timing] CF BUILD_CACHE took ${((Date.now() - cacheStartedAt) / 1000).toFixed(1)}s`);
+                }
+                onProgress?.({ phase: 'init', current: 1, total: 1, label: 'Clearing stage' });
+                await this.executeGenerateMode(ctx.procParams, 'INIT');
+                await this.runSumColumnChunks(ctx, onProgress);
+                await this.runFinalizeChunks(ctx, onProgress);
+                onProgress?.({
+                    phase: 'finalize',
+                    finalizeStep: 'publish',
+                    current: 1,
+                    total: 1,
+                    label: 'Publishing to live table',
                 });
-                if (result.error) {
-                    console.warn(`[FIS V2] Description enrichment failed for ${reportTypeCode} ${entity} ${period}: ${result.error}`);
+                const publishStartedAt = Date.now();
+                await this.publishReport(runKey, stageSlotId, ctx);
+                console.log(`[FIS V2 timing] ${ctx.reportType} PUBLISH took ${((Date.now() - publishStartedAt) / 1000).toFixed(1)}s`);
+                if (ctx.reportType === 'BS') {
+                    if (isFisPreviousYearPeriod(ctx.period)) {
+                        await syncBsPreviousYearColumn({
+                            entityCode: ctx.entity,
+                            period: ctx.period,
+                            fileStatus: ctx.fileStatus,
+                            outputTable: 'new',
+                        });
+                    }
+                    else {
+                        await restoreBsPreviousYearAfterMonthlyRun({
+                            entityCode: ctx.entity,
+                            asOfPeriod: ctx.period,
+                            fileStatus: ctx.fileStatus,
+                            outputTable: 'new',
+                        });
+                    }
                 }
-                else {
-                    console.log(`[FIS V2 timing] ${reportTypeCode} ENRICH took ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+                const outputRowCount = await this.countNewLiveOutput(ctx);
+                await completeReportRun(ctx.runId, true, outputRowCount);
+                if (ctx.reportType === 'CF') {
+                    await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
                 }
+                stageSlotId = null;
+                return {
+                    reportTypeCode: ctx.reportType,
+                    entityCode: ctx.entity,
+                    asOfPeriod: ctx.period,
+                    outputRowCount,
+                    ...(ctx.phase4 ? { fileStatus: ctx.fileStatus, isTbLocked: ctx.isTbLocked } : {}),
+                };
             }
             catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
-                console.warn(`[FIS V2] Description enrichment error for ${reportTypeCode} ${entity} ${period}: ${message}`);
+                await completeReportRun(ctx.runId, false, 0, message);
+                if (stageSlotId != null) {
+                    await executeProcedure('rp.usp_ReleaseFISReportOutputStageSlot_new', {
+                        run_key: runKey,
+                        stage_slot_id: stageSlotId,
+                    });
+                }
+                if (ctx.reportType === 'CF') {
+                    await executeProcedure('rp.usp_DropFISCFReportCache_new', { run_key: runKey });
+                }
+                if (err instanceof FISServiceError)
+                    throw err;
+                throw new FISServiceError(message);
             }
-        }
+        });
     }
     async publishReport(runKey, stageSlotId, ctx) {
         const result = await executeProcedure('rp.usp_PublishFISReportOutput_new', {
@@ -324,10 +328,21 @@ export class FISReportV2Service {
         if (!allowed.has(reportType)) {
             throw new FISServiceError(`Unsupported report type: ${reportType}`, 400);
         }
+        if (isFisPreviousYearPeriod(period) && reportType !== 'BS') {
+            throw new FISServiceError(`Period ${period} (Previous Year) can only generate BS, not ${reportType}.`, 400);
+        }
+        try {
+            await assertTrialBalanceDataForPeriod(entity, period);
+        }
+        catch (err) {
+            throw new FISServiceError(err instanceof Error ? err.message : 'No trial balance data for scope', 400);
+        }
         const phase4 = isFisPhase4Enabled();
         let fileStatus;
         let isTbLocked = false;
         let runId = null;
+        let actualUploadId = null;
+        let budgetUploadId = null;
         let runLoggingContext = null;
         if (phase4) {
             const resolved = await resolveFileStatusForPeriod(entity, period);
@@ -346,6 +361,10 @@ export class FISReportV2Service {
         else if (startRun) {
             runLoggingContext = await resolveRunLoggingContext(entity, period);
             fileStatus = runLoggingContext.fileStatus;
+        }
+        if (runLoggingContext) {
+            actualUploadId = runLoggingContext.actualUploadId;
+            budgetUploadId = runLoggingContext.budgetUploadId;
         }
         if (startRun && runLoggingContext) {
             runId = await startReportRun({
@@ -370,6 +389,10 @@ export class FISReportV2Service {
         if (!fileStatus) {
             const resolved = await resolveRunLoggingContext(entity, period);
             fileStatus = resolved.fileStatus;
+            if (actualUploadId == null)
+                actualUploadId = resolved.actualUploadId;
+            if (budgetUploadId == null)
+                budgetUploadId = resolved.budgetUploadId;
         }
         if (fileStatus)
             procParams.file_status = fileStatus;
@@ -384,6 +407,8 @@ export class FISReportV2Service {
             fileStatus,
             isTbLocked,
             runId,
+            actualUploadId,
+            budgetUploadId,
             tbSumColumns,
             varianceColumns,
         };

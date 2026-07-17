@@ -3,6 +3,7 @@
  */
 import { executeQuery } from '../config/database.js';
 import { isFisPhase4Enabled } from './FISRunTrackingService.js';
+import { isFisPreviousYearPeriod } from '../utils/fisPreviousYearPeriod.js';
 const TB_UPLOAD_SUMMARY_SQL = `
   WITH upload_summary AS (
     SELECT
@@ -130,6 +131,9 @@ export async function listTrialBalanceEntityPeriods() {
 export async function resolveBudgetSourcePeriod(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
+    if (isFisPreviousYearPeriod(periodNorm)) {
+        return null;
+    }
     const fiscalYear = periodNorm.slice(0, 4);
     const result = await executeQuery(`SELECT MAX(tb.period) AS source_period
      FROM FIN.TrialBalance tb
@@ -137,6 +141,7 @@ export async function resolveBudgetSourcePeriod(entityCode, period) {
        AND UPPER(tb.tb_type) = 'BUDGET'
        AND tb.period IS NOT NULL
        AND LEN(tb.period) = 6
+       AND RIGHT(tb.period, 2) BETWEEN '01' AND '12'
        AND LEFT(tb.period, 4) = @fiscalYear
        AND tb.period <= @period`, { entity, period: periodNorm, fiscalYear });
     if (result.error)
@@ -200,10 +205,15 @@ function parsePeriod(period) {
     }
     const fiscalYear = parseInt(periodNorm.slice(0, 4), 10);
     const fiscalMonth = parseInt(periodNorm.slice(4, 6), 10);
-    if (!Number.isFinite(fiscalYear) || !Number.isFinite(fiscalMonth) || fiscalMonth < 1 || fiscalMonth > 12) {
+    if (!Number.isFinite(fiscalYear) ||
+        !Number.isFinite(fiscalMonth) ||
+        fiscalMonth < 0 ||
+        fiscalMonth > 12) {
         throw new Error(`Invalid period (expected YYYYMM): ${period}`);
     }
-    const monthName = `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
+    const monthName = fiscalMonth === 0
+        ? `Previous Year ${fiscalYear}`
+        : `${MONTH_NAMES[fiscalMonth - 1]} ${fiscalYear}`;
     return { fiscalYear, fiscalMonth, monthName };
 }
 function normalizeTbType(tbType) {
@@ -256,6 +266,10 @@ export function compareFisReportColumns(a, b) {
 /** Six columns per month: Budget, Actual, YTD Budget, YTD Actual, YTD Variance, YTD Var %. */
 export function buildMonthColumnSet(period, startOrder = 1) {
     const { fiscalYear, fiscalMonth, monthName } = parsePeriod(period);
+    // Previous Year (…00) is Actual-only and belongs to the BS PREVIOUS_YEAR column — not PL month sets.
+    if (fiscalMonth === 0) {
+        return [];
+    }
     let order = startOrder;
     const col = (columnLabel, monthFrom, monthTo, isYtd, tbType, columnKind) => ({
         columnOrder: order++,
@@ -290,13 +304,7 @@ export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
      WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
        AND tb.period IS NOT NULL
        AND LEN(tb.period) = 6
-       AND EXISTS (
-         SELECT 1
-         FROM FIN.TrialBalance act
-         WHERE UPPER(LTRIM(RTRIM(act.entity_code))) = @entity
-           AND act.period = tb.period
-           AND UPPER(act.tb_type) = 'ACTUAL'
-       )
+       AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')
        ${periodClause}
      ORDER BY tb.period`, params);
     if (result.error)
@@ -312,21 +320,31 @@ export async function buildColumnsFromEntityTrialBalance(entityCode, period) {
     return columns;
 }
 /**
- * Actual is required for the period. Budget is optional: if no budget exists, the report
- * still runs and budget columns are left as-is (the report proc handles the missing budget).
+ * Actual or Budget (or both) must exist for the period. Either side alone is enough:
+ * missing-side columns are left as-is (the report procs tolerate empty Actual/Budget sets).
+ * Period …00 (Previous Year) requires Actual only — no Budget.
  */
 export async function assertTrialBalanceDataForPeriod(entityCode, period) {
     const entity = entityCode.trim().toUpperCase();
     const periodNorm = period.trim();
-    const result = await executeQuery(`SELECT COUNT(*) AS actual_cnt
-     FROM FIN.TrialBalance tb
-     WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
-       AND tb.period = @period
-       AND UPPER(tb.tb_type) = 'ACTUAL'`, { entity, period: periodNorm });
+    const previousYear = isFisPreviousYearPeriod(periodNorm);
+    const result = await executeQuery(previousYear
+        ? `SELECT COUNT(*) AS tb_cnt
+         FROM FIN.TrialBalance tb
+         WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+           AND tb.period = @period
+           AND UPPER(tb.tb_type) = 'ACTUAL'`
+        : `SELECT COUNT(*) AS tb_cnt
+         FROM FIN.TrialBalance tb
+         WHERE UPPER(LTRIM(RTRIM(tb.entity_code))) = @entity
+           AND tb.period = @period
+           AND UPPER(tb.tb_type) IN ('ACTUAL', 'BUDGET')`, { entity, period: periodNorm });
     if (result.error)
         throw new Error(result.error);
-    if (!result.data?.[0]?.actual_cnt) {
-        throw new Error(`No Actual trial balance data for ${entity} period ${periodNorm}`);
+    if (!result.data?.[0]?.tb_cnt) {
+        throw new Error(previousYear
+            ? `No Actual trial balance data for Previous Year period ${entity} ${periodNorm}`
+            : `No Actual or Budget trial balance data for ${entity} period ${periodNorm}`);
     }
 }
 export async function getReportOutputPreview(instanceId, limit = 100) {
@@ -381,27 +399,43 @@ export async function getReportOutputPreviewByRunKey(reportTypeCode, entityCode,
         throw new Error(countResult.error);
     const safeLimit = Math.min(Math.max(limit, 1), 500);
     const statusWhere = statusFilter ? ` AND o.file_status = @fileStatus` : '';
-    const rowsResult = await executeQuery(`SELECT TOP (@limit)
-       o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
-       o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
-     FROM ${tableName} o
-     LEFT JOIN admin.fis_report_column_defs cd
-       ON cd.column_code = o.column_code
-      AND cd.report_type_id = (
-        SELECT report_type_id FROM admin.fis_report_types
-        WHERE report_type_code = @reportType
-      )
-     WHERE o.report_type_code = @reportType
-       AND o.entity_code = @entity
-       AND o.as_of_period = @period${statusWhere}
-     ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`, { reportType, entity, period, limit: safeLimit, ...(statusFilter ? { fileStatus: statusFilter } : {}) });
+    const useNewTable = options?.outputTable === 'new';
+    const rowsResult = await executeQuery(useNewTable
+        ? `SELECT TOP (@limit)
+           o.output_id, o.column_id, o.column_code, o.column_label,
+           o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type, o.status
+         FROM ${tableName} o
+         LEFT JOIN admin.fis_report_column_defs cd
+           ON cd.column_code = o.column_code
+          AND cd.report_type_id = (
+            SELECT report_type_id FROM admin.fis_report_types
+            WHERE report_type_code = @reportType
+          )
+         WHERE o.report_type_code = @reportType
+           AND o.entity_code = @entity
+           AND o.as_of_period = @period${statusWhere}
+         ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`
+        : `SELECT TOP (@limit)
+           o.output_id, o.instance_id, o.column_id, o.column_code, o.column_label,
+           o.line_item_code, o.line_item_label, o.display_order, o.amount, o.format_type
+         FROM ${tableName} o
+         LEFT JOIN admin.fis_report_column_defs cd
+           ON cd.column_code = o.column_code
+          AND cd.report_type_id = (
+            SELECT report_type_id FROM admin.fis_report_types
+            WHERE report_type_code = @reportType
+          )
+         WHERE o.report_type_code = @reportType
+           AND o.entity_code = @entity
+           AND o.as_of_period = @period${statusWhere}
+         ORDER BY o.display_order, COALESCE(cd.display_order, o.column_id)`, { reportType, entity, period, limit: safeLimit, ...(statusFilter ? { fileStatus: statusFilter } : {}) });
     if (rowsResult.error)
         throw new Error(rowsResult.error);
     return {
         totalRows: Number(countResult.data?.[0]?.total) || 0,
         rows: (rowsResult.data || []).map((r) => ({
             outputId: r.output_id,
-            instanceId: r.instance_id,
+            instanceId: useNewTable ? null : (r.instance_id ?? null),
             columnId: r.column_id,
             columnCode: r.column_code,
             columnLabel: r.column_label,
@@ -410,6 +444,7 @@ export async function getReportOutputPreviewByRunKey(reportTypeCode, entityCode,
             displayOrder: r.display_order,
             amount: r.amount,
             formatType: r.format_type,
+            status: r.status ?? null,
         })),
     };
 }
