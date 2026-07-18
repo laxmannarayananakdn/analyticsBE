@@ -1,6 +1,7 @@
 /**
  * IB Diploma Result / Category management (MB schools)
- * Lists diploma-grain Result rows and allows updating Result + IB_category.
+ * - Result / IB_category → RP.student_assessments
+ * - Five profile attributes → RP.student_profile (MSNAV seeds; page edits win)
  */
 
 import { Router, Request, Response } from 'express';
@@ -26,6 +27,14 @@ const DIPLOMA_GRAIN = `
   AND term_name IS NULL
   AND class_name IS NULL
 `;
+
+const PROFILE_FIELDS = [
+  { key: 'community_status', column: 'community_status', length: 100 },
+  { key: 'year_of_joining_academy', column: 'year_of_joining_academy', length: 100 },
+  { key: 'joining_curriculum', column: 'joining_curriculum', length: 255 },
+  { key: 'talent_id_prog', column: 'talent_id_prog', length: 100 },
+  { key: 'rebalancing', column: 'rebalancing', length: 100 },
+] as const;
 
 /**
  * GET /api/ib-diploma-results/schools
@@ -81,6 +90,7 @@ router.get('/academic-years', async (req: Request, res: Response) => {
 
 /**
  * GET /api/ib-diploma-results?school_id=&academic_year=&q=
+ * Profile attributes come exclusively from RP.student_profile.
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -105,7 +115,15 @@ router.get('/', async (req: Request, res: Response) => {
         r.component_value AS result,
         r.IB_category AS ib_category,
         tp.id AS total_points_id,
-        tp.component_value AS total_points
+        tp.component_value AS total_points,
+        CASE WHEN sp.register_number IS NULL THEN 0 ELSE 1 END AS has_profile,
+        ISNULL(sp.has_msnav_source, 0) AS has_msnav_source,
+        ISNULL(sp.profile_attributes_manually_edited, 0) AS profile_attributes_manually_edited,
+        sp.community_status,
+        sp.year_of_joining_academy,
+        sp.joining_curriculum,
+        sp.talent_id_prog,
+        sp.rebalancing
       FROM RP.student_assessments r
       LEFT JOIN RP.student_assessments tp
         ON tp.school_id = r.school_id
@@ -118,6 +136,10 @@ router.get('/', async (req: Request, res: Response) => {
       INNER JOIN MB.managebac_school_configs cfg
         ON CAST(cfg.school_id AS NVARCHAR(100)) = r.school_id
        AND cfg.is_active = 1
+      LEFT JOIN RP.student_profile sp
+        ON sp.school_id = r.school_id
+       AND sp.academic_year = r.academic_year
+       AND sp.register_number = r.register_number
       WHERE r.school_id = @school_id
         AND r.academic_year = @academic_year
         AND LTRIM(RTRIM(COALESCE(r.component_name, N''))) = N'Result'
@@ -162,11 +184,9 @@ router.get('/', async (req: Request, res: Response) => {
 
 /**
  * PUT /api/ib-diploma-results
- * Body: { updates: [{ result_id, total_points_id?, result?, ib_category? }] }
- * - Updates Result.component_value / IB_category on the Result row (by id)
- * - When IB_category is set, propagates it to ALL other RP.student_assessments
- *   rows for the same school_id + register_number + academic_year
- *   (keyed lookup — not a table-wide scan)
+ * Body: { updates: [{ result_id, result?, ib_category?,
+ *                     community_status?, year_of_joining_academy?, joining_curriculum?,
+ *                     talent_id_prog?, rebalancing? }] }
  */
 router.put('/', async (req: Request, res: Response) => {
   try {
@@ -174,6 +194,11 @@ router.put('/', async (req: Request, res: Response) => {
     if (!Array.isArray(updates) || updates.length === 0) {
       return res.status(400).json({ error: 'updates array is required' });
     }
+
+    const updatedBy =
+      (req as any).user?.email ||
+      (typeof req.headers['x-user-email'] === 'string' ? req.headers['x-user-email'] : null) ||
+      'admin';
 
     const connection = await getConnection();
     const transaction = new sql.Transaction(connection);
@@ -195,7 +220,10 @@ router.put('/', async (req: Request, res: Response) => {
 
         const hasResult = Object.prototype.hasOwnProperty.call(row, 'result');
         const hasCategory = Object.prototype.hasOwnProperty.call(row, 'ib_category');
-        if (!hasResult && !hasCategory) {
+        const profileUpdates = PROFILE_FIELDS.filter((f) =>
+          Object.prototype.hasOwnProperty.call(row, f.key)
+        );
+        if (!hasResult && !hasCategory && profileUpdates.length === 0) {
           errorCount++;
           errors.push(`result_id ${resultId}: nothing to update`);
           continue;
@@ -231,15 +259,17 @@ router.put('/', async (req: Request, res: Response) => {
           }
         }
 
-        // Resolve student/year keys from the Result row (needed for category fan-out)
         const keyReq = new sql.Request(transaction);
         keyReq.input('result_id', sql.BigInt, resultId);
         const keyResult = await keyReq.query<{
           school_id: string;
           register_number: string;
           academic_year: string;
+          student_name: string | null;
+          grade_name: string | null;
+          student_status: string | null;
         }>(`
-          SELECT school_id, register_number, academic_year
+          SELECT school_id, register_number, academic_year, student_name, grade_name, student_status
           FROM RP.student_assessments
           WHERE id = @result_id
             AND LTRIM(RTRIM(COALESCE(component_name, N''))) = N'Result'
@@ -252,26 +282,27 @@ router.put('/', async (req: Request, res: Response) => {
           continue;
         }
 
-        const setParts: string[] = ['updated_at = GETDATE()'];
-        const upd = new sql.Request(transaction);
-        upd.input('result_id', sql.BigInt, resultId);
+        if (hasResult || hasCategory) {
+          const setParts: string[] = ['updated_at = GETDATE()'];
+          const upd = new sql.Request(transaction);
+          upd.input('result_id', sql.BigInt, resultId);
 
-        if (hasResult) {
-          setParts.push('component_value = @result');
-          upd.input('result', sql.NVarChar(500), resultValue);
+          if (hasResult) {
+            setParts.push('component_value = @result');
+            upd.input('result', sql.NVarChar(500), resultValue);
+          }
+          if (hasCategory) {
+            setParts.push('IB_category = @ib_category');
+            upd.input('ib_category', sql.NVarChar(50), categoryValue);
+          }
+
+          await upd.query(`
+            UPDATE RP.student_assessments
+            SET ${setParts.join(', ')}
+            WHERE id = @result_id
+          `);
         }
-        if (hasCategory) {
-          setParts.push('IB_category = @ib_category');
-          upd.input('ib_category', sql.NVarChar(50), categoryValue);
-        }
 
-        await upd.query(`
-          UPDATE RP.student_assessments
-          SET ${setParts.join(', ')}
-          WHERE id = @result_id
-        `);
-
-        // Propagate IB_category to every other component for this student + year
         if (hasCategory) {
           const fan = new sql.Request(transaction);
           fan.input('school_id', sql.NVarChar(100), keys.school_id);
@@ -293,6 +324,83 @@ router.put('/', async (req: Request, res: Response) => {
                 OR (IB_category <> @ib_category)
               )
           `);
+        }
+
+        // Upsert five attributes onto RP.student_profile only
+        if (profileUpdates.length > 0) {
+          const setParts: string[] = [
+            'profile_attributes_manually_edited = 1',
+            'profile_attributes_updated_at = SYSDATETIMEOFFSET()',
+            'profile_attributes_updated_by = @updated_by',
+          ];
+          const profileParams: { name: string; length: number; value: string | null }[] = [];
+
+          for (const f of profileUpdates) {
+            const raw = (row as Record<string, unknown>)[f.key];
+            const value = raw == null || String(raw).trim() === '' ? null : String(raw).trim();
+            setParts.push(`[${f.column}] = @${f.key}`);
+            profileParams.push({ name: f.key, length: f.length, value });
+          }
+
+          // Ensure profile row exists (unique grain: school + year + register)
+          const ensure = new sql.Request(transaction);
+          ensure.input('school_id', sql.NVarChar(100), keys.school_id);
+          ensure.input('register_number', sql.NVarChar(100), keys.register_number);
+          ensure.input('academic_year', sql.NVarChar(100), keys.academic_year);
+          ensure.input('full_name', sql.NVarChar(500), keys.student_name);
+          ensure.input('grade_name', sql.NVarChar(100), keys.grade_name);
+          ensure.input('student_status', sql.NVarChar(100), keys.student_status);
+          await ensure.query(`
+            IF NOT EXISTS (
+              SELECT 1
+              FROM RP.student_profile WITH (UPDLOCK, HOLDLOCK)
+              WHERE school_id = @school_id
+                AND academic_year = @academic_year
+                AND register_number = @register_number
+            )
+            BEGIN
+              INSERT INTO RP.student_profile (
+                school_id, academic_year, register_number,
+                full_name, grade_name, student_status,
+                is_eal, is_sen, is_gifted, has_support_group,
+                is_fallout, is_islam,
+                has_msnav_source,
+                profile_attributes_manually_edited
+              )
+              VALUES (
+                @school_id, @academic_year, @register_number,
+                @full_name, @grade_name, @student_status,
+                0, 0, 0, 0,
+                0, 0,
+                0,
+                0
+              );
+            END
+          `);
+
+          const updProfile = new sql.Request(transaction);
+          updProfile.input('school_id', sql.NVarChar(100), keys.school_id);
+          updProfile.input('register_number', sql.NVarChar(100), keys.register_number);
+          updProfile.input('academic_year', sql.NVarChar(100), keys.academic_year);
+          updProfile.input('updated_by', sql.NVarChar(255), updatedBy);
+          for (const p of profileParams) {
+            updProfile.input(p.name, sql.NVarChar(p.length), p.value);
+          }
+          const profileResult = await updProfile.query(`
+            UPDATE RP.student_profile
+            SET ${setParts.join(', ')}
+            WHERE school_id = @school_id
+              AND academic_year = @academic_year
+              AND register_number = @register_number
+          `);
+
+          if (!profileResult.rowsAffected?.[0]) {
+            errorCount++;
+            errors.push(
+              `result_id ${resultId}: failed to update RP.student_profile for ${keys.register_number}`
+            );
+            continue;
+          }
         }
 
         successCount++;
