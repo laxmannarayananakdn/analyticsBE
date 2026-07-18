@@ -3,7 +3,7 @@
  * Run with: npx tsx src/test/managebac.test.ts
  */
 import { manageBacService } from '../services/ManageBacService/index.js';
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 import dotenv from 'dotenv';
 dotenv.config();
 const API_KEY = process.env.MANAGEBAC_API_KEY || '';

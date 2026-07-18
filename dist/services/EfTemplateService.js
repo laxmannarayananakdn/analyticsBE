@@ -2,6 +2,9 @@
  * Generates downloadable upload templates for each EF file type.
  * Column layouts mirror the parsers in services/parsers/.
  */
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 const FIN_DIC_CODE_COLUMN = {
     FIN_DIC_ACCOUNT: 'Account',
@@ -32,6 +35,24 @@ export function isSupportedTemplateType(typeCode) {
 }
 function workbookToBuffer(workbook, bookType) {
     return Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType }));
+}
+function resolveMsnavTemplatePath() {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+        // Deployed / local backend root
+        path.join(process.cwd(), 'templates', 'MSNAV_Financial_Aid_template.xlsx'),
+        // From dist/services or src/services → backend/templates
+        path.join(here, '..', '..', 'templates', 'MSNAV_Financial_Aid_template.xlsx'),
+        // Repo Sample/ when running from monorepo
+        path.join(process.cwd(), '..', 'Sample', 'Financial_Aid_template.xlsx'),
+        path.join(process.cwd(), 'Sample', 'Financial_Aid_template.xlsx'),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return null;
 }
 function generateIbExternalExamsTemplate() {
     const headers = [
@@ -78,6 +99,15 @@ function generateIbExternalExamsTemplate() {
     };
 }
 function generateMsnavFinancialAidTemplate() {
+    const templatePath = resolveMsnavTemplatePath();
+    if (templatePath) {
+        return {
+            buffer: fs.readFileSync(templatePath),
+            fileName: 'MSNAV_Financial_Aid_template.xlsx',
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        };
+    }
+    // Fallback if the sample file is missing from the deploy package
     const headers = [
         'S.No',
         'UCI',
@@ -91,8 +121,29 @@ function generateMsnavFinancialAidTemplate() {
         'FA Sub-Type',
         'Fee Code',
         'Community status',
+        'Year of Joining Academy',
+        'Curriculum from which the student joined the academy',
+        'Talent ID Prog. [Yes]',
+        'Rebalancing [Tajik/Afgh/Syri/Iranian]',
     ];
-    const sample = [1, 'UCI12345', '2025-2026', 'Grade 11', 'G11', 'S001', 'John Smith', 25, 'Tuition', 'Merit', 'TUI', 'Local'];
+    const sample = [
+        1,
+        '19MAP0516',
+        '2025-26',
+        'DP2',
+        'DP2-A-DP-IB-2025-26',
+        'S030235',
+        'ROZY TIVANE',
+        100,
+        'SS-RES',
+        'Talent ID',
+        'TUITION SS',
+        'ISMAILI',
+        '1/22/2020',
+        '',
+        'TID',
+        '',
+    ];
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet([headers, sample]);
     XLSX.utils.book_append_sheet(workbook, sheet, 'Financial Aid');
@@ -276,12 +327,13 @@ function generateHrEmployeeDataTemplate() {
         'Staff Category',
         'Contract type',
         'Key',
+        'Node_ID',
     ];
     const sample = [
         2025,
         'Q1',
         'January',
-        'Kenya/Nairobi',
+        'KEN',
         'AKS Nairobi',
         'EMP001',
         'Teaching',
@@ -308,6 +360,7 @@ function generateHrEmployeeDataTemplate() {
         'Teaching',
         'Permanent',
         'KEN-EMP001',
+        'NODE001',
     ];
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet([headers, sample]);

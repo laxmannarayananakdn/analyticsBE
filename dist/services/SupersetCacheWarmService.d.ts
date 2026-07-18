@@ -12,6 +12,11 @@ export type SupersetCacheWarmResult = {
     skipReason?: string;
     durationMs: number;
 };
+type AuthSession = {
+    accessToken: string;
+    csrfToken: string;
+    cookieHeader?: string;
+};
 /** When false, FIS V2 skips post-run cache warm. Default: enabled. */
 export declare function isSupersetCacheWarmEnabled(): boolean;
 /**
@@ -22,9 +27,14 @@ export declare function warmSupersetCacheForEntities(params: {
     entityCodes: string[];
     dashboardId?: number;
     delayMs?: number;
+    session?: AuthSession;
 }): Promise<SupersetCacheWarmResult>;
 /**
- * Fire-and-forget / soft-fail wrapper for FIS V2 completion.
+ * After FIS V2 publish:
+ *  - Dashboard 33 (entity): warm charts for the entity that just ran
+ *  - Dashboard 44 (HO USD): warm charts for every active entity
+ * Soft-fail — never throws to the caller.
  */
 export declare function warmSupersetCacheAfterFisV2(entityCode: string): Promise<void>;
+export {};
 //# sourceMappingURL=SupersetCacheWarmService.d.ts.map

@@ -60,6 +60,10 @@ export interface MSNAVFinancialAid {
     FA_Sub_Type?: string;
     Fee_Code?: string;
     Community_Status?: string;
+    Year_of_Joining_Academy?: string;
+    Joining_Curriculum?: string;
+    Talent_ID_Prog?: string;
+    Rebalancing?: string;
 }
 export interface CEMPredictionReport {
     Student_ID: string | null;
@@ -118,6 +122,7 @@ export interface HREmployeeData {
     Quarter?: string;
     Month?: string;
     Country?: string;
+    /** From file "Country / City" (typically a 3-char country code) */
     Country_City?: string;
     Entity?: string;
     Emp_ID?: string;
@@ -145,6 +150,8 @@ export interface HREmployeeData {
     Staff_Category?: string;
     Contract_type?: string;
     Key?: string;
+    /** Maps to admin.Node.Node_ID */
+    Node_ID?: string;
 }
 export interface HRBudgetVsActual {
     Year?: string;

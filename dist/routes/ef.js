@@ -328,8 +328,7 @@ router.post('/upload', (req, res, next) => {
             'FIN_TB_BUDGET': async (id, name, by, recs) => await efService.insertFINTrialBalance(id, name, by, 'BUDGET', recs)
         };
         const fileTypeUpper = fileTypeCode.toUpperCase();
-        // HR types: overwrite previous data before insert
-        const hrFileTypes = ['HR_EMPLOYEE_DATA', 'HR_BUDGET_VS_ACTUAL'];
+        // HR Employee Data: append-only (retain prior uploads by upload_id). Budget vs Actual still overwrites.
         const financeDictionaryFileTypes = [
             'FIN_DIC_ACCOUNT',
             'FIN_DIC_ACTIVITY',
@@ -343,13 +342,8 @@ router.post('/upload', (req, res, next) => {
             'FIN_DIC_RESOURCE',
             'FIN_DIC_SOURCE_OF_FUND'
         ];
-        if (hrFileTypes.includes(fileTypeUpper)) {
-            if (fileTypeUpper === 'HR_EMPLOYEE_DATA') {
-                await efService.deleteAllHREmployeeData();
-            }
-            else {
-                await efService.deleteAllHRBudgetVsActual();
-            }
+        if (fileTypeUpper === 'HR_BUDGET_VS_ACTUAL') {
+            await efService.deleteAllHRBudgetVsActual();
         }
         else if (financeDictionaryFileTypes.includes(fileTypeUpper)) {
             const dictionaryType = fileTypeUpper.replace('FIN_DIC_', '');

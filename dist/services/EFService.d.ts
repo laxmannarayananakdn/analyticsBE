@@ -52,7 +52,8 @@ export declare class EFService {
      */
     deleteAllHRBudgetVsActual(): Promise<void>;
     /**
-     * Insert HR Employee Data records using bulk insert
+     * Insert HR Employee Data via TDS bulk load (request.bulk).
+     * Appends rows for this upload_id; does not wipe prior uploads.
      */
     insertHREmployeeData(uploadId: number, fileName: string, uploadedBy: string, records: HREmployeeData[]): Promise<number>;
     /**

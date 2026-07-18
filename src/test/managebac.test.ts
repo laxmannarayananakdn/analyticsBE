@@ -4,7 +4,7 @@
  */
 
 import { manageBacService } from '../services/ManageBacService/index.js';
-import { executeQuery } from '../config/database';
+import { executeQuery } from '../config/database.js';
 import dotenv from 'dotenv';
 
 dotenv.config();

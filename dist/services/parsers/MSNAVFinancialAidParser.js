@@ -1,15 +1,54 @@
 /**
  * MSNAV Financial Aid XLSX Parser
- * Handles Excel files with financial aid data
+ * Handles Excel files with financial aid data (new template format)
  */
 import * as XLSX from 'xlsx';
 import { ErrorCode } from '../../types/errors.js';
 import { validateDataType, validateRequiredColumns } from '../../utils/fileValidation.js';
+function normalizeHeader(header) {
+    return header.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+/** Normalize join year to YYYY only (or empty → caller stores null). */
+function normalizeJoinYear(value) {
+    const trimmed = value.trim();
+    if (!trimmed)
+        return undefined;
+    // Already YYYY
+    if (/^[12]\d{3}$/.test(trimmed)) {
+        return trimmed;
+    }
+    // Excel day serial (~1955–2118) → calendar year
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+        const serial = parseFloat(trimmed);
+        if (serial >= 20000 && serial <= 80000) {
+            const utc = Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000;
+            return String(new Date(utc).getUTCFullYear());
+        }
+        // Plain 4-digit-ish numeric year already handled above; other numbers → drop
+    }
+    // ISO / parseable date → year
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+        const year = new Date(parsed).getUTCFullYear();
+        if (year >= 1900 && year <= 2100) {
+            return String(year);
+        }
+    }
+    // Leading YYYY in longer string (e.g. 2020-08-15, 2020-21)
+    const lead = trimmed.match(/^([12]\d{3})/);
+    if (lead) {
+        return lead[1];
+    }
+    return undefined;
+}
 export class MSNAVFinancialAidParser {
     /**
      * Parse MSNAV Financial Aid XLSX file with validation
      * Expected columns: S.No, UCI, Academic Year, Class, Class Code, Student No,
-     * Student Name, Percentage, Fee Classification, FA Sub-Type, Fee Code, Community status
+     * Student Name, Percentage, Fee Classification, FA Sub-Type, Fee Code,
+     * Community status, Year of Joining Academy,
+     * Curriculum from which the student joined the academy,
+     * Talent ID Prog. [Yes], Rebalancing [Tajik/Afgh/Syri/Iranian]
      */
     async parseMSNAVFinancialAid(fileBuffer, skipInvalidRows = false) {
         const errors = [];
@@ -17,7 +56,6 @@ export class MSNAVFinancialAidParser {
         let skippedRows = 0;
         let totalRows = 0;
         try {
-            // Parse Excel workbook
             let workbook;
             try {
                 workbook = XLSX.read(fileBuffer, {
@@ -51,13 +89,11 @@ export class MSNAVFinancialAidParser {
                     totalRows: 0
                 };
             }
-            // Use the first sheet
             const sheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
             if (!worksheet) {
                 throw new Error(`Sheet "${sheetName}" not found in Excel file`);
             }
-            // Convert to JSON array
             const rows = XLSX.utils.sheet_to_json(worksheet, {
                 header: 1,
                 defval: null,
@@ -75,14 +111,12 @@ export class MSNAVFinancialAidParser {
                     totalRows: 0
                 };
             }
-            // Find header row (first non-empty row)
             let headerRowIndex = -1;
             let headers = [];
             for (let i = 0; i < Math.min(10, rows.length); i++) {
                 const row = rows[i];
                 if (row && row.length > 0) {
-                    const firstCell = String(row[0] || '').trim().toLowerCase();
-                    // Look for common header indicators
+                    const firstCell = normalizeHeader(String(row[0] || ''));
                     if (firstCell === 's.no' || firstCell === 's_no' || firstCell === 'sno' ||
                         firstCell === 'serial no' || firstCell === 'serial number') {
                         headerRowIndex = i;
@@ -103,7 +137,6 @@ export class MSNAVFinancialAidParser {
                     totalRows: 0
                 };
             }
-            // Normalize header names to match our interface
             const headerMap = {
                 's.no': 'S_No',
                 's_no': 'S_No',
@@ -131,18 +164,24 @@ export class MSNAVFinancialAidParser {
                 'fee_code': 'Fee_Code',
                 'community status': 'Community_Status',
                 'community_status': 'Community_Status',
-                'component type': 'Component_Type' // May be present but not in our interface
+                'year of joining academy': 'Year_of_Joining_Academy',
+                'year_of_joining_academy': 'Year_of_Joining_Academy',
+                'curriculum from which the student joined the academy': 'Joining_Curriculum',
+                'joining_curriculum': 'Joining_Curriculum',
+                'talent id prog. [yes]': 'Talent_ID_Prog',
+                'talent id prog [yes]': 'Talent_ID_Prog',
+                'talent_id_prog': 'Talent_ID_Prog',
+                'rebalancing [tajik/afgh/syri/iranian]': 'Rebalancing',
+                'rebalancing': 'Rebalancing',
             };
-            // Create normalized header map (index -> field name)
             const normalizedHeaders = {};
             headers.forEach((header, index) => {
-                const normalized = header.toLowerCase().trim();
+                const normalized = normalizeHeader(header);
                 const mappedField = headerMap[normalized];
                 if (mappedField) {
                     normalizedHeaders[index] = mappedField;
                 }
             });
-            // Validate required columns
             const requiredColumns = ['S_No', 'UCI', 'Student_No', 'Student_Name'];
             const missingColumns = requiredColumns.filter(col => !Object.values(normalizedHeaders).includes(col));
             if (missingColumns.length > 0) {
@@ -156,13 +195,11 @@ export class MSNAVFinancialAidParser {
                     };
                 }
             }
-            // Parse data rows
             const rowErrors = [];
             for (let i = headerRowIndex + 1; i < rows.length; i++) {
                 const row = rows[i];
-                const rowNumber = i + 1; // 1-indexed for user display
+                const rowNumber = i + 1;
                 totalRows++;
-                // Skip empty rows
                 if (!row || row.length === 0 ||
                     row.every((cell) => cell === null || cell === undefined ||
                         String(cell).trim() === '')) {
@@ -170,7 +207,6 @@ export class MSNAVFinancialAidParser {
                 }
                 const record = {};
                 let hasErrors = false;
-                // Map each column to the record
                 Object.entries(normalizedHeaders).forEach(([colIndex, fieldName]) => {
                     const index = parseInt(colIndex, 10);
                     const cellValue = row[index];
@@ -181,9 +217,8 @@ export class MSNAVFinancialAidParser {
                     if (stringValue === '' || stringValue === 'null' || stringValue === 'NULL') {
                         return;
                     }
-                    // Type conversion and validation based on field
                     switch (fieldName) {
-                        case 'S_No':
+                        case 'S_No': {
                             const sNo = parseInt(stringValue, 10);
                             if (!isNaN(sNo)) {
                                 record.S_No = sNo;
@@ -196,7 +231,8 @@ export class MSNAVFinancialAidParser {
                                 }
                             }
                             break;
-                        case 'Percentage':
+                        }
+                        case 'Percentage': {
                             const percentage = parseFloat(stringValue);
                             if (!isNaN(percentage)) {
                                 record.Percentage = percentage;
@@ -209,6 +245,7 @@ export class MSNAVFinancialAidParser {
                                 }
                             }
                             break;
+                        }
                         case 'UCI':
                             record.UCI = stringValue;
                             break;
@@ -239,9 +276,20 @@ export class MSNAVFinancialAidParser {
                         case 'Community_Status':
                             record.Community_Status = stringValue;
                             break;
+                        case 'Year_of_Joining_Academy':
+                            record.Year_of_Joining_Academy = normalizeJoinYear(stringValue);
+                            break;
+                        case 'Joining_Curriculum':
+                            record.Joining_Curriculum = stringValue;
+                            break;
+                        case 'Talent_ID_Prog':
+                            record.Talent_ID_Prog = stringValue;
+                            break;
+                        case 'Rebalancing':
+                            record.Rebalancing = stringValue;
+                            break;
                     }
                 });
-                // Only add records with at least Student_No or Student_Name
                 if (record.Student_No || record.Student_Name) {
                     if (hasErrors && !skipInvalidRows) {
                         skippedRows++;
@@ -259,7 +307,6 @@ export class MSNAVFinancialAidParser {
                     }
                 }
             }
-            // If we have row errors and not skipping invalid rows, add them to errors
             if (rowErrors.length > 0 && !skipInvalidRows) {
                 errors.push({
                     code: ErrorCode.INVALID_VALUE,

@@ -1,6 +1,6 @@
 /**
  * MSNAV Financial Aid XLSX Parser
- * Handles Excel files with financial aid data
+ * Handles Excel files with financial aid data (new template format)
  */
 import { MSNAVFinancialAid } from '../../types/ef.js';
 import { ValidationResult } from '../../types/errors.js';
@@ -8,7 +8,10 @@ export declare class MSNAVFinancialAidParser {
     /**
      * Parse MSNAV Financial Aid XLSX file with validation
      * Expected columns: S.No, UCI, Academic Year, Class, Class Code, Student No,
-     * Student Name, Percentage, Fee Classification, FA Sub-Type, Fee Code, Community status
+     * Student Name, Percentage, Fee Classification, FA Sub-Type, Fee Code,
+     * Community status, Year of Joining Academy,
+     * Curriculum from which the student joined the academy,
+     * Talent ID Prog. [Yes], Rebalancing [Tajik/Afgh/Syri/Iranian]
      */
     parseMSNAVFinancialAid(fileBuffer: Buffer, skipInvalidRows?: boolean): Promise<ValidationResult<MSNAVFinancialAid>>;
 }
