@@ -14,7 +14,7 @@ function normalizeHeader(h: string): string {
     .trim()
     .replace(/\s+/g, '_')
     .replace(/\//g, '_')
-    .replace(/_+/g, '_');  // collapse multiple underscores (e.g. "Country / City" -> "country_city")
+    .replace(/_+/g, '_');  // collapse multiple underscores
 }
 
 function toDbColumn(header: string): string | null {
@@ -24,7 +24,8 @@ function toDbColumn(header: string): string | null {
     quarter: 'Quarter',
     month: 'Month',
     country: 'Country',
-    country_city: 'Country_City',
+    // Legacy header "Country / City" → Country (3-char country code)
+    country_city: 'Country',
     entity: 'Entity',
     emp_id: 'Emp_ID',
     position_category: 'Position_Category',
@@ -164,7 +165,6 @@ export class HREmployeeDataParser {
           Quarter: str('Quarter') ?? undefined,
           Month: str('Month') ?? undefined,
           Country: str('Country') ?? undefined,
-          Country_City: str('Country_City') ?? undefined,
           Entity: str('Entity') ?? undefined,
           Emp_ID: str('Emp_ID') ?? undefined,
           Position_Category: str('Position_Category') ?? undefined,
@@ -194,7 +194,7 @@ export class HREmployeeDataParser {
           Node_ID: str('Node_ID') ?? undefined
         };
 
-        if (record.Emp_ID || record.Entity || record.Node_ID || record.Country_City) {
+        if (record.Emp_ID || record.Entity || record.Node_ID || record.Country) {
           results.push(record);
         } else {
           skippedRows++;

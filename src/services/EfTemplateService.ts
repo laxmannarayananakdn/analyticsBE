@@ -320,7 +320,7 @@ function generateHrEmployeeDataTemplate(): EfTemplateResult {
     'Year',
     'Quarter',
     'Month',
-    'Country / City',
+    'Country',
     'Entity',
     'Emp ID',
     'Position Category',

@@ -762,7 +762,6 @@ export class EFService {
         table.columns.add('Quarter', sql.NVarChar(50), { nullable: true });
         table.columns.add('Month', sql.NVarChar(50), { nullable: true });
         table.columns.add('Country', sql.NVarChar(100), { nullable: true });
-        table.columns.add('Country_City', sql.NVarChar(200), { nullable: true });
         table.columns.add('Entity', sql.NVarChar(100), { nullable: true });
         table.columns.add('Emp_ID', sql.NVarChar(100), { nullable: true });
         table.columns.add('Position_Category', sql.NVarChar(200), { nullable: true });
@@ -801,7 +800,6 @@ export class EFService {
             record.Quarter ?? null,
             record.Month ?? null,
             record.Country ?? null,
-            record.Country_City ?? null,
             record.Entity ?? null,
             record.Emp_ID ?? null,
             record.Position_Category ?? null,
@@ -1436,12 +1434,12 @@ export class EFService {
         req.input('uploadId', sql.BigInt, uploadId);
         const insertResult = await req.query(`
           INSERT INTO RP.hr_employee_data (
-            country,[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+            country,[Year],[Quarter],[Month],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
             [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]
           )
-          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+          SELECT COALESCE([Country],'Unknown'),[Year],[Quarter],[Month],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
             [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
             [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
             [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]
@@ -1899,7 +1897,7 @@ export class EFService {
       `;
     } else if (fileType.type_code === 'HR_EMPLOYEE_DATA') {
       const whereClause = buildWhereClause([
-        'Year', 'Quarter', 'Month', 'Country', 'Country_City', 'Entity', 'Emp_ID',
+        'Year', 'Quarter', 'Month', 'Country', 'Entity', 'Emp_ID',
         'Position_Category', 'Attrition', 'FTE', 'Date_of_Birth', 'Date_of_Hire', 'Sect',
         'Staff_Nationality', 'Gender', 'Teaching_Level', 'Teaching_Subject_Category',
         'Qualification', 'Date_of_Separation', 'reason_for_leaving', 'Aging', 'Age_Grouping',
@@ -1908,7 +1906,7 @@ export class EFService {
       ]);
       dataQuery = `
         SELECT id,upload_id,file_name,uploaded_at,uploaded_by,
-          [Year],[Quarter],[Month],[Country],[Country_City],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
+          [Year],[Quarter],[Month],[Country],[Entity],[Emp_ID],[Position_Category],[Attrition],[FTE],
           [Date_of_Birth],[Date_of_Hire],[Sect],[Staff_Nationality],[Gender],[Teaching_Level],[Teaching_Subject_Category],[Qualification],
           [Date_of_Separation],[reason_for_leaving],[Aging],[Age_Grouping],[Longevity],[Longevity_Grouping],[Reason_type],[Reporting_Year],
           [recruitment],[separation],[Staff_Category],[Contract_type],[Key],[Node_ID]

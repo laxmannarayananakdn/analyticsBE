@@ -141,8 +141,6 @@ export interface HREmployeeData {
   Quarter?: string;
   Month?: string;
   Country?: string;
-  /** From file "Country / City" (typically a 3-char country code) */
-  Country_City?: string;
   Entity?: string;
   Emp_ID?: string;
   Position_Category?: string;
