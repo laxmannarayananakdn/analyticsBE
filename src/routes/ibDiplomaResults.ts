@@ -34,7 +34,13 @@ const PROFILE_FIELDS = [
   { key: 'joining_curriculum', column: 'joining_curriculum', length: 255 },
   { key: 'talent_id_prog', column: 'talent_id_prog', length: 100 },
   { key: 'rebalancing', column: 'rebalancing', length: 100 },
+  { key: 'fa_status', column: 'fa_status', length: 200 },
+  { key: 'fee_classification', column: 'fee_classification', length: 100 },
+  { key: 'fee_code', column: 'fee_code', length: 100 },
 ] as const;
+
+/** fa_percentage is numeric (DECIMAL(5,2)) and handled separately from the NVARCHAR fields. */
+const FA_PERCENTAGE_KEY = 'fa_percentage';
 
 /**
  * GET /api/ib-diploma-results/schools
@@ -123,7 +129,11 @@ router.get('/', async (req: Request, res: Response) => {
         sp.year_of_joining_academy,
         sp.joining_curriculum,
         sp.talent_id_prog,
-        sp.rebalancing
+        sp.rebalancing,
+        sp.fa_status,
+        sp.fa_percentage,
+        sp.fee_classification,
+        sp.fee_code
       FROM RP.student_assessments r
       LEFT JOIN RP.student_assessments tp
         ON tp.school_id = r.school_id
@@ -186,7 +196,8 @@ router.get('/', async (req: Request, res: Response) => {
  * PUT /api/ib-diploma-results
  * Body: { updates: [{ result_id, result?, ib_category?,
  *                     community_status?, year_of_joining_academy?, joining_curriculum?,
- *                     talent_id_prog?, rebalancing? }] }
+ *                     talent_id_prog?, rebalancing?,
+ *                     fa_status?, fa_percentage?, fee_classification?, fee_code? }] }
  */
 router.put('/', async (req: Request, res: Response) => {
   try {
@@ -223,10 +234,27 @@ router.put('/', async (req: Request, res: Response) => {
         const profileUpdates = PROFILE_FIELDS.filter((f) =>
           Object.prototype.hasOwnProperty.call(row, f.key)
         );
-        if (!hasResult && !hasCategory && profileUpdates.length === 0) {
+        const hasFaPercentage = Object.prototype.hasOwnProperty.call(row, FA_PERCENTAGE_KEY);
+        if (!hasResult && !hasCategory && profileUpdates.length === 0 && !hasFaPercentage) {
           errorCount++;
           errors.push(`result_id ${resultId}: nothing to update`);
           continue;
+        }
+
+        let faPercentageValue: number | null | undefined = undefined;
+        if (hasFaPercentage) {
+          const raw = (row as Record<string, unknown>)[FA_PERCENTAGE_KEY];
+          if (raw == null || String(raw).trim() === '') {
+            faPercentageValue = null;
+          } else {
+            const parsed = Number(String(raw).trim());
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999.99) {
+              errorCount++;
+              errors.push(`result_id ${resultId}: invalid fa_percentage '${raw}'`);
+              continue;
+            }
+            faPercentageValue = parsed;
+          }
         }
 
         let resultValue: string | null | undefined = undefined;
@@ -326,8 +354,8 @@ router.put('/', async (req: Request, res: Response) => {
           `);
         }
 
-        // Upsert five attributes onto RP.student_profile only
-        if (profileUpdates.length > 0) {
+        // Upsert profile attributes onto RP.student_profile only
+        if (profileUpdates.length > 0 || hasFaPercentage) {
           const setParts: string[] = [
             'profile_attributes_manually_edited = 1',
             'profile_attributes_updated_at = SYSDATETIMEOFFSET()',
@@ -340,6 +368,19 @@ router.put('/', async (req: Request, res: Response) => {
             const value = raw == null || String(raw).trim() === '' ? null : String(raw).trim();
             setParts.push(`[${f.column}] = @${f.key}`);
             profileParams.push({ name: f.key, length: f.length, value });
+          }
+
+          if (hasFaPercentage) {
+            setParts.push('[fa_percentage] = @fa_percentage');
+          }
+
+          // Editing fee_classification also re-derives student_type (RES / DAY)
+          if (profileUpdates.some((f) => f.key === 'fee_classification')) {
+            setParts.push(`[student_type] = CASE
+              WHEN UPPER(LTRIM(RTRIM(ISNULL(@fee_classification, '')))) LIKE N'%RES%' THEN N'RES'
+              WHEN UPPER(LTRIM(RTRIM(ISNULL(@fee_classification, '')))) LIKE N'%DAY%' THEN N'DAY'
+              ELSE NULL
+            END`);
           }
 
           // Ensure profile row exists (unique grain: school + year + register)
@@ -385,6 +426,9 @@ router.put('/', async (req: Request, res: Response) => {
           updProfile.input('updated_by', sql.NVarChar(255), updatedBy);
           for (const p of profileParams) {
             updProfile.input(p.name, sql.NVarChar(p.length), p.value);
+          }
+          if (hasFaPercentage) {
+            updProfile.input(FA_PERCENTAGE_KEY, sql.Decimal(5, 2), faPercentageValue);
           }
           const profileResult = await updProfile.query(`
             UPDATE RP.student_profile
